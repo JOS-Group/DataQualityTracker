@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div class="hero">
+  <h1>Welcome back.</h1>
+
+  <p>
+    Your workspace is tuned for <b>{{ persona.program }}</b>, with emphasis on
+    {{ persona.focus[:3]|join(", ") if persona.focus else "the full data landscape" }}.
+  </p>
+</div>
+
+{% include "_filters.html" %}
+
+
+<div class="cards">
+
+  <div class="card">
+    <div class="label">Average comparable match</div>
+    <div class="value">{{ field_avg|pct }}</div>
+    <div class="sub">Equal-weight field average</div>
+  </div>
+
+  <div class="card">
+    <div class="label">Event-weighted match</div>
+    <div class="value">{{ weighted|pct }}</div>
+    <div class="sub">Matched ÷ matched + not matched</div>
+  </div>
+
+  <div class="card">
+    <div class="label">Fields needing attention</div>
+    <div class="value">{{ needs_change|num }}</div>
+    <div class="sub">Current filters</div>
+  </div>
+
+  <div class="card">
+    <div class="label">Active domains</div>
+    <div class="value">{{ domains }}</div>
+    <div class="sub">Streams in view</div>
+  </div>
+
+</div>
+
+
+<h3>Your starting point</h3>
+
+<div class="insight">
+
+  <b>Your question:</b>
+  {{ persona.first_question or "What should I investigate first?" }}
+
+  <br><br>
+
+  DART-style reconciliation, issue tracking, interactive exploration,
+  reporting impact, and AI are combined into one workspace.
+
+</div>
+
+
+<h3>Jump into an experience</h3>
+
+<div class="three-col">
+
+  <div>
+    <h4>Explore</h4>
+
+    <p>
+      Drill from stream → table → column → system relationship.
+    </p>
+
+    <a class="btn" href="/explorer">
+      Use System Explorer
+    </a>
+  </div>
+
+
+  <div>
+    <h4>Act</h4>
+
+    <p>
+      Turn mismatches into issues, owners, priorities, and recommendations.
+    </p>
+
+    <a class="btn" href="/issues">
+      Open Issue Studio
+    </a>
+  </div>
+
+
+  <div>
+    <h4>Ask</h4>
+
+    <p>
+      Use natural language to investigate the current data.
+    </p>
+
+    <a class="btn" href="/copilot">
+      Open AI Copilot
+    </a>
+  </div>
+
+</div>
+
+
+<h3>Live workspace</h3>
+
+
+<table class="data-table">
+
+  <thead>
+
+    <tr>
+      <th>Stream</th>
+      <th>Table</th>
+      <th>Column</th>
+      <th>SS Table</th>
+      <th>SS Column</th>
+      <th>Match Rate</th>
+      <th>Class</th>
+    </tr>
+
+  </thead>
+
+
+  <tbody>
+
+    {% for r in rows %}
+
+    <tr>
+
+      <td>
+        {{ r.get("Stream", "") }}
+      </td>
+
+      <td>
+        {{ r.get("NCH Target Table", "") }}
+      </td>
+
+      <td>
+        {{ r.get("NCH Target Column", "") }}
+      </td>
+
+      <td>
+        {{ r.get("SS Table", "") }}
+      </td>
+
+      <td>
+        {{ r.get("SS Column", "") }}
+      </td>
+
+
+      <td>
+
+        <div class="bar">
+
+          <div
+            class="bar-fill"
+            style="--match-width: {{ (r.get('MatchRate', 0) or 0) * 100 }}%;"
+          ></div>
+
+          <span>
+            {{ r.get("MatchRate", 0)|pct }}
+          </span>
+
+        </div>
+
+      </td>
+
+
+      <td>
+
+        <span class="tag tag-{{ r.get('Classification', '')|lower }}">
+          {{ r.get("Classification", "") }}
+        </span>
+
+      </td>
+
+    </tr>
+
+    {% endfor %}
+
+  </tbody>
+
+</table>
+
+{% endblock %}

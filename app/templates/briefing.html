@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="hero"><h1>My Briefing</h1><p>A personalized decision view based on your role, program, interests, and current filters.</p></div>
+{% include "_filters.html" %}
+<div class="cards">
+  <div class="card"><div class="label">Comparable field average</div><div class="value">{{ field_avg|pct }}</div></div>
+  <div class="card"><div class="label">Event-weighted rate</div><div class="value">{{ weighted|pct }}</div></div>
+  <div class="card"><div class="label">Action candidates</div><div class="value">{{ needs_change|num }}</div></div>
+  <div class="card"><div class="label">Streams</div><div class="value">{{ domains }}</div></div>
+</div>
+<div class="insight"><b>Personalized lens:</b> {{ persona.program }} · {{ persona.role }}. Your workspace emphasizes
+{{ persona.focus|join(", ") if persona.focus else "all available capabilities" }}.</div>
+<h3>What deserves attention?</h3>
+{% if top|length == 0 %}
+<p class="success">Nothing currently requires attention under these filters.</p>
+{% else %}
+{% for r in top %}
+<div class="insight"><b>{{ r["Stream"] }} · {{ r["NCH Target Column"] }}</b> — {{ r["MatchRate"]|pct }} match ·
+{{ r["NotMatchedClaims"]|num }} not matched<br><span class="muted">{{ r["Recommendation"] }}</span></div>
+{% endfor %}
+{% endif %}
+{% endblock %}

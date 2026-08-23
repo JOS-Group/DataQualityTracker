@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="hero"><h1>AI Copilot</h1><p>A conversational analyst that understands your persona, filters, mappings, and current findings.</p></div>
+<div class="chat-window">
+  {% for m in chat %}
+  <div class="chat-msg chat-{{ m.role }}">
+    <div class="chat-role">{{ "You" if m.role == "user" else "Copilot" }}</div>
+    <div class="chat-bubble">{{ m.content|markdown }}</div>
+  </div>
+  {% endfor %}
+</div>
+<form method="post" action="/copilot" class="chat-form">
+  <details>
+    <summary>AI settings</summary>
+    <label>Groq API key (optional)</label>
+    <input type="password" name="api_key" placeholder="gsk_...">
+    <label>Model</label>
+    <select name="model">
+      <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
+      <option value="llama-3.1

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="hero"><h1>{{ r["Stream"] }} · {{ r["NCH Target Column"] }}</h1><p><a href="/explorer">← Back to System Explorer</a></p></div>
+<div class="cards">
+  <div class="card"><div class="label">Match rate</div><div class="value">{{ r["MatchRate"]|pct }}</div></div>
+  <div class="card"><div class="label">Matched</div><div class="value">{{ r["MatchedClaims"]|num }}</div></div>
+  <div class="card"><div class="label">Not matched</div><div class="value">{{ r["NotMatchedClaims"]|num }}</div></div>
+  <div class="card"><div class="label">Class</div><div class="value">{{ r["Classification"] }}</div></div>
+</div>
+<div class="insight">
+  <b>System A:</b> <code>{{ r["NCH Target Table"] }}</code> → <code>{{ r["NCH Target Column"] }}</code><br>
+  <b>System B:</b> <code>{{ r["SS Table"] }}</code> → <code>{{ r["SS Column"] }}</code><br>
+  <b>Disposition:</b> <code>{{ r["Disposition"] }}</code><br>
+  <b>Recommendation:</b> {{ r["Recommendation"] }}
+</div>
+{% endblock %}

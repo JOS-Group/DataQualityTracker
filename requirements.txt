@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart
+itsdangerous
+sqlmodel
+pandas
+numpy
+plotly
+openpyxl
+apscheduler
+markdown
+openai

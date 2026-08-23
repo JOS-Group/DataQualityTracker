@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>Medi Intelligence Hub</title>
+
+    <link rel="stylesheet" href="/static/css/style.css">
+
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+
+    <!-- Plotly -->
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+</head>
+
+<body hx-boost="true">
+
+<div class="shell">
+
+    <aside class="sidebar">
+
+        <div class="brand">
+            ◆ Medi Intelligence
+        </div>
+
+        <nav>
+            <a href="/home">Home</a>
+            <a href="/briefing">My Briefing</a>
+            <a href="/explorer">System Explorer</a>
+            <a href="/quality">Data Quality Lab</a>
+            <a href="/issues">Issue Studio</a>
+            <a href="/compare">Compare</a>
+            <a href="/connections">Connections</a>
+            <a href="/impact">Report Impact</a>
+            <a href="/copilot">AI Copilot</a>
+            <a href="/automations">Automations</a>
+            <a href="/mydata">My Data</a>
+        </nav>
+
+        <div class="sidebar-footer">
+            <a href="/onboarding">Change my answers</a>
+        </div>
+
+    </aside>
+
+    <main class="content">
+        {% block content %}{% endblock %}
+    </main>
+
+</div>
+
+<script src="/static/js/app.js"></script>
+
+</body>
+</html>

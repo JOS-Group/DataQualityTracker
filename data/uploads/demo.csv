@@ -1,0 +1,121 @@
+Stream,NCH Target Table,NCH Target Column,SS Table,SS Column,MatchedClaims,NotMatchedClaims,MatchRate,Classification,Disposition,Recommendation,Comments,Comparable,NeedsChange,TotalClaims
+PROF,PROF_TABLE_1,PROF_FIELD_1,MCS_TABLE_1,MCS_FIELD_1,131950,22900,0.852114949951566,Different,Action needed,Review mapping,Interactive demo record,True,True,154850
+PROF,PROF_TABLE_2,PROF_FIELD_2,MCS_TABLE_2,MCS_FIELD_2,89459,9528,0.903744936203744,Match,Good,No action,Interactive demo record,True,False,98987
+PROF,PROF_TABLE_3,PROF_FIELD_3,MCS_TABLE_3,MCS_FIELD_3,42689,10314,0.8054072410995604,Different,Action needed,Review mapping,Interactive demo record,True,True,53003
+PROF,PROF_TABLE_4,PROF_FIELD_4,MCS_TABLE_4,MCS_FIELD_4,21552,549,0.9751594950454732,Match,Good,No action,Interactive demo record,True,False,22101
+PROF,PROF_TABLE_5,PROF_FIELD_5,MCS_TABLE_5,MCS_FIELD_5,144343,26619,0.8442987330517893,Different,Action needed,Review mapping,Interactive demo record,True,True,170962
+PROF,PROF_TABLE_1,PROF_FIELD_6,MCS_TABLE_1,MCS_FIELD_6,157854,186693,0.4581493961636583,Missing,Action needed,Review mapping,Interactive demo record,False,True,344547
+PROF,PROF_TABLE_2,PROF_FIELD_7,MCS_TABLE_2,MCS_FIELD_7,101569,53560,0.6547389591888042,Different,Action needed,Review mapping,Interactive demo record,True,True,155129
+PROF,PROF_TABLE_3,PROF_FIELD_8,MCS_TABLE_3,MCS_FIELD_8,76047,4398,0.9453291068431848,Match,Good,No action,Interactive demo record,True,False,80445
+PROF,PROF_TABLE_4,PROF_FIELD_9,MCS_TABLE_4,MCS_FIELD_9,82275,24194,0.7727601461458264,Different,Action needed,Review mapping,Interactive demo record,True,True,106469
+PROF,PROF_TABLE_5,PROF_FIELD_10,MCS_TABLE_5,MCS_FIELD_10,165084,88702,0.6504850543371187,Different,Action needed,Review mapping,Interactive demo record,True,True,253786
+PROF,PROF_TABLE_1,PROF_FIELD_11,MCS_TABLE_1,MCS_FIELD_11,21150,19631,0.5186238689585837,Missing,Action needed,Review mapping,Interactive demo record,False,True,40781
+PROF,PROF_TABLE_2,PROF_FIELD_12,MCS_TABLE_2,MCS_FIELD_12,112253,155699,0.4189295097629426,Missing,Action needed,Review mapping,Interactive demo record,False,True,267952
+PROF,PROF_TABLE_3,PROF_FIELD_13,MCS_TABLE_3,MCS_FIELD_13,57521,7485,0.8848567824508506,Different,Action needed,Review mapping,Interactive demo record,True,True,65006
+PROF,PROF_TABLE_4,PROF_FIELD_14,MCS_TABLE_4,MCS_FIELD_14,127437,23835,0.8424361415199112,Different,Action needed,Review mapping,Interactive demo record,True,True,151272
+PROF,PROF_TABLE_5,PROF_FIELD_15,MCS_TABLE_5,MCS_FIELD_15,16380,11091,0.5962651523424702,Different,Action needed,Review mapping,Interactive demo record,True,True,27471
+PROF,PROF_TABLE_1,PROF_FIELD_16,MCS_TABLE_1,MCS_FIELD_16,194227,15792,0.9248068031939968,Match,Good,No action,Interactive demo record,True,False,210019
+PROF,PROF_TABLE_2,PROF_FIELD_17,MCS_TABLE_2,MCS_FIELD_17,152700,25935,0.8548156856159207,Different,Action needed,Review mapping,Interactive demo record,True,True,178635
+PROF,PROF_TABLE_3,PROF_FIELD_18,MCS_TABLE_3,MCS_FIELD_18,41343,20855,0.6646998295765137,Different,Action needed,Review mapping,Interactive demo record,True,True,62198
+PROF,PROF_TABLE_4,PROF_FIELD_19,MCS_TABLE_4,MCS_FIELD_19,110674,161439,0.4067207373407371,Missing,Action needed,Review mapping,Interactive demo record,False,True,272113
+PROF,PROF_TABLE_5,PROF_FIELD_20,MCS_TABLE_5,MCS_FIELD_20,33395,8523,0.7966744596593349,Different,Action needed,Review mapping,Interactive demo record,True,True,41918
+INP/SNF,INP/SNF_TABLE_1,INP/SNF_FIELD_1,FISS_TABLE_1,FISS_FIELD_1,75228,14940,0.8343092893265903,Different,Action needed,Review mapping,Interactive demo record,True,True,90168
+INP/SNF,INP/SNF_TABLE_2,INP/SNF_FIELD_2,FISS_TABLE_2,FISS_FIELD_2,193599,140911,0.5787539983856985,Different,Action needed,Review mapping,Interactive demo record,True,True,334510
+INP/SNF,INP/SNF_TABLE_3,INP/SNF_FIELD_3,FISS_TABLE_3,FISS_FIELD_3,18039,11729,0.6059862940069873,Different,Action needed,Review mapping,Interactive demo record,True,True,29768
+INP/SNF,INP/SNF_TABLE_4,INP/SNF_FIELD_4,FISS_TABLE_4,FISS_FIELD_4,95502,97206,0.4955788031633352,Missing,Action needed,Review mapping,Interactive demo record,False,True,192708
+INP/SNF,INP/SNF_TABLE_5,INP/SNF_FIELD_5,FISS_TABLE_5,FISS_FIELD_5,138236,162766,0.4592527624401167,Missing,Action needed,Review mapping,Interactive demo record,False,True,301002
+INP/SNF,INP/SNF_TABLE_1,INP/SNF_FIELD_6,FISS_TABLE_1,FISS_FIELD_6,96713,89842,0.518415480689341,Missing,Action needed,Review mapping,Interactive demo record,False,True,186555
+INP/SNF,INP/SNF_TABLE_2,INP/SNF_FIELD_7,FISS_TABLE_2,FISS_FIELD_7,188240,50465,0.7885884250434637,Different,Action needed,Review mapping,Interactive demo record,True,True,238705
+INP/SNF,INP/SNF_TABLE_3,INP/SNF_FIELD_8,FISS_TABLE_3,FISS_FIELD_8,89118,11247,0.8879390225676281,Different,Action needed,Review mapping,Interactive demo record,True,True,100365
+INP/SNF,INP/SNF_TABLE_4,INP/SNF_FIELD_9,FISS_TABLE_4,FISS_FIELD_9,22153,5292,0.807177992348333,Different,Action needed,Review mapping,Interactive demo record,True,True,27445
+INP/SNF,INP/SNF_TABLE_5,INP/SNF_FIELD_10,FISS_TABLE_5,FISS_FIELD_10,64536,8165,0.8876906782575206,Different,Action needed,Review mapping,Interactive demo record,True,True,72701
+INP/SNF,INP/SNF_TABLE_1,INP/SNF_FIELD_11,FISS_TABLE_1,FISS_FIELD_11,168813,25023,0.8709063331888813,Different,Action needed,Review mapping,Interactive demo record,True,True,193836
+INP/SNF,INP/SNF_TABLE_2,INP/SNF_FIELD_12,FISS_TABLE_2,FISS_FIELD_12,79333,63383,0.5558802096471314,Different,Action needed,Review mapping,Interactive demo record,True,True,142716
+INP/SNF,INP/SNF_TABLE_3,INP/SNF_FIELD_13,FISS_TABLE_3,FISS_FIELD_13,128442,32851,0.796327180968796,Different,Action needed,Review mapping,Interactive demo record,True,True,161293
+INP/SNF,INP/SNF_TABLE_4,INP/SNF_FIELD_14,FISS_TABLE_4,FISS_FIELD_14,30531,30294,0.5019482120838471,Missing,Action needed,Review mapping,Interactive demo record,False,True,60825
+INP/SNF,INP/SNF_TABLE_5,INP/SNF_FIELD_15,FISS_TABLE_5,FISS_FIELD_15,159977,256097,0.384491700995496,Missing,Action needed,Review mapping,Interactive demo record,False,True,416074
+INP/SNF,INP/SNF_TABLE_1,INP/SNF_FIELD_16,FISS_TABLE_1,FISS_FIELD_16,158024,43137,0.7855598252146291,Different,Action needed,Review mapping,Interactive demo record,True,True,201161
+INP/SNF,INP/SNF_TABLE_2,INP/SNF_FIELD_17,FISS_TABLE_2,FISS_FIELD_17,57592,13495,0.8101621956194522,Different,Action needed,Review mapping,Interactive demo record,True,True,71087
+INP/SNF,INP/SNF_TABLE_3,INP/SNF_FIELD_18,FISS_TABLE_3,FISS_FIELD_18,156803,80799,0.6599397311470442,Different,Action needed,Review mapping,Interactive demo record,True,True,237602
+INP/SNF,INP/SNF_TABLE_4,INP/SNF_FIELD_19,FISS_TABLE_4,FISS_FIELD_19,10340,3884,0.7269403824521935,Different,Action needed,Review mapping,Interactive demo record,True,True,14224
+INP/SNF,INP/SNF_TABLE_5,INP/SNF_FIELD_20,FISS_TABLE_5,FISS_FIELD_20,30540,37347,0.4498652171991692,Missing,Action needed,Review mapping,Interactive demo record,False,True,67887
+OUT,OUT_TABLE_1,OUT_FIELD_1,FISS_TABLE_1,FISS_FIELD_1,131922,35549,0.787730413026733,Different,Action needed,Review mapping,Interactive demo record,True,True,167471
+OUT,OUT_TABLE_2,OUT_FIELD_2,FISS_TABLE_2,FISS_FIELD_2,95805,36377,0.7247961144482608,Different,Action needed,Review mapping,Interactive demo record,True,True,132182
+OUT,OUT_TABLE_3,OUT_FIELD_3,FISS_TABLE_3,FISS_FIELD_3,116196,21046,0.8466504422844319,Different,Action needed,Review mapping,Interactive demo record,True,True,137242
+OUT,OUT_TABLE_4,OUT_FIELD_4,FISS_TABLE_4,FISS_FIELD_4,128039,50366,0.7176872845491998,Different,Action needed,Review mapping,Interactive demo record,True,True,178405
+OUT,OUT_TABLE_5,OUT_FIELD_5,FISS_TABLE_5,FISS_FIELD_5,159597,61722,0.7211174820056118,Different,Action needed,Review mapping,Interactive demo record,True,True,221319
+OUT,OUT_TABLE_1,OUT_FIELD_6,FISS_TABLE_1,FISS_FIELD_6,62878,94790,0.3988000101479057,Missing,Action needed,Review mapping,Interactive demo record,False,True,157668
+OUT,OUT_TABLE_2,OUT_FIELD_7,FISS_TABLE_2,FISS_FIELD_7,196599,107546,0.6463989215670157,Different,Action needed,Review mapping,Interactive demo record,True,True,304145
+OUT,OUT_TABLE_3,OUT_FIELD_8,FISS_TABLE_3,FISS_FIELD_8,45273,26679,0.629211140760507,Different,Action needed,Review mapping,Interactive demo record,True,True,71952
+OUT,OUT_TABLE_4,OUT_FIELD_9,FISS_TABLE_4,FISS_FIELD_9,9834,1085,0.9006319260005495,Match,Good,No action,Interactive demo record,True,False,10919
+OUT,OUT_TABLE_5,OUT_FIELD_10,FISS_TABLE_5,FISS_FIELD_10,49086,69032,0.4155674833640935,Missing,Action needed,Review mapping,Interactive demo record,False,True,118118
+OUT,OUT_TABLE_1,OUT_FIELD_11,FISS_TABLE_1,FISS_FIELD_11,183777,149367,0.5516443339817017,Different,Action needed,Review mapping,Interactive demo record,True,True,333144
+OUT,OUT_TABLE_2,OUT_FIELD_12,FISS_TABLE_2,FISS_FIELD_12,60837,16784,0.7837698560956442,Different,Action needed,Review mapping,Interactive demo record,True,True,77621
+OUT,OUT_TABLE_3,OUT_FIELD_13,FISS_TABLE_3,FISS_FIELD_13,102488,39898,0.7197898669813043,Different,Action needed,Review mapping,Interactive demo record,True,True,142386
+OUT,OUT_TABLE_4,OUT_FIELD_14,FISS_TABLE_4,FISS_FIELD_14,157427,43057,0.7852347319486842,Different,Action needed,Review mapping,Interactive demo record,True,True,200484
+OUT,OUT_TABLE_5,OUT_FIELD_15,FISS_TABLE_5,FISS_FIELD_15,85337,50572,0.6278980788615912,Different,Action needed,Review mapping,Interactive demo record,True,True,135909
+OUT,OUT_TABLE_1,OUT_FIELD_16,FISS_TABLE_1,FISS_FIELD_16,163362,175666,0.4818540061587833,Missing,Action needed,Review mapping,Interactive demo record,False,True,339028
+OUT,OUT_TABLE_2,OUT_FIELD_17,FISS_TABLE_2,FISS_FIELD_17,23910,36797,0.393859027789217,Missing,Action needed,Review mapping,Interactive demo record,False,True,60707
+OUT,OUT_TABLE_3,OUT_FIELD_18,FISS_TABLE_3,FISS_FIELD_18,20739,4532,0.8206640022159788,Different,Action needed,Review mapping,Interactive demo record,True,True,25271
+OUT,OUT_TABLE_4,OUT_FIELD_19,FISS_TABLE_4,FISS_FIELD_19,144260,73739,0.6617461547988752,Different,Action needed,Review mapping,Interactive demo record,True,True,217999
+OUT,OUT_TABLE_5,OUT_FIELD_20,FISS_TABLE_5,FISS_FIELD_20,34770,15941,0.6856500562008243,Different,Action needed,Review mapping,Interactive demo record,True,True,50711
+HH,HH_TABLE_1,HH_FIELD_1,FISS_TABLE_1,FISS_FIELD_1,100974,112542,0.4729106952172202,Missing,Action needed,Review mapping,Interactive demo record,False,True,213516
+HH,HH_TABLE_2,HH_FIELD_2,FISS_TABLE_2,FISS_FIELD_2,140175,74766,0.6521557078454088,Different,Action needed,Review mapping,Interactive demo record,True,True,214941
+HH,HH_TABLE_3,HH_FIELD_3,FISS_TABLE_3,FISS_FIELD_3,50036,31665,0.6124282444523322,Different,Action needed,Review mapping,Interactive demo record,True,True,81701
+HH,HH_TABLE_4,HH_FIELD_4,FISS_TABLE_4,FISS_FIELD_4,62397,19223,0.764481744670424,Different,Action needed,Review mapping,Interactive demo record,True,True,81620
+HH,HH_TABLE_5,HH_FIELD_5,FISS_TABLE_5,FISS_FIELD_5,192059,127663,0.6007062385447357,Different,Action needed,Review mapping,Interactive demo record,True,True,319722
+HH,HH_TABLE_1,HH_FIELD_6,FISS_TABLE_1,FISS_FIELD_6,20267,24573,0.4519848349687779,Missing,Action needed,Review mapping,Interactive demo record,False,True,44840
+HH,HH_TABLE_2,HH_FIELD_7,FISS_TABLE_2,FISS_FIELD_7,75153,2584,0.966759715450815,Match,Good,No action,Interactive demo record,True,False,77737
+HH,HH_TABLE_3,HH_FIELD_8,FISS_TABLE_3,FISS_FIELD_8,181990,43574,0.8068220106045291,Different,Action needed,Review mapping,Interactive demo record,True,True,225564
+HH,HH_TABLE_4,HH_FIELD_9,FISS_TABLE_4,FISS_FIELD_9,153553,129660,0.5421820326044355,Missing,Action needed,Review mapping,Interactive demo record,False,True,283213
+HH,HH_TABLE_5,HH_FIELD_10,FISS_TABLE_5,FISS_FIELD_10,193927,32878,0.855038469169551,Different,Action needed,Review mapping,Interactive demo record,True,True,226805
+HH,HH_TABLE_1,HH_FIELD_11,FISS_TABLE_1,FISS_FIELD_11,158434,35415,0.8173062538367493,Different,Action needed,Review mapping,Interactive demo record,True,True,193849
+HH,HH_TABLE_2,HH_FIELD_12,FISS_TABLE_2,FISS_FIELD_12,91524,76081,0.5460696279943916,Missing,Action needed,Review mapping,Interactive demo record,False,True,167605
+HH,HH_TABLE_3,HH_FIELD_13,FISS_TABLE_3,FISS_FIELD_13,91063,116465,0.4387986199452604,Missing,Action needed,Review mapping,Interactive demo record,False,True,207528
+HH,HH_TABLE_4,HH_FIELD_14,FISS_TABLE_4,FISS_FIELD_14,180812,93968,0.6580246014993814,Different,Action needed,Review mapping,Interactive demo record,True,True,274780
+HH,HH_TABLE_5,HH_FIELD_15,FISS_TABLE_5,FISS_FIELD_15,145158,143173,0.5034422243879431,Missing,Action needed,Review mapping,Interactive demo record,False,True,288331
+HH,HH_TABLE_1,HH_FIELD_16,FISS_TABLE_1,FISS_FIELD_16,63273,23009,0.7333279247119909,Different,Action needed,Review mapping,Interactive demo record,True,True,86282
+HH,HH_TABLE_2,HH_FIELD_17,FISS_TABLE_2,FISS_FIELD_17,94251,98953,0.4878315148754684,Missing,Action needed,Review mapping,Interactive demo record,False,True,193204
+HH,HH_TABLE_3,HH_FIELD_18,FISS_TABLE_3,FISS_FIELD_18,171753,32060,0.8426989446208044,Different,Action needed,Review mapping,Interactive demo record,True,True,203813
+HH,HH_TABLE_4,HH_FIELD_19,FISS_TABLE_4,FISS_FIELD_19,133669,29566,0.8188746286029345,Different,Action needed,Review mapping,Interactive demo record,True,True,163235
+HH,HH_TABLE_5,HH_FIELD_20,FISS_TABLE_5,FISS_FIELD_20,88122,27423,0.7626638971829157,Different,Action needed,Review mapping,Interactive demo record,True,True,115545
+HSPC,HSPC_TABLE_1,HSPC_FIELD_1,FISS_TABLE_1,FISS_FIELD_1,21654,7755,0.7363052126899928,Different,Action needed,Review mapping,Interactive demo record,True,True,29409
+HSPC,HSPC_TABLE_2,HSPC_FIELD_2,FISS_TABLE_2,FISS_FIELD_2,131019,172609,0.4315115865466953,Missing,Action needed,Review mapping,Interactive demo record,False,True,303628
+HSPC,HSPC_TABLE_3,HSPC_FIELD_3,FISS_TABLE_3,FISS_FIELD_3,158016,91361,0.6336430384518219,Different,Action needed,Review mapping,Interactive demo record,True,True,249377
+HSPC,HSPC_TABLE_4,HSPC_FIELD_4,FISS_TABLE_4,FISS_FIELD_4,11197,5236,0.6813728473194183,Different,Action needed,Review mapping,Interactive demo record,True,True,16433
+HSPC,HSPC_TABLE_5,HSPC_FIELD_5,FISS_TABLE_5,FISS_FIELD_5,133138,95930,0.5812160581137479,Different,Action needed,Review mapping,Interactive demo record,True,True,229068
+HSPC,HSPC_TABLE_1,HSPC_FIELD_6,FISS_TABLE_1,FISS_FIELD_6,31471,39557,0.4430787858309399,Missing,Action needed,Review mapping,Interactive demo record,False,True,71028
+HSPC,HSPC_TABLE_2,HSPC_FIELD_7,FISS_TABLE_2,FISS_FIELD_7,159316,56423,0.7384663876257885,Different,Action needed,Review mapping,Interactive demo record,True,True,215739
+HSPC,HSPC_TABLE_3,HSPC_FIELD_8,FISS_TABLE_3,FISS_FIELD_8,36606,2158,0.9443297905272934,Match,Good,No action,Interactive demo record,True,False,38764
+HSPC,HSPC_TABLE_4,HSPC_FIELD_9,FISS_TABLE_4,FISS_FIELD_9,91066,32926,0.7344506097167559,Different,Action needed,Review mapping,Interactive demo record,True,True,123992
+HSPC,HSPC_TABLE_5,HSPC_FIELD_10,FISS_TABLE_5,FISS_FIELD_10,71333,25003,0.7404604716824448,Different,Action needed,Review mapping,Interactive demo record,True,True,96336
+HSPC,HSPC_TABLE_1,HSPC_FIELD_11,FISS_TABLE_1,FISS_FIELD_11,32845,50536,0.3939146808025809,Missing,Action needed,Review mapping,Interactive demo record,False,True,83381
+HSPC,HSPC_TABLE_2,HSPC_FIELD_12,FISS_TABLE_2,FISS_FIELD_12,191836,92700,0.6742064273062108,Different,Action needed,Review mapping,Interactive demo record,True,True,284536
+HSPC,HSPC_TABLE_3,HSPC_FIELD_13,FISS_TABLE_3,FISS_FIELD_13,15796,2625,0.8574995928559795,Different,Action needed,Review mapping,Interactive demo record,True,True,18421
+HSPC,HSPC_TABLE_4,HSPC_FIELD_14,FISS_TABLE_4,FISS_FIELD_14,19297,9212,0.6768739696236277,Different,Action needed,Review mapping,Interactive demo record,True,True,28509
+HSPC,HSPC_TABLE_5,HSPC_FIELD_15,FISS_TABLE_5,FISS_FIELD_15,89910,42440,0.6793350963354742,Different,Action needed,Review mapping,Interactive demo record,True,True,132350
+HSPC,HSPC_TABLE_1,HSPC_FIELD_16,FISS_TABLE_1,FISS_FIELD_16,187751,69881,0.7287565209290772,Different,Action needed,Review mapping,Interactive demo record,True,True,257632
+HSPC,HSPC_TABLE_2,HSPC_FIELD_17,FISS_TABLE_2,FISS_FIELD_17,162096,80262,0.6688287574579754,Different,Action needed,Review mapping,Interactive demo record,True,True,242358
+HSPC,HSPC_TABLE_3,HSPC_FIELD_18,FISS_TABLE_3,FISS_FIELD_18,55594,39886,0.582258064516129,Different,Action needed,Review mapping,Interactive demo record,True,True,95480
+HSPC,HSPC_TABLE_4,HSPC_FIELD_19,FISS_TABLE_4,FISS_FIELD_19,170406,73865,0.6976104408628122,Different,Action needed,Review mapping,Interactive demo record,True,True,244271
+HSPC,HSPC_TABLE_5,HSPC_FIELD_20,FISS_TABLE_5,FISS_FIELD_20,89465,138075,0.3931836160675046,Missing,Action needed,Review mapping,Interactive demo record,False,True,227540
+DME,DME_TABLE_1,DME_FIELD_1,VMS_TABLE_1,VMS_FIELD_1,4953,649,0.8841485183862906,Different,Action needed,Review mapping,Interactive demo record,True,True,5602
+DME,DME_TABLE_2,DME_FIELD_2,VMS_TABLE_2,VMS_FIELD_2,179543,206113,0.4655522019623706,Missing,Action needed,Review mapping,Interactive demo record,False,True,385656
+DME,DME_TABLE_3,DME_FIELD_3,VMS_TABLE_3,VMS_FIELD_3,65191,25609,0.7179625550660793,Different,Action needed,Review mapping,Interactive demo record,True,True,90800
+DME,DME_TABLE_4,DME_FIELD_4,VMS_TABLE_4,VMS_FIELD_4,24389,6480,0.7900806634487674,Different,Action needed,Review mapping,Interactive demo record,True,True,30869
+DME,DME_TABLE_5,DME_FIELD_5,VMS_TABLE_5,VMS_FIELD_5,51043,41501,0.5515538554633471,Different,Action needed,Review mapping,Interactive demo record,True,True,92544
+DME,DME_TABLE_1,DME_FIELD_6,VMS_TABLE_1,VMS_FIELD_6,132906,28492,0.8234674531282915,Different,Action needed,Review mapping,Interactive demo record,True,True,161398
+DME,DME_TABLE_2,DME_FIELD_7,VMS_TABLE_2,VMS_FIELD_7,66173,11780,0.8488833014765307,Different,Action needed,Review mapping,Interactive demo record,True,True,77953
+DME,DME_TABLE_3,DME_FIELD_8,VMS_TABLE_3,VMS_FIELD_8,24224,1580,0.938769183072392,Match,Good,No action,Interactive demo record,True,False,25804
+DME,DME_TABLE_4,DME_FIELD_9,VMS_TABLE_4,VMS_FIELD_9,49581,45688,0.5204316199393297,Missing,Action needed,Review mapping,Interactive demo record,False,True,95269
+DME,DME_TABLE_5,DME_FIELD_10,VMS_TABLE_5,VMS_FIELD_10,10370,4063,0.71849234393404,Different,Action needed,Review mapping,Interactive demo record,True,True,14433
+DME,DME_TABLE_1,DME_FIELD_11,VMS_TABLE_1,VMS_FIELD_11,64061,41604,0.6062650830454739,Different,Action needed,Review mapping,Interactive demo record,True,True,105665
+DME,DME_TABLE_2,DME_FIELD_12,VMS_TABLE_2,VMS_FIELD_12,166468,24209,0.8730366011632237,Different,Action needed,Review mapping,Interactive demo record,True,True,190677
+DME,DME_TABLE_3,DME_FIELD_13,VMS_TABLE_3,VMS_FIELD_13,42939,31938,0.573460475179294,Different,Action needed,Review mapping,Interactive demo record,True,True,74877
+DME,DME_TABLE_4,DME_FIELD_14,VMS_TABLE_4,VMS_FIELD_14,190721,151404,0.5574599926927293,Different,Action needed,Review mapping,Interactive demo record,True,True,342125
+DME,DME_TABLE_5,DME_FIELD_15,VMS_TABLE_5,VMS_FIELD_15,181389,79908,0.6941870744784671,Different,Action needed,Review mapping,Interactive demo record,True,True,261297
+DME,DME_TABLE_1,DME_FIELD_16,VMS_TABLE_1,VMS_FIELD_16,53425,2753,0.9509950514436256,Match,Good,No action,Interactive demo record,True,False,56178
+DME,DME_TABLE_2,DME_FIELD_17,VMS_TABLE_2,VMS_FIELD_17,108031,116841,0.4804110783023231,Missing,Action needed,Review mapping,Interactive demo record,False,True,224872
+DME,DME_TABLE_3,DME_FIELD_18,VMS_TABLE_3,VMS_FIELD_18,11847,6508,0.6454372105693271,Different,Action needed,Review mapping,Interactive demo record,True,True,18355
+DME,DME_TABLE_4,DME_FIELD_19,VMS_TABLE_4,VMS_FIELD_19,32853,488,0.985363366425722,Match,Good,No action,Interactive demo record,True,False,33341
+DME,DME_TABLE_5,DME_FIELD_20,VMS_TABLE_5,VMS_FIELD_20,178660,34881,0.8366543193110456,Different,Action needed,Review mapping,Interactive demo record,True,True,213541

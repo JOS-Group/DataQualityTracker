@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="hero"><h1>Connections</h1><p>Make system relationships explicit and reusable.</p></div>
+<p><b>{{ connections|length }}</b> mapped comparisons in the active dataset.</p>
+<table class="data-table">
+<thead><tr><th>Stream</th><th>A Table</th><th>A Column</th><th>B Table</th><th>B Column</th><th>Match</th><th>Class</th></tr></thead>
+<tbody>
+{% for r in connections %}
+<tr><td>{{ r["Stream"] }}</td><td>{{ r["NCH Target Table"] }}</td><td>{{ r["NCH Target Column"] }}</td>
+<td>{{ r["SS Table"] }}</td><td>{{ r["SS Column"] }}</td><td>{{ r["MatchRate"]|pct }}</td><td>{{ r["Classification"] }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+<h3>Add a future connection</h3>
+<form method="post" action="/connections" class="grid-2">
+  <div><label>System A / source</label><input type="text" name="source" value="NCH / CVM"></div>
+  <div><label>System B / target</label><input type="text" name="target" value="Shared Systems"></div>
+  <div><label>Comparison key</label><input type="text" name="key" placeholder="Claim ID"></div>
+  <div><label>Report or dashboard</label><input type="text" name="report"></div>
+  <div class="full-width"><button type="submit" class="btn-primary">Save connection</button></div>
+</form>
+<h3>Saved connections</h3>
+<table class="data-table">
+<thead><tr><th>Source</th><th>Target</th><th>Key</th><th>Report</th></tr></thead>
+<tbody>
+{% for c in saved %}
+<tr><td>{{ c.source }}</td><td>{{ c.target }}</td><td>{{ c.key }}</td><td>{{ c.report }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

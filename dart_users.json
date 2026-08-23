@@ -1,0 +1,14 @@
+{
+  "users": {
+    "NickHolmes": {
+      "password": "Nicholas243",
+      "created_at": "local prototype",
+      "profile": {
+        "display_name": "Nick Holmes",
+        "email": "NickHolmes2003@gmail.com",
+        "organization": "JOS Group",
+        "role": ""
+      }
+    }
+  }
+}

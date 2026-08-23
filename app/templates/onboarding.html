@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="hero">
+  <h1>◆ Medi Intelligence Hub</h1>
+  <p>Your interactive workspace for healthcare data, reconciliation, issues, reporting impact, and AI-powered insight.</p>
+</div>
+<h2>Let's build your workspace</h2>
+<p class="muted">A few questions personalize what you see first. Nothing is permanent.</p>
+<form method="post" action="/onboarding" class="grid-2">
+  <div>
+    <label>Are you interested in Medicare or Medicaid?</label>
+    <select name="program">
+      <option>Medicare</option><option>Medicaid</option><option>Both</option><option>Other / General</option>
+    </select>
+    <label>What's your primary role?</label>
+    <select name="role">
+      <option>Executive / Leadership</option><option>Data / Analytics</option><option>Program / Policy</option>
+      <option>Operations</option><option>Quality / Compliance</option><option>IT / Engineering</option>
+      <option>Research</option><option>Other</option>
+    </select>
+    <label>What do you care about most?</label>
+    <select name="focus" multiple size="6">
+      <option selected>Data quality</option><option>Claims</option><option>System reconciliation</option>
+      <option>State comparisons</option><option>Issues & remediation</option><option>Business rules</option>
+      <option>Reporting impact</option><option>Automation</option><option selected>AI insights</option>
+    </select>
+  </div>
+  <div>
+    <label>What geography matters to you?</label>
+    <select name="geography" multiple size="4">
+      <option selected>National</option><option>State</option><option>Multi-state</option><option>Specific states</option>
+    </select>
+    <label>Who is this workspace primarily for?</label>
+    <select name="audience">
+      <option>Myself</option><option>Leadership</option><option>Analysts</option><option>Program teams</option>
+      <option>Technical teams</option><option>External stakeholders</option>
+    </select>
+    <label>How much detail do you want?</label>
+    <select name="depth">
+      <option>Executive</option><option selected>Balanced</option><option>Technical</option>
+    </select>
+    <label>What do you want to know first?</label>
+    <input type="text" name="first_question" placeholder="Which areas need the most attention?">
+  </div>
+  <div class="full-width"><button type="submit" class="btn-primary">Build My Workspace</button></div>
+</form>
+{% endblock %}

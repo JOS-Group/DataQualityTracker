@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="hero"><h1>Issue Studio</h1><p>Turn findings into a living work queue with owners, statuses, notes, and priorities.</p></div>
+{% include "_filters.html" %}
+<div class="cards">
+  <div class="card"><div class="label">Open candidates</div><div class="value">{{ candidates|length }}</div></div>
+  <div class="card"><div class="label">Unmatched volume</div><div class="value">{{ unmatched_volume|num }}</div></div>
+  <div class="card"><div class="label">Affected streams</div><div class="value">{{ affected_streams }}</div></div>
+</div>
+<table class="data-table">
+<thead><tr><th>Stream</th><th>Field</th><th>Match</th><th>Not matched</th><th>Class</th><th>Recommendation</th><th></th></tr></thead>
+<tbody>
+{% for r in candidates %}
+<tr>
+  <td>{{ r["Stream"] }}</td><td>{{ r["NCH Target Column"] }}</td><td>{{ r["MatchRate"]|pct }}</td>
+  <td>{{ r["NotMatchedClaims"]|num }}</td><td>{{ r["Classification"] }}</td><td>{{ r["Recommendation"] }}</td>
+  <td>
+    <form method="post" action="/issues" class="inline-form">
+      <input type="hidden" name="stream" value="{{ r['Stream'] }}">
+      <input type="hidden" name="field" value="{{ r['NCH Target Column'] }}">
+      <input type="hidden" name="match_rate" value="{{ r['MatchRate'] or 0 }}">
+      <input type="hidden" name="not_matched" value="{{ r['NotMatchedClaims'] or 0 }}">
+      <input type="text" name="owner" placeholder="Owner">
+      <select name="status"><option>Open</option><option>In progress</option><option>Blocked</option><option>Resolved</option></select>
+      <input type="text" name="note" placeholder="Note">
+      <button type="submit">Add to board</button>
+    </form>
+  </td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+<h3>My issue board</h3>
+<table class="data-table">
+<thead><tr><th>Stream</th><th>Field</th><th>Owner</th><th>Status</th><th>Note</th></tr></thead>
+<tbody>
+{% for i in board %}
+<tr>
+  <td>{{ i.stream }}</td><td>{{ i.field }}</td><td>{{ i.owner }}</td>
+  <td>
+    <form method="post" action="/issues/{{ i.id }}/status" class="inline-form">
+      <select name="status" onchange="this.form.submit()">
+        {% for st in ["Open","In progress","Blocked","Resolved"] %}
+        <option {% if i.status == st %}selected{% endif %}>{{ st }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </td>
+  <td>{{ i.note }}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

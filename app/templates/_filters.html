@@ -1,0 +1,32 @@
+<form method="get" class="filters">
+  <div>
+    <label>Stream / domain</label>
+    <select name="stream" multiple size="4">
+      {% for s in streams %}<option value="{{ s }}" {% if s in filters.stream %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select>
+  </div>
+  <div>
+    <label>Classification</label>
+    <select name="classification" multiple size="4">
+      {% for c in classes %}<option value="{{ c }}" {% if c in filters.classification %}selected{% endif %}>{{ c }}</option>{% endfor %}
+    </select>
+  </div>
+  <div>
+    <label>Minimum match rate: {{ filters.min_rate }}%</label>
+    <input type="range" name="min_rate" min="0" max="100" value="{{ filters.min_rate }}">
+  </div>
+  <div class="checkbox-row">
+    <label><input type="checkbox" name="actions_only" value="true" {% if filters.actions_only %}checked{% endif %}> Only fields needing action</label>
+  </div>
+  {% if group is defined %}
+  <div>
+    <label>Compare by</label>
+    <select name="group" onchange="this.form.submit()">
+      {% for g in ["Stream","Classification","Disposition"] %}
+      <option value="{{ g }}" {% if group == g %}selected{% endif %}>{{ g }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  {% endif %}
+  <button type="submit" class="btn-primary">Apply filters</button>
+</form>

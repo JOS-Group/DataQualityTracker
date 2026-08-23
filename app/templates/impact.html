@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="hero"><h1>Report Impact</h1><p>Connect data findings to the reports, KPIs, and owners that depend on them.</p></div>
+<div class="insight"><b>Product direction:</b> move from "this field has a problem" to "this field may affect this report and KPI."</div>
+<form method="post" action="/impact" class="grid-2">
+  <div>
+    <label>Data field</label>
+    <select name="row_id">
+      {% for r in fields %}<option value="{{ r['_id'] }}">{{ r['Stream'] }} · {{ r['NCH Target Column'] }}</option>{% endfor %}
+    </select>
+    <label>Report / dashboard</label><input type="text" name="report">
+    <label>KPI</label><input type="text" name="kpi">
+  </div>
+  <div>
+    <label>Business owner</label><input type="text" name="owner">
+    <label>Potential impact</label>
+    <select name="impact"><option>Low</option><option>Moderate</option><option>High</option><option>Critical</option></select>
+  </div>
+  <div class="full-width"><button type="submit" class="btn-primary">Map report impact</button></div>
+</form>
+<h3>Saved mappings</h3>
+<table class="data-table">
+<thead><tr><th>Stream</th><th>Field</th><th>Report</th><th>KPI</th><th>Owner</th><th>Impact</th></tr></thead>
+<tbody>
+{% for i in impacts %}
+<tr><td>{{ i.stream }}</td><td>{{ i.field }}</td><td>{{ i.report }}</td><td>{{ i.kpi }}</td><td>{{ i.owner }}</td><td>{{ i.impact }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

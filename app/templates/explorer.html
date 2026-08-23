@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="hero"><h1>System Explorer</h1><p>Interact with the relationship between System A and System B.</p></div>
+{% include "_filters.html" %}
+<form method="get" class="search-row">
+  <input type="text" name="q" value="{{ q or '' }}" placeholder="Search any table, column, stream, or system">
+  <select name="stream_filter">
+    <option value="">All streams</option>
+    {% for s in streams %}<option value="{{ s }}" {% if s == stream_filter %}selected{% endif %}>{{ s }}</option>{% endfor %}
+  </select>
+  <button type="submit" class="btn-primary">Search</button>
+</form>
+<p class="muted">{{ count|num }} fields in this view.</p>
+<table class="data-table">
+<thead><tr><th>Stream</th><th>A Table</th><th>A Column</th><th>B Table</th><th>B Column</th><th>Match</th><th>Class</th><th>Disposition</th><th></th></tr></thead>
+<tbody>
+{% for r in rows %}
+<tr>
+  <td>{{ r["Stream"] }}</td><td>{{ r["NCH Target Table"] }}</td><td>{{ r["NCH Target Column"] }}</td>
+  <td>{{ r["SS Table"] }}</td><td>{{ r["SS Column"] }}</td><td>{{ r["MatchRate"]|pct }}</td>
+  <td><span class="tag tag-{{ r['Classification']|lower }}">{{ r["Classification"] }}</span></td>
+  <td>{{ r["Disposition"] }}</td><td><a href="/explorer/field/{{ r['_id'] }}">Inspect</a></td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

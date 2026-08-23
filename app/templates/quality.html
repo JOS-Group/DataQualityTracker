@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="hero"><h1>Data Quality Lab</h1><p>Test different definitions of quality and build your own thresholds.</p></div>
+{% include "_filters.html" %}
+<div class="cards">
+  <div class="card"><div class="label">Field average</div><div class="value">{{ field_avg|pct }}</div></div>
+  <div class="card"><div class="label">Event weighted</div><div class="value">{{ weighted|pct }}</div></div>
+  <div class="card"><div class="label">Comparable fields</div><div class="value">{{ comparable|num }}</div></div>
+  <div class="card"><div class="label">Action fields</div><div class="value">{{ needs_change|num }}</div></div>
+</div>
+<div class="tab-row">
+  <a class="tab {{ 'active' if mode=='field' else '' }}" href="?mode=field">Field-level average</a>
+  <a class="tab {{ 'active' if mode=='weighted' else '' }}" href="?mode=weighted">Event-volume weighted</a>
+  <a class="tab {{ 'active' if mode=='stream' else '' }}" href="?mode=stream">By stream</a>
+</div>
+<div class="chart-box">{{ chart|safe }}</div>
+{% if table %}
+<table class="data-table">
+<thead><tr><th>Stream</th><th>Matched</th><th>Not matched</th><th>Weighted match</th></tr></thead>
+<tbody>
+{% for r in table %}
+<tr><td>{{ r.Stream }}</td><td>{{ r.Matched|num }}</td><td>{{ r.NotMatched|num }}</td><td>{{ r.WeightedMatch|pct }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endif %}
+<h3>Create your own quality threshold</h3>
+<form method="get" class="inline-form">
+  <input type="hidden" name="mode" value="{{ mode }}">
+  <label>Flag fields below: {{ threshold }}%</label>
+  <input type="range" name="threshold" min="0" max="100" value="{{ threshold }}">
+  <button type="submit">Apply</button>
+</form>
+<p>{{ flagged_count|num }} fields are below {{ threshold }}%.</p>
+<table class="data-table">
+<thead><tr><th>Stream</th><th>Column</th><th>Match rate</th></tr></thead>
+<tbody>
+{% for r in flagged %}
+<tr><td>{{ r["Stream"] }}</td><td>{{ r["NCH Target Column"] }}</td><td>{{ r["MatchRate"]|pct }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}
