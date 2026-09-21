@@ -8,6 +8,25 @@
         "email": "NickHolmes2003@gmail.com",
         "organization": "JOS Group",
         "role": ""
+      },
+      "persona": {
+        "program": "Medicare",
+        "role": "Executive / Leadership",
+        "audience": "Leadership",
+        "depth": "Balanced",
+        "focus": [
+          "Data quality",
+          "Claims",
+          "Reporting impact",
+          "AI insights"
+        ],
+        "geography": [
+          "National"
+        ],
+        "first_question": "",
+        "preferred_workspace": "medicare",
+        "landing_page": "home",
+        "updated_at": "2026-08-26T21:03:17+00:00"
       }
     }
   }

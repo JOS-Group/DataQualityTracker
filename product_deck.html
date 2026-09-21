@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DART Product Deck</title>
+    <style>
+      :root {
+        --bg: #f9f7f2;
+        --paper: #ffffff;
+        --paper-soft: #fffdf8;
+        --ink: #1c1a17;
+        --muted: #5f594f;
+        --gold-1: #f5d77a;
+        --gold-2: #d7aa38;
+        --gold-3: #a77918;
+        --gold-4: #6f4d00;
+        --line: #eeddb0;
+        --shadow: rgba(117, 88, 22, 0.12);
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: linear-gradient(180deg, #fffdf8 0%, #f8f3e7 100%);
+        color: var(--ink);
+        font-family: "Segoe UI", Inter, Arial, sans-serif;
+      }
+
+      body {
+        min-height: 100vh;
+      }
+
+      .deck {
+        width: 100%;
+        max-width: 1500px;
+        margin: 0 auto;
+        padding: 26px 28px 44px;
+      }
+
+      .slide {
+        position: relative;
+        min-height: 760px;
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        box-shadow: 0 22px 60px var(--shadow);
+        padding: 42px 58px 36px;
+        overflow: hidden;
+        margin-bottom: 26px;
+      }
+
+      .slide::before {
+        content: "";
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 7px;
+        background: linear-gradient(180deg, var(--gold-1), var(--gold-2), var(--gold-3));
+      }
+
+      .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--gold-4);
+        font-size: 12px;
+      }
+
+      .brand-mark {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(135deg, var(--gold-2), var(--gold-1));
+        color: #fff;
+        font-size: 15px;
+        box-shadow: inset 0 0 0 2px rgba(255,255,255,0.5);
+      }
+
+      .slide-tag {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        color: var(--gold-4);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 9px 12px;
+        background: var(--paper-soft);
+      }
+
+      h1, h2, h3, p {
+        margin-top: 0;
+      }
+
+      .cover {
+        background: radial-gradient(circle at top left, rgba(255, 214, 107, 0.35), transparent 30%), linear-gradient(180deg, #fffdf8 0%, #ffffff 100%);
+      }
+
+      .cover-grid {
+        display: grid;
+        grid-template-columns: 1.5fr 1fr;
+        gap: 30px;
+        align-items: center;
+        min-height: 620px;
+      }
+
+      .eyebrow {
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        color: var(--gold-4);
+        margin-bottom: 15px;
+      }
+
+      h1 {
+        font-size: clamp(38px, 4vw, 74px);
+        line-height: 1.04;
+        letter-spacing: -0.06em;
+        margin-bottom: 18px;
+      }
+
+      .cover h1 .accent {
+        color: var(--gold-3);
+      }
+
+      .cover p.lead {
+        max-width: 700px;
+        font-size: clamp(18px, 1.5vw, 28px);
+        line-height: 1.45;
+        color: var(--muted);
+      }
+
+      .hero-stats {
+        margin-top: 30px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(180px, 1fr));
+        gap: 16px;
+      }
+
+      .stat {
+        background: linear-gradient(180deg, #fffdf8, #fff7e4);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 18px 16px;
+        min-height: 118px;
+      }
+
+      .stat .num {
+        display: block;
+        font-weight: 800;
+        color: var(--gold-4);
+        font-size: 32px;
+        letter-spacing: -0.06em;
+      }
+
+      .stat .label {
+        display: block;
+        margin-top: 8px;
+        font-size: 14px;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+
+      .cover-panel {
+        background: linear-gradient(180deg, #fff8dd 0%, #fffef8 100%);
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 22px 22px 18px;
+        box-shadow: 0 16px 40px rgba(167, 121, 24, 0.1);
+      }
+
+      .mini-label {
+        font-size: 12px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--gold-4);
+        font-weight: 700;
+      }
+
+      .score-box {
+        margin-top: 18px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background: rgba(255,255,255,0.65);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px 18px;
+      }
+
+      .score-box strong {
+        font-size: 36px;
+        color: var(--gold-4);
+      }
+
+      .score-box span {
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .metric-list {
+        margin-top: 18px;
+        display: grid;
+        gap: 12px;
+      }
+
+      .metric-list li {
+        list-style: none;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(167, 121, 24, 0.12);
+        color: var(--ink);
+      }
+
+      .metric-list li span:first-child {
+        color: var(--muted);
+      }
+
+      .metric-list li strong {
+        color: var(--gold-4);
+      }
+
+      .content-grid {
+        display: grid;
+        grid-template-columns: 1.15fr 0.85fr;
+        gap: 26px;
+        margin-top: 18px;
+      }
+
+      .section-title {
+        font-size: clamp(30px, 3vw, 52px);
+        letter-spacing: -0.06em;
+        margin-bottom: 16px;
+      }
+
+      .subcopy {
+        font-size: 18px;
+        line-height: 1.6;
+        color: var(--muted);
+        max-width: 720px;
+      }
+
+      .card-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(220px, 1fr));
+        gap: 18px;
+      }
+
+      .card {
+        background: linear-gradient(180deg, #fffefb, #fffaf0);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 20px 18px;
+      }
+
+      .card h3 {
+        font-size: 18px;
+        margin-bottom: 10px;
+        color: var(--gold-4);
+      }
+
+      .card p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.5;
+        font-size: 15px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 16px;
+      }
+
+      .issue-box {
+        background: var(--paper-soft);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 14px 16px;
+      }
+
+      .issue-box strong {
+        display: block;
+        font-size: 15px;
+        margin-bottom: 6px;
+        color: var(--gold-4);
+      }
+
+      .issue-box span {
+        display: block;
+        color: var(--muted);
+        font-size: 15px;
+      }
+
+      .pill-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 18px;
+      }
+
+      .pill {
+        border-radius: 999px;
+        background: linear-gradient(180deg, #fff7dc, #fffaf2);
+        border: 1px solid var(--line);
+        color: var(--gold-4);
+        font-weight: 700;
+        padding: 9px 12px;
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .timeline {
+        display: grid;
+        gap: 14px;
+        margin-top: 22px;
+      }
+
+      .timeline-row {
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        align-items: start;
+        gap: 12px;
+      }
+
+      .timeline-step {
+        font-weight: 800;
+        color: var(--gold-4);
+        font-size: 15px;
+        padding-top: 8px;
+      }
+
+      .timeline-copy {
+        background: #fffdf8;
+        border-left: 4px solid var(--gold-2);
+        padding: 12px 14px;
+        border-radius: 0 14px 14px 0;
+        color: var(--muted);
+      }
+
+      .three-col {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(200px, 1fr));
+        gap: 18px;
+        margin-top: 24px;
+      }
+
+      .highlight {
+        background: linear-gradient(180deg, #fff8dc, #fffefb);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 18px 18px 16px;
+      }
+
+      .highlight .tiny {
+        color: var(--gold-4);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        font-weight: 700;
+      }
+
+      .highlight strong {
+        display: block;
+        margin-top: 12px;
+        font-size: 34px;
+        letter-spacing: -0.05em;
+        color: var(--gold-4);
+      }
+
+      .highlight p {
+        margin-top: 10px;
+        color: var(--muted);
+        line-height: 1.5;
+        font-size: 15px;
+      }
+
+      .quote {
+        background: linear-gradient(135deg, #fff8dd, #fffefb);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 22px 24px;
+        font-size: 20px;
+        line-height: 1.5;
+        color: var(--ink);
+      }
+
+      .quote strong {
+        color: var(--gold-4);
+      }
+
+      .table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 22px;
+        background: #fffdfb;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        overflow: hidden;
+      }
+
+      .table th, .table td {
+        padding: 14px 16px;
+        border-bottom: 1px solid rgba(184, 154, 77, 0.2);
+        text-align: left;
+      }
+
+      .table th {
+        background: #fff7dd;
+        color: var(--gold-4);
+        font-size: 12px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .table td {
+        color: var(--muted);
+        font-size: 15px;
+      }
+
+      .table tr:last-child td { border-bottom: none; }
+
+      .footer-controls {
+        position: fixed;
+        right: 28px;
+        bottom: 24px;
+        display: flex;
+        gap: 10px;
+        z-index: 20;
+      }
+
+      .control-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,0.94);
+        color: var(--gold-4);
+        border-radius: 999px;
+        padding: 10px 14px;
+        font-weight: 700;
+        cursor: pointer;
+        box-shadow: 0 14px 26px rgba(125, 97, 26, 0.08);
+      }
+
+      @media (max-width: 980px) {
+        .slide { padding: 28px 26px 24px; min-height: 720px; }
+        .cover-grid, .content-grid, .three-col, .card-grid { grid-template-columns: 1fr; }
+        .hero-stats { grid-template-columns: 1fr; }
+        .table { display: block; overflow-x: auto; }
+      }
+
+      @media print {
+        body { background: white; }
+        .deck { max-width: none; padding: 0; }
+        .slide { box-shadow: none; margin: 0; border-radius: 0; border: 0; min-height: 100vh; page-break-after: always; }
+        .footer-controls { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="deck">
+      <section class="slide cover">
+        <div class="topbar">
+          <div class="brand"><span class="brand-mark">D</span> DART</div>
+          <div class="slide-tag">Product overview</div>
+        </div>
+
+        <div class="cover-grid">
+          <div>
+            <div class="eyebrow">Data assurance • workflow intelligence • AI-driven remediation</div>
+            <h1><span class="accent">DART</span> keeps data quality operational, measurable, and fixable.</h1>
+            <p class="lead">
+              DART is a data assurance and reconciliation platform that helps organizations detect
+              quality issues, trace ownership, prioritize impact, and turn raw operational data into
+              actionable remediation programs.
+            </p>
+
+            <div class="hero-stats">
+              <div class="stat">
+                <span class="num">3</span>
+                <span class="label">core workspaces: reconciliation, governance, and intelligent QA</span>
+              </div>
+              <div class="stat">
+                <span class="num">50</span>
+                <span class="label">state comparisons in the Medicaid intelligence layer</span>
+              </div>
+              <div class="stat">
+                <span class="num">9</span>
+                <span class="label">issue categories tracked across program and data health workflows</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="cover-panel">
+            <div class="mini-label">Executive snapshot</div>
+            <div class="score-box">
+              <div>
+                <strong>93%</strong>
+                <span>quality visibility</span>
+              </div>
+              <div>
+                <span>demo benchmark</span>
+              </div>
+            </div>
+
+            <ul class="metric-list">
+              <li><span>Issue detection</span><strong>Live</strong></li>
+              <li><span>Impact scoring</span><strong>Included</strong></li>
+              <li><span>AI summaries</span><strong>Enabled</strong></li>
+              <li><span>Email automation</span><strong>Built in</strong></li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="topbar">
+          <div class="brand"><span class="brand-mark">D</span> DART</div>
+          <div class="slide-tag">The problem</div>
+        </div>
+
+        <h2 class="section-title">Most organizations lose time before they lose trust.</h2>
+        <p class="subcopy">
+          Data quality problems are rarely isolated. A single field mismatch can cascade into payment errors,
+          incomplete claims, delayed reporting, stakeholder confusion, and regulatory risk. The product exists to
+          make that problem visible, explainable, and fixable.
+        </p>
+
+        <div class="content-grid">
+          <div class="card-grid">
+            <div class="card">
+              <h3>Broken reconciliations</h3>
+              <p>Claims, ledgers, and source records do not always line up, which creates noise in downstream reporting and finance workflows.</p>
+            </div>
+            <div class="card">
+              <h3>Unclear ownership</h3>
+              <p>Teams often know the issue exists but do not know which owner is responsible, which stream is impacted, or what action should happen first.</p>
+            </div>
+            <div class="card">
+              <h3>Manual triage</h3>
+              <p>Quality reviews depend on spreadsheets, scattered notes, and ad hoc follow-up that slows every remediation cycle.</p>
+            </div>
+            <div class="card">
+              <h3>Opaque AI decisions</h3>
+              <p>Teams want recommendations grounded in evidence, not black-box outputs. The platform combines structured data with traceable explanations.</p>
+            </div>
+          </div>
+
+          <div class="stack">
+            <div class="issue-box">
+              <strong>Typical symptoms</strong>
+              <span>Duplicate claims, stale reference data, high-risk unmatched volumes, and inconsistent downstream reporting</span>
+            </div>
+            <div class="issue-box">
+              <strong>Operational impact</strong>
+              <span>Higher cost to resolve, reduced confidence in metrics, slower decision-making, and increased governance burden</span>
+            </div>
+            <div class="quote">
+              <strong>Outcome:</strong> organizations need a single quality layer that connects data truth, issue severity, and action ownership.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="topbar">
+          <div class="brand"><span class="brand-mark">D</span> DART</div>
+          <div class="slide-tag">What it does</div>
+        </div>
+
+        <h2 class="section-title">DART turns data quality management into a repeatable operating system.</h2>
+
+        <div class="three-col">
+          <div class="highlight">
+            <div class="tiny">01</div>
+            <strong>Reconcile</strong>
+            <p>Compare source and target datasets, identify mismatches, calculate weighted match rates, and measure operational impact at field and stream level.</p>
+          </div>
+          <div class="highlight">
+            <div class="tiny">02</div>
+            <strong>Diagnose</strong>
+            <p>Surface root-cause drivers, show risk tiers, and connect issues to the reports, owners, and workflow decisions that depend on them.</p>
+          </div>
+          <div class="highlight">
+            <div class="tiny">03</div>
+            <strong>Act</strong>
+            <p>Prioritize remediation with action plans, governance controls, email alerts, AI guidance, and issue tracking across multiple workspaces.</p>
+          </div>
+        </div>
+
+        <div class="pill-row">
+          <div class="pill">Mapping catalog</div>
+          <div class="pill">Impact explorer</div>
+          <div class="pill">Workflow issues</div>
+          <div class="pill">AI copilot</div>
+          <div class="pill">Email agent</div>
+          <div class="pill">Medicaid analysis</div>
+          <div class="pill">BYO dataset support</div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="topbar">
+          <div class="brand"><span class="brand-mark">D</span> DART</div>
+          <div class="slide-tag">Core product features</div>
+        </div>
+
+        <h2 class="section-title">The platform brings together operational intelligence and governance.</h2>
+
+        <div class="content-grid">
+          <div class="stack">
+            <div class="card">
+              <h3>Reconciliation engine</h3>
+              <p>Loads source workbooks, standardizes values, compares matched vs unmatched counts, and highlights high-risk fields by stream and report.</p>
+            </div>
+            <div class="card">
+              <h3>Impact and mapping intelligence</h3>
+              <p>Connects each data field to downstream reports, KPIs, and owners so teams can act based on actual business impact rather than raw technical noise.</p>
+            </div>
+            <div class="card">
+              <h3>Governance center</h3>
+              <p>Provides templates, actions, owners, decisions, and controls for operational governance and policy tracking across high-risk data domains.</p>
+            </div>
+          </div>
+
+          <div class="stack">
+            <div class="card">
+              <h3>AI-assisted analysis</h3>
+              <p>Translates complex issue patterns into plain-language summaries and recommendations grounded in structured evidence and current dataset context.</p>
+            </div>
+            <div class="card">
+              <h3>Automation and alerts</h3>
+              <p>Includes persistent email automations, workbook watchers, baselines, and alert logic to escalate issues before they become expensive exceptions.</p>
+            </div>
+            <div class="card">
+              <h3>Multi-domain coverage</h3>
+              <p>Supports enterprise data, claims reconciliation, Medicaid analytics, and custom BYO datasets in one aligned product experience.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="topbar">
+          <div class="brand"><span class="brand-mark">D</span> DART</div>
+          <div class="slide-tag">How it works</div>
+        </div>
+
+        <h2 class="section-title">A simple operational flow, from problem to resolution.</h2>
+
+        <div class="timeline">
+          <div class="timeline-row">
+            <div class="timeline-step">1. Ingest</div>
+            <div class="timeline-copy">Pulls in source datasets and workbook data from claims, reconciliation files, and BYO inputs without requiring a separate ecosystem of tooling.</div>
+          </div>
+          <div class="timeline-row">
+            <div class="timeline-step">2. Standardize</div>
+            <div class="timeline-copy">Normalizes fields, maps source-to-target columns, identifies comparable records, and checks for schema drift or type mismatch issues.</div>
+          </div>
+          <div class="timeline-row">
+            <div class="timeline-step">3. Score</div>
+            <div class="timeline-copy">Applies match-rate, impact score, and risk-tier logic to surface where issues matter most to the business, not just where they appear.</div>
+          </div>
+          <div class="timeline-row">
+            <div class="timeline-step">4. Resolve</div>
+            <div class="timeline-copy">Generates actions, assigns owners, triggers alerts, and provides dashboards, recommendations, and change guidance across stakeholders.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="topbar">
+          <div class="brand"><span class="brand-mark">D</span> DART</div>
+          <div class="slide-tag">Outcomes</div>
+        </div>
+
+        <h2 class="section-title">The envisioned business outcomes are operational and measurable.</h2>
+
+        <div class="three-col">
+          <div class="highlight">
+            <div class="tiny">Outcome 01</div>
+            <strong>Faster issue triage</strong>
+            <p>Teams can identify high-risk mismatches before they become reporting or payment issues, reducing cycle time from detection to resolution.</p>
+          </div>
+          <div class="highlight">
+            <div class="tiny">Outcome 02</div>
+            <strong>Better prioritization</strong>
+            <p>Impact scoring helps focus work on issues with larger downstream consequences, not just the loudest or most frequent problems.</p>
+          </div>
+          <div class="highlight">
+            <div class="tiny">Outcome 03</div>
+            <strong>More trusted data</strong>
+            <p>Consistent monitoring, scoring, and governance improve confidence in KPIs, financial reports, and operational decisions.</p>
+          </div>
+        </div>
+
+        <div class="quote" style="margin-top: 20px;">
+          DART is designed to convert data quality from a reporting problem into a governed operational capability with visible accountability.
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="topbar">
+          <div class="brand"><span class="brand-mark">D</span> DART</div>
+          <div class="slide-tag">Efficiency & ROI</div>
+        </div>
+
+        <h2 class="section-title">The product reduces effort across governance, remediation, and escalation.</h2>
+
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Workstream</th>
+              <th>Before DART</th>
+              <th>With DART</th>
+              <th>Efficiency gain</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Reconciliation review</td>
+              <td>Manual workbook checks and spreadsheet comparisons</td>
+              <td>Automated comparisons, scoring, drill-downs</td>
+              <td>High reduction in repetitive review effort</td>
+            </tr>
+            <tr>
+              <td>Issue triage</td>
+              <td>Ad hoc status follow-ups and fragmented notes</td>
+              <td>Structured issue queue, risk tiers, owners, and actions</td>
+              <td>Quicker escalation and clearer accountability</td>
+            </tr>
+            <tr>
+              <td>Reporting confidence</td>
+              <td>Delayed validation and inconsistent context</td>
+              <td>Persistent dashboards and quality narratives</td>
+              <td>Better decision quality and fewer surprises</td>
+            </tr>
+            <tr>
+              <td>Workflow automation</td>
+              <td>Manual email and tracking processes</td>
+              <td>Automations, baselines, alerts, and workbook watch</td>
+              <td>Lower operational overhead and faster detection</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="slide">
+        <div class="topbar">
+          <div class="brand"><span class="brand-mark">D</span> DART</div>
+          <div class="slide-tag">Why this matters</div>
+        </div>
+
+        <h2 class="section-title">The value is not just dashboards — it is operational control.</h2>
+
+        <div class="content-grid">
+          <div>
+            <div class="card">
+              <h3>For data teams</h3>
+              <p>Reduce manual validation effort, standardize quality checks, and quickly trace the source of mismatches.</p>
+            </div>
+            <div class="card" style="margin-top: 16px;">
+              <h3>For business owners</h3>
+              <p>Know which issues materially affect reporting, financial integrity, claims performance, or compliance outcomes.</p>
+            </div>
+          </div>
+
+          <div>
+            <div class="card">
+              <h3>For leadership</h3>
+              <p>Move from fragmented status reporting to a reliable quality narrative backed by evidence, trends, and remediation progress.</p>
+            </div>
+            <div class="card" style="margin-top: 16px;">
+              <h3>For governance</h3>
+              <p>Turn issue management into a controlled process with templates, ownership, decisions, and measurable accountability.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="topbar">
+          <div class="brand"><span class="brand-mark">D</span> DART</div>
+          <div class="slide-tag">Architecture</div>
+        </div>
+
+        <h2 class="section-title">Built as a single, practical application layer.</h2>
+
+        <div class="three-col">
+          <div class="highlight">
+            <div class="tiny">Backend</div>
+            <strong>FastAPI</strong>
+            <p>Application logic and APIs are implemented in a compact Python service layer with data processing and route orchestration.</p>
+          </div>
+          <div class="highlight">
+            <div class="tiny">Frontend</div>
+            <strong>Embedded UI</strong>
+            <p>HTML, CSS, and JavaScript are embedded directly into the app, allowing the experience to be self-contained and easy to run.</p>
+          </div>
+          <div class="highlight">
+            <div class="tiny">Data layer</div>
+            <strong>Workbook + SQLite</strong>
+            <p>The prototype combines workbook-based reconciliation, SQLite tracking, and file-based BYO dataset support for operational demos.</p>
+          </div>
+        </div>
+
+        <div class="quote" style="margin-top: 20px;">
+          This repository’s product core is centered in <strong>[app6.py](app6.py)</strong>, where the app, logic, and embedded UI are all assembled into one working prototype.
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="topbar">
+          <div class="brand"><span class="brand-mark">D</span> DART</div>
+          <div class="slide-tag">Closing message</div>
+        </div>
+
+        <h2 class="section-title">DART is a data quality operating model, not just a reporting page.</h2>
+        <p class="subcopy">
+          It is a product built for organizations that need to reconcile messy data, understand impact, assign accountability,
+          and drive cleanup activities in a disciplined, measurable way. It packages analytics, workflow management, AI guidance,
+          and governance into one platform to make data trust operational.
+        </p>
+
+        <div class="pill-row">
+          <div class="pill">Actionable</div>
+          <div class="pill">Evidence-based</div>
+          <div class="pill">Operational</div>
+          <div class="pill">Scalable</div>
+          <div class="pill">Governed</div>
+        </div>
+      </section>
+    </div>
+
+    <div class="footer-controls">
+      <button class="control-btn" id="prevBtn">← Prev</button>
+      <button class="control-btn" id="nextBtn">Next →</button>
+    </div>
+
+    <script>
+      const slides = [...document.querySelectorAll('.slide')];
+      let current = 0;
+
+      function showSlide(index) {
+        current = Math.max(0, Math.min(index, slides.length - 1));
+        slides.forEach((slide, i) => {
+          slide.style.display = i === current ? 'block' : 'none';
+        });
+      }
+
+      document.getElementById('nextBtn').addEventListener('click', () => showSlide(current + 1));
+      document.getElementById('prevBtn').addEventListener('click', () => showSlide(current - 1));
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowRight' || event.key === 'PageDown' || event.key === ' ') showSlide(current + 1);
+        if (event.key === 'ArrowLeft' || event.key === 'PageUp') showSlide(current - 1);
+      });
+
+      showSlide(0);
+    </script>
+  </body>
+</html>

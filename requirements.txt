@@ -11,3 +11,5 @@ openpyxl
 apscheduler
 markdown
 openai
+requests
+boto3

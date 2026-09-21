@@ -1,0 +1,51 @@
+[
+  {
+    "id": "byo_fbcb0d61759e",
+    "dataset_name": "Sample_Claims_Intake.xlsx",
+    "name": "Sample_Claims_Intake data-change alert",
+    "recipient_email": "nick.holmes@jos-group.com",
+    "enabled": true,
+    "trigger_mode": "All changes including deletions",
+    "identity_columns": [
+      "JoinID"
+    ],
+    "monitor_columns": [
+      "JoinID",
+      "ClaimReceivedDate",
+      "MemberID",
+      "ProviderNPI",
+      "ServiceCategory",
+      "BilledAmount",
+      "DiagnosisCode",
+      "ClaimStatus",
+      "State",
+      "SourceSystem"
+    ],
+    "condition_mode": "Any change",
+    "condition_logic": "ANY condition",
+    "conditions": [],
+    "display_columns": [
+      "JoinID",
+      "ClaimReceivedDate",
+      "MemberID",
+      "ProviderNPI",
+      "ServiceCategory",
+      "BilledAmount",
+      "DiagnosisCode",
+      "ClaimStatus"
+    ],
+    "subject_prefix": "[DART DIY Alert]",
+    "greeting": "Hello,",
+    "email_intro": "DART detected a qualifying change in the Build Your Own dataset Sample_Claims_Intake.xlsx.",
+    "include_csv": true,
+    "workspace": "byo",
+    "agent_label": "DART Build Your Own Alert",
+    "recommended_next_step": "Review the changed fields in the selected Build Your Own dataset and confirm whether the update is expected.",
+    "updated_at": "2026-09-08T16:02:00+00:00",
+    "created_at": "2026-09-08T16:02:00+00:00",
+    "last_run_at": "2026-09-14T13:42:37+00:00",
+    "last_status": "Checked; no matching changes",
+    "last_match_count": 0,
+    "last_change_count": 0
+  }
+]
