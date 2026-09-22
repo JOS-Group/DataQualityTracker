@@ -637,7 +637,17 @@ def standardize(df: pd.DataFrame) -> pd.DataFrame:
     df["Comparable"] = df["Classification"].astype(str).str.lower().str.strip().isin(["match", "different", "mismatch"])
     disp = df["Disposition"].astype(str).str.lower()
     cls = df["Classification"].astype(str).str.lower()
-    df["NeedsChange"] = disp.str.contains("action|change|review|fix|remediate", na=False) | cls.isin(["missing", "different", "mismatch"])
+    # A record explicitly marked as requiring no action is not actionable,
+    # even if its classification would otherwise identify a mismatch.
+    no_action_needed = disp.str.contains(
+        r"\bno\s+action\s+(is\s+)?needed\b|\bno\s+action\s+required\b",
+        na=False,
+        regex=True,
+    )
+    df["NeedsChange"] = (
+        disp.str.contains("action|change|review|fix|remediate", na=False)
+        | cls.isin(["missing", "different", "mismatch"])
+    ) & ~no_action_needed
     df["TotalClaims"] = df["MatchedClaims"].fillna(0) + df["NotMatchedClaims"].fillna(0)
     df["ImpactScore"] = ((1 - df["MatchRate"].fillna(0)) * np.log1p(df["TotalClaims"].fillna(0))).round(2)
     df["RiskTier"] = np.select(
@@ -4181,7 +4191,7 @@ function decorateMetricHelp(root=document){
 async function openMetricDrill(kind,title){try{streamModalState=null;metricModalTitle.textContent=title;metricModalSub.textContent='Loading rows behind this metric…';metricModalBody.innerHTML='<div class="empty">Loading data…</div>';metricModal.style.display='flex';const result=await postJson('/api/drilldown/'+encodeURIComponent(kind),state.filters);metricModalSub.textContent=`${intFmt(result.total)} row${Number(result.total)===1?'':'s'} in the current filtered scope${result.truncated?' · showing the first '+intFmt(result.rows.length):''}.`;metricModalBody.innerHTML=table(result.rows,true,title);}catch(err){metricModalSub.textContent='Could not load metric details.';metricModalBody.innerHTML=`<div class="empty">${esc(err.message||err)}</div>`;}}
 function openLocalDrill(title,subtitle,rows){streamModalState=null;metricModalTitle.textContent=title;metricModalSub.textContent=subtitle||`${intFmt((rows||[]).length)} record${(rows||[]).length===1?'':'s'}.`;metricModalBody.innerHTML=simpleTable(rows||[],title);metricModal.style.display='flex';}
 function metricCard(label,value,sub,kind,extraClass=''){const action=()=>openMetricDrill(kind,label);return `<div class="panel metric metricClickable ${extraClass}" role="button" tabindex="0" onclick="openMetricDrill('${kind}','${esc(label)}')" onkeydown="keyActivate(event,()=>openMetricDrill('${kind}','${esc(label)}'))"><div class="label">${esc(label)}</div><div class="value" title="${esc(value)}">${value}</div><div class="sub">${esc(sub)}</div></div>`;}
-function metrics(s){return `<div class="grid grid6">${metricCard('Health score',s.health_score,'Event-weighted quality','health','health')}${metricCard('Risk score',s.risk_score,'Avg impact score','risk-score')}${metricCard('Critical items',s.critical,'Highest risk tier','critical')}${metricCard('Open issues',s.actions,'Needs review/change','open-issues')}${metricCard('Unmatched volume',s.unmatched,'Current scope','unmatched','unmatchedMetric')}${metricCard('Affected reports',s.affected_reports,'Mapped or estimated','affected-reports')}</div>`;}
+function metrics(s){return `<div class="grid grid4">${metricCard('Health score',s.health_score,'Event-weighted quality','health','health')}${metricCard('Critical items',s.critical,'Highest risk tier','critical')}${metricCard('Actionable items',s.actions,'Require review, change, or remediation','open-issues')}${metricCard('Unmatched volume',s.unmatched,'Current scope','unmatched','unmatchedMetric')}</div>`;}
 function miniDeck(s){return `<div class="miniDeck"><div class="miniCard metricClickable" role="button" tabindex="0" onclick="openMetricDrill('weighted-quality','Weighted quality signal')" onkeydown="keyActivate(event,()=>openMetricDrill('weighted-quality','Weighted quality signal'))"><b>${s.weighted_rate}</b><span>Weighted quality signal</span></div><div class="miniCard metricClickable" role="button" tabindex="0" onclick="openMetricDrill('elevated-critical','Elevated or critical risk fields')" onkeydown="keyActivate(event,()=>openMetricDrill('elevated-critical','Elevated or critical risk fields'))"><b>${s.risk_count}</b><span>Elevated or critical risk fields</span></div><div class="miniCard metricClickable" role="button" tabindex="0" onclick="openMetricDrill('affected-reports','Reports that may need review')" onkeydown="keyActivate(event,()=>openMetricDrill('affected-reports','Reports that may need review'))"><b>${s.affected_reports}</b><span>Reports that may need review</span></div></div>`;}
 let streamModalState=null;
 async function openStreamDetails(stream){try{metricModalTitle.textContent=`${stream} stream details`;metricModalSub.textContent='Loading stream metrics and underlying data…';metricModalBody.innerHTML='<div class="empty">Loading stream data…</div>';metricModal.style.display='flex';const result=await postJson('/api/stream-detail/'+encodeURIComponent(stream),state.filters);streamModalState={data:result,tab:'overview'};metricModalSub.textContent=`${intFmt(result.total)} field${Number(result.total)===1?'':'s'} in ${stream} under the current filters${result.truncated?' · large tables are truncated':''}.`;renderStreamModal();}catch(err){metricModalSub.textContent='Could not load stream details.';metricModalBody.innerHTML=`<div class="empty">${esc(err.message||err)}</div>`;}}
