@@ -361,7 +361,7 @@ def public_user(username: Optional[str]) -> Optional[Dict[str, Any]]:
 PERSONA_WORKSPACE_PAGES: Dict[str, List[str]] = {
     "medicare": [
         "home", "briefing", "metrics", "briefbuilder", "riskcenter", "insights",
-        "scorecards", "actioncenter", "impactexplorer", "catalog", "governance",
+        "scorecards", "actioncenter", "catalog", "governance",
         "explorer", "quality", "compare", "raweditor", "emailagent", "data",
         "copilot", "profile", "settings",
     ],
@@ -392,7 +392,7 @@ PERSONA_ROLE_RECOMMENDATIONS: Dict[str, List[Tuple[str, str, str]]] = {
     "Executive / Leadership": [
         ("briefing", "My Briefing", "Review the decision-ready quality and risk picture."),
         ("briefbuilder", "Executive Brief", "Turn the current scope into a leadership-ready readout."),
-        ("impactexplorer", "Impact Explorer", "See which reports, KPIs, and decisions are exposed."),
+        ("governance", "Governance Center", "Review controls, ownership, and decision readiness."),
     ],
     "Data / Analytics": [
         ("quality", "Quality Analytics", "Inspect distributions, averages, and weighted performance."),
@@ -401,7 +401,7 @@ PERSONA_ROLE_RECOMMENDATIONS: Dict[str, List[Tuple[str, str, str]]] = {
     ],
     "Program / Policy": [
         ("briefing", "My Briefing", "Translate technical findings into program priorities."),
-        ("impactexplorer", "Impact Explorer", "Connect findings to reports, KPIs, and decisions."),
+        ("governance", "Governance Center", "Review controls, ownership, and decision readiness."),
         ("scorecards", "Scorecards", "Compare program streams at an executive level."),
     ],
     "Operations": [
@@ -1338,11 +1338,11 @@ def _snapshot_value(value: Any) -> str:
         return NULL_TOKEN
     if isinstance(value, (pd.Timestamp, datetime)):
         return value.isoformat()
-    if isinstance(value, float):
-        if np.isnan(value):
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        if pd.isna(value):
             return NULL_TOKEN
-        return format(value, ".15g")
-    return str(value).strip()
+        return format(float(value), ".15g")
+    return re.sub(r"\s+", " ", str(value).strip())
 
 
 def _valid_columns(columns: List[str], df: pd.DataFrame) -> List[str]:
@@ -3898,13 +3898,13 @@ function setDartTheme(theme,persist=true){
 function toggleTheme(){setDartTheme(dartTheme()==='dark'?'light':'dark');}
 
 const navSets={
-  medicare:[['Overview',[['home','Command Center'],['briefing','Briefing'],['metrics','Metric Explanations'],['briefbuilder','Executive Brief']]],['Intelligence',[['riskcenter','Risk Center'],['insights','AI Insights'],['scorecards','Scorecards']]],['Operations',[['actioncenter','Remediation Center'],['impactexplorer','Impact Explorer'],['catalog','Mapping Catalog'],['governance','Governance Center']]],['Data',[['explorer','System Explorer'],['quality','Quality Analytics'],['compare','Stream Comparison'],['raweditor','Raw Data Editor'],['emailagent','Email Agent'],['data','Data Management']]],['More',[['copilot','DART Copilot'],['profile','Profile'],['settings','Settings']]]],
+    medicare:[['Overview',[['home','Command Center'],['briefing','Briefing'],['metrics','Metric Explanations'],['briefbuilder','Executive Brief']]],['Intelligence',[['riskcenter','Risk Center'],['insights','AI Insights'],['scorecards','Scorecards']]],['Operations',[['actioncenter','Remediation Center'],['catalog','Mapping Catalog'],['governance','Governance Center']]],['Data',[['explorer','System Explorer'],['quality','Quality Analytics'],['compare','Stream Comparison'],['raweditor','Raw Data Editor'],['emailagent','Email Agent'],['data','Data Management']]],['More',[['copilot','DART Copilot'],['profile','Profile'],['settings','Settings']]]],
   medicaid:[['Overview',[['medicaid-home','Dashboard'],['medicaid-heatmap','US Heatmap'],['medicaid-exec','Executive Brief']]],['States',[['medicaid-states','State Explorer'],['medicaid-compare','Compare States'],['medicaid-analytics','Analytics']]],['Intelligence',[['medicaid-ai','AI Insights'],['medicaid-chat','CMS Q&A']]],['Claims',[['medicaid-claims','Claims Analysis'],['medicaid-optimize','Optimize Spending'],['medicaid-methodology','Methodology']]],['More',[['profile','Profile'],['settings','Settings']]]],
   byo:[['Workspace',[['byo-home','DIY Home'],['byo-library','Dataset Library'],['byo-lab','Upload Data'],['byo-raw','Raw Data Editor'],['byo-email','Email Alerts']]],['Analyze',[['byo-compare','Compare Lab'],['byo-quality','Schema & Quality'],['byo-preview','Data Explorer']]],['AI',[['byo-ai','AI Analyst']]],['Output',[['byo-export','Export Center']]],['More',[['profile','Profile'],['settings','Settings']]]],
 };
 const workspaceLabels={medicare:'Medicare',medicaid:'Medicaid',byo:'Build Your Own'};
 const workspaceHomes={medicare:'home',medicaid:'medicaid-home',byo:'byo-home'};
-const personaLandingLabels={auto:'Recommended for my role',home:'Command Center',briefing:'My Briefing',riskcenter:'Risk Center',actioncenter:'Remediation Center',quality:'Quality Analytics',catalog:'Mapping Catalog',insights:'AI Insights',briefbuilder:'Executive Brief',impactexplorer:'Impact Explorer','medicaid-home':'Medicaid Home','byo-home':'DIY Home','byo-compare':'Compare Lab','byo-quality':'Schema & Quality','byo-raw':'Raw Data Editor','byo-email':'Email Alerts','byo-ai':'AI Analyst'};
+const personaLandingLabels={auto:'Recommended for my role',home:'Command Center',briefing:'My Briefing',riskcenter:'Risk Center',actioncenter:'Remediation Center',quality:'Quality Analytics',catalog:'Mapping Catalog',insights:'AI Insights',briefbuilder:'Executive Brief','medicaid-home':'Medicaid Home','byo-home':'DIY Home','byo-compare':'Compare Lab','byo-quality':'Schema & Quality','byo-raw':'Raw Data Editor','byo-email':'Email Alerts','byo-ai':'AI Analyst'};
 function personaPriorityLimit(meta){return Number(meta?.persona_effects?.priority_limit||8);}
 function currentWorkspacePageIds(){return new Set(activeNavGroups().flatMap(g=>g[1].map(x=>x[0])));}
 function personaRecommendations(meta){const allowed=currentWorkspacePageIds();return (meta?.persona_effects?.recommended_pages||[]).filter(x=>allowed.has(x.id));}
@@ -3912,7 +3912,7 @@ function personaQuickActions(meta){const recs=personaRecommendations(meta).slice
 function personaLensPanel(meta){const p=meta?.persona||{};const e=meta?.persona_effects||{};const recs=personaRecommendations(meta);const focus=(e.focus||[]).map(x=>`<span class="personaTag">${esc(x)}</span>`).join('');return `<div class="panel personaLens"><div class="personaLensHead"><div><span class="workspaceBadge">Personalized workspace</span><h3>${esc(e.lens_title||'Your DART lens')}</h3><p class="muted">${esc(e.lens_summary||'DART is prioritizing the most relevant views for your role.')}</p></div><button class="btn ghost small" onclick="showPage('settings')">Edit persona</button></div><div class="personaTags"><span class="personaTag">${esc(p.role||'General')}</span><span class="personaTag">${esc(p.depth||'Balanced')} detail</span><span class="personaTag">Audience: ${esc(p.audience||'Myself')}</span>${focus}</div>${recs.length?`<div class="personaRecommendations">${recs.map(r=>`<button class="personaRec" onclick="showPage('${r.id}')"><b>${esc(r.label)}</b><span>${esc(r.reason)}</span></button>`).join('')}</div>`:''}</div>`;}
 function personaLandingOptions(selected='auto'){return Object.entries(personaLandingLabels).map(([id,label])=>`<option value="${id}" ${selected===id?'selected':''}>${esc(label)}</option>`).join('');}
 
-const filterPages=new Set(['home','briefing','explorer','quality','compare','catalog','impactexplorer','briefbuilder','riskcenter','insights','scorecards','actioncenter','governance']);
+const filterPages=new Set(['home','briefing','explorer','quality','compare','catalog','briefbuilder','riskcenter','insights','scorecards','actioncenter','governance']);
 const defaultChatHistories={medicare:{activeId:'general',sessions:[{id:'general',title:'DART Copilot',messages:[]}]},medicaid:{activeId:'medicaid',sessions:[{id:'medicaid',title:'CMS Q&A',messages:[]}]},byo:{activeId:'byo',sessions:[{id:'byo',title:'AI Analyst',messages:[]}]} };const persistedChatHistories=(()=>{try{const raw=sessionStorage.getItem('dart_chat_histories_v1');if(!raw)return null;const parsed=JSON.parse(raw);return parsed&&typeof parsed==='object'?parsed:null;}catch(_err){return null;}})();
 let state={workspace:sessionStorage.getItem('dart_workspace')||'medicare',page:'home',filters:{streams:null,classes:null,tiers:null,reasons:null,min_rate:0,min_impact:0,min_unmatched:0,actions_only:false,search:'',custom_filters:[]},meta:null,emailEditingId:null,rawSearch:'',rawOffset:0,rawLimit:75,emailAgent:null,rawData:null,byoLeft:sessionStorage.getItem('dart_byo_left')||'',byoRight:sessionStorage.getItem('dart_byo_right')||'',byoEditFile:sessionStorage.getItem('dart_byo_edit_file')||'',byoEmailFile:sessionStorage.getItem('dart_byo_email_file')||'',byoRawSearch:'',byoRawOffset:0,byoRawLimit:75,byoRawData:null,byoEmailEditingId:null,byoEmailAgent:null,byoCompare:null,byoChat:null,medicaidStateId:1,medicaidStateStatus:'',medicaidStateType:'',medicaidIssueType:'',medicaidMinTotal:3,medicaidHeatMetric:'quality_score',medicaidHeatStatus:'',medicaidHeatType:'',medicaidHeatSelectedId:0,medicaidHeatRows:[],medicaidStateReturnPage:'medicaid-states',medicaidIssueLabels:null,medicaidChat:[],chatHistories:{...defaultChatHistories,...(persistedChatHistories||{})},assistantBubbleOpen:false};
 let modalState={key:null,title:'',items:[],selected:[]};
@@ -5380,8 +5380,10 @@ async def save_byo_email_template(request: Request) -> Any:
         filename = str(payload.get("dataset_name", "")).strip()
         df = _read_byo_dataset(filename)
         template = _normalize_byo_email_template(payload, df)
+        is_new = not template["id"]
         saved = upsert_byo_email_automation(template)
-        return {"status": "ok", "template": saved}
+        baseline = establish_email_baseline(df, saved) if is_new else None
+        return {"status": "ok", "template": saved, "baseline": baseline}
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -5775,9 +5777,12 @@ def email_agent_meta() -> Dict[str, Any]:
 async def save_email_template(request: Request) -> Any:
     ensure_data()
     try:
-        template = _normalize_email_template(await request.json(), standardize(STATE["df"]))
+        df = _reload_state_from_workbook()
+        template = _normalize_email_template(await request.json(), df)
+        is_new = not template["id"]
         saved = upsert_email_automation(template)
-        return {"status": "ok", "template": saved}
+        baseline = establish_email_baseline(df, saved) if is_new else None
+        return {"status": "ok", "template": saved, "baseline": baseline}
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
