@@ -4244,47 +4244,93 @@ function workspaceChatMeta(key){
   return {label:'DART Copilot',subtitle:'Medicare workspace',route:'copilot'};
 }
 function getScopedHistory(key){
-  const store=state.chatHistories||{medicare:{activeId:'general',sessions:[{id:'general',title:'DART Copilot',messages:[]}]},medicaid:{activeId:'medicaid',sessions:[{id:'medicaid',title:'CMS Q&A',messages:[]}]},byo:{activeId:'byo',sessions:[{id:'byo',title:'AI Analyst',messages:[]}]} };
-  const bucket=store[key]||{activeId:'default',sessions:[{id:'default',title:workspaceChatMeta(key).label,messages:[]}]};
-  if(!bucket.sessions||!bucket.sessions.length){bucket.sessions=[{id:'default',title:workspaceChatMeta(key).label,messages:[]}];bucket.activeId='default';}
-  if(!bucket.sessions.find(s=>s.id===bucket.activeId)){bucket.activeId=bucket.sessions[0].id;}
-  store[key]=bucket;
+  state.chatHistories=state.chatHistories||{};
+  if(!state.chatHistories[key]){
+    const meta=workspaceChatMeta(key);
+    state.chatHistories[key]={
+      activeId:key+'-main',
+      sessions:[{id:key+'-main',title:meta.label,messages:[]}]
+    };
+  }
+  const bucket=state.chatHistories[key];
+  if(!bucket.sessions||!bucket.sessions.length){
+    const meta=workspaceChatMeta(key);
+    bucket.sessions=[{id:key+'-main',title:meta.label,messages:[]}];
+    bucket.activeId=key+'-main';
+  }
+  if(!bucket.sessions.find(s=>s.id===bucket.activeId)){
+    bucket.activeId=bucket.sessions[0].id;
+  }
   return bucket;
+}
+function getActiveSession(key){
+  const bucket=getScopedHistory(key);
+  let session=bucket.sessions.find(s=>s.id===bucket.activeId);
+  if(!session){
+    session=bucket.sessions[0];
+    bucket.activeId=session.id;
+  }
+  return session;
 }
 function persistChatHistoryState(){
   try{sessionStorage.setItem('dart_chat_histories_v1', JSON.stringify(state.chatHistories||{}));}catch(_err){}
 }
 function setScopedHistoryMessages(key,messages){
-  const bucket=getScopedHistory(key); const active=bucket.sessions.find(s=>s.id===bucket.activeId) || bucket.sessions[0];
+  const bucket=getScopedHistory(key);
+  const active=getActiveSession(key);
   active.messages = Array.isArray(messages) ? messages.map(m=>({role:m?.role||'assistant', content:String(m?.content??'')})) : [];
   if(key==='medicaid'){state.medicaidChat=active.messages.slice();}
   if(key==='byo'){state.byoChat=active.messages.slice();}
   if(key==='medicare'){state.meta=state.meta||{};state.meta.chat=active.messages.slice();}
-  bucket.sessions = bucket.sessions.map(s=>s.id===active.id?s: s);
   persistChatHistoryState();
 }
 function syncChatHistoryFromWorkspaceState(){
-  const medicareList=Array.isArray(state.meta?.chat)?state.meta.chat:[];
-  if(medicareList.length||!state.chatHistories?.medicare?.sessions?.[0]?.messages?.length){setScopedHistoryMessages('medicare', medicareList);}
-  if(Array.isArray(state.medicaidChat)){setScopedHistoryMessages('medicaid', state.medicaidChat);}
-  if(Array.isArray(state.byoChat)){setScopedHistoryMessages('byo', state.byoChat);} 
+  ['medicare','medicaid','byo'].forEach(key=>{
+    const bucket=getScopedHistory(key);
+    const active=getActiveSession(key);
+    if(key==='medicaid'&&Array.isArray(state.medicaidChat)&&state.medicaidChat.length&&!active.messages.length){
+      active.messages=state.medicaidChat.slice();
+    }else if(key==='byo'&&Array.isArray(state.byoChat)&&state.byoChat.length&&!active.messages.length){
+      active.messages=state.byoChat.slice();
+    }else if(key==='medicare'&&Array.isArray(state.meta?.chat)&&state.meta.chat.length&&!active.messages.length){
+      active.messages=state.meta.chat.slice();
+    }
+  });
+  persistChatHistoryState();
 }
 function assistantBubbleWorkspaceKey(){
   if(state.workspace==='medicaid')return 'medicaid';
   if(state.workspace==='byo')return 'byo';
   return 'medicare';
 }
+function scrollBubbleToBottom(){
+  const host=document.getElementById('assistantBubbleHost');
+  if(!host)return;
+  const msgBox=host.querySelector('.assistantBubbleMessages');
+  if(msgBox){
+    msgBox.scrollTop=msgBox.scrollHeight;
+  }
+}
 function toggleAssistantBubble(forceOpen){
   const host=document.getElementById('assistantBubbleHost');
   if(!host)return;
   const panel=host.querySelector('.assistantBubblePanel');
-  const shouldOpen=typeof forceOpen==='boolean'?forceOpen:!panel || panel.style.display==='none';
-  if(panel){panel.style.display=shouldOpen?'block':'none';}
+  const shouldOpen=typeof forceOpen==='boolean'?forceOpen:(!panel||panel.style.display==='none');
+  if(panel){panel.style.display=shouldOpen?'flex':'none';}
   state.assistantBubbleOpen=shouldOpen;
   const launcher=host.querySelector('.assistantBubbleLauncher');
-  if(shouldOpen&&launcher){launcher.classList.remove('throwDart');void launcher.offsetWidth;launcher.classList.add('throwDart');}
+  if(shouldOpen&&launcher){
+    launcher.classList.remove('throwDart');
+    void launcher.offsetWidth;
+    launcher.classList.add('throwDart');
+    setTimeout(()=>{
+      scrollBubbleToBottom();
+      const promptEl=document.getElementById('assistantBubblePrompt');
+      if(promptEl)promptEl.focus();
+    },60);
+  }
 }
-function ensureAssistantBubble(){
+function ensureAssistantBubble(forceOpen){
   let host=document.getElementById('assistantBubbleHost');
   if(!host){
     host=document.createElement('div');
@@ -4292,10 +4338,13 @@ function ensureAssistantBubble(){
     host.className='assistantBubbleHost';
     document.body.appendChild(host);
   }
+  if(typeof forceOpen==='boolean'){
+    state.assistantBubbleOpen=forceOpen;
+  }
   const key=assistantBubbleWorkspaceKey();
   const info=workspaceChatMeta(key);
   const bucket=getScopedHistory(key);
-  const active=bucket.sessions.find(s=>s.id===bucket.activeId) || bucket.sessions[0];
+  const active=getActiveSession(key);
   const messages=active?.messages||[];
   const list=messages.length ? messages.map(m=>`<div class="assistantBubbleMessage ${m.role==='user'?'user':'assistant'}"><span class="assistantBubbleMessageRole">${m.role==='user'?'You':'AI'}</span><div class="assistantBubbleMessageBody">${m.role==='assistant'?renderMarkdown(m.content):esc(m.content)}</div></div>`).join('') : '<div class="assistantBubbleEmpty">No messages in this conversation yet. Ask a question below to get started.</div>';
   const historyItems=bucket.sessions.map(s=>`<div class="historyItem ${s.id===bucket.activeId?'active':''}">
@@ -4325,18 +4374,17 @@ function ensureAssistantBubble(){
       ${datasetBar}
       <div class="assistantBubbleMessages">${list}</div>
       <div class="assistantBubbleComposer">
-        <textarea id="assistantBubblePrompt" placeholder="Ask the ${esc(info.label)} assistant…"></textarea>
-        <button type="button" onclick="sendWorkspaceBubblePrompt('${key}')">Send</button>
+        <textarea id="assistantBubblePrompt" placeholder="Ask the ${esc(info.label)} assistant…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendWorkspaceBubblePrompt('${key}');}"></textarea>
+        <button type="button" id="assistantBubbleSendBtn" onclick="sendWorkspaceBubblePrompt('${key}')">Send</button>
       </div>
     </div>
     <button class="assistantBubbleLauncher" type="button" onclick="toggleAssistantBubble()" aria-label="Open workspace AI assistant">
       <svg class="dartboardIcon" viewBox="0 0 48 48" width="34" height="34" aria-hidden="true"><circle cx="24" cy="24" r="22" fill="#fdf6e3" stroke="#1a1a1a" stroke-width="2"/><circle cx="24" cy="24" r="17.5" fill="#c0392b"/><circle cx="24" cy="24" r="12.5" fill="#fdf6e3"/><circle cx="24" cy="24" r="7.5" fill="#c0392b"/><circle cx="24" cy="24" r="3" fill="#1a1a1a"/></svg>
       <svg class="dartArrow" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><line x1="3" y1="3" x2="15" y2="15" stroke="#24324a" stroke-width="2.4" stroke-linecap="round"/><polygon points="21,21 12,21 21,12" fill="#e0473f"/><path d="M3 3 L7 3 M3 3 L3 7" stroke="#e0473f" stroke-width="2" stroke-linecap="round"/></svg>
     </button>`;
-  const panel=host.querySelector('.assistantBubblePanel');
-  if(panel && !state.assistantBubbleOpen && !panel.style.display){panel.style.display='block';}
-  const promptEl=document.getElementById('assistantBubblePrompt');
-  if(promptEl && promptEl.value){promptEl.focus();}
+  if(state.assistantBubbleOpen!==false){
+    setTimeout(scrollBubbleToBottom,20);
+  }
 }
 function toggleAssistantHistoryMenu(e){
   e.stopPropagation();
@@ -4350,8 +4398,15 @@ function closeAssistantHistoryMenu(){
 function selectAssistantChat(key,id){
   const bucket=getScopedHistory(key);
   bucket.activeId=id;
+  const session=getActiveSession(key);
+  if(key==='medicaid') state.medicaidChat=session.messages.slice();
+  if(key==='byo') state.byoChat=session.messages.slice();
+  if(key==='medicare'){ state.meta=state.meta||{}; state.meta.chat=session.messages.slice(); }
   persistChatHistoryState();
-  ensureAssistantBubble();
+  ensureAssistantBubble(true);
+  if((key==='medicare'&&state.page==='copilot')||(key==='medicaid'&&state.page==='medicaid-chat')||(key==='byo'&&state.page==='byo-ai')){
+    render();
+  }
 }
 function createAssistantChat(key){
   const bucket=getScopedHistory(key);
@@ -4359,8 +4414,14 @@ function createAssistantChat(key){
   const id=key+'-'+Date.now();
   bucket.sessions.push({id,title:`${info.label} ${bucket.sessions.length+1}`,messages:[]});
   bucket.activeId=id;
+  if(key==='medicaid') state.medicaidChat=[];
+  if(key==='byo') state.byoChat=[];
+  if(key==='medicare'){ state.meta=state.meta||{}; state.meta.chat=[]; }
   persistChatHistoryState();
-  ensureAssistantBubble();
+  ensureAssistantBubble(true);
+  if((key==='medicare'&&state.page==='copilot')||(key==='medicaid'&&state.page==='medicaid-chat')||(key==='byo'&&state.page==='byo-ai')){
+    render();
+  }
 }
 function renameAssistantChat(e,key,id){
   e.stopPropagation();
@@ -4382,37 +4443,76 @@ function deleteAssistantChat(e,key,id){
   if(!confirm('Delete this conversation?'))return;
   bucket.sessions=bucket.sessions.filter(s=>s.id!==id);
   if(bucket.activeId===id)bucket.activeId=bucket.sessions[0].id;
+  const active=getActiveSession(key);
+  if(key==='medicaid') state.medicaidChat=active.messages.slice();
+  if(key==='byo') state.byoChat=active.messages.slice();
+  if(key==='medicare'){ state.meta=state.meta||{}; state.meta.chat=active.messages.slice(); }
   persistChatHistoryState();
   ensureAssistantBubble();
+  if((key==='medicare'&&state.page==='copilot')||(key==='medicaid'&&state.page==='medicaid-chat')||(key==='byo'&&state.page==='byo-ai')){
+    render();
+  }
 }
 async function sendWorkspaceBubblePrompt(key){
   const input=document.getElementById('assistantBubblePrompt');
   const prompt=(input?.value||'').trim();
   if(!prompt)return;
   const bucket=getScopedHistory(key);
-  const active=bucket.sessions.find(s=>s.id===bucket.activeId) || bucket.sessions[0];
-  if(active)active.messages.push({role:'user',content:prompt});
+  const targetSession=getActiveSession(key);
+  const targetSessionId=targetSession.id;
+  
+  const defaultPrefixes=['DART Copilot','CMS Q&A','AI Analyst','Conversation'];
+  if(defaultPrefixes.some(p=>targetSession.title.startsWith(p))&&targetSession.messages.length===0){
+    targetSession.title=prompt.length>32?prompt.slice(0,30)+'…':prompt;
+  }
+  
+  targetSession.messages.push({role:'user',content:prompt});
+  if(key==='medicaid') state.medicaidChat=targetSession.messages.slice();
+  if(key==='byo') state.byoChat=targetSession.messages.slice();
+  if(key==='medicare'){ state.meta=state.meta||{}; state.meta.chat=targetSession.messages.slice(); }
+  
+  state.assistantBubbleOpen=true;
   persistChatHistoryState();
-  ensureAssistantBubble();
+  ensureAssistantBubble(true);
+  
+  const sendBtn=document.getElementById('assistantBubbleSendBtn');
+  if(sendBtn){sendBtn.disabled=true;sendBtn.textContent='…';}
+  
+  let answer='';
   try{
     if(key==='medicaid'){
-      await askMedicaidChat(prompt);
+      const res=await postJson('/api/medicaid/ai-chat',{question:prompt});
+      answer=res.answer||'';
+      if(res.details&&res.details.length){
+        answer+='\n\n'+res.details.map(x=>'- '+x).join('\n');
+      }
     }else if(key==='byo'){
-      await askByoAI(prompt);
+      const res=await postJson('/api/byo/chat',{prompt,left:state.byoLeft||'',right:state.byoRight||''});
+      answer=res.answer||'I could not generate an answer from the selected dataset context.';
     }else{
-      await postJson('/api/copilot',{prompt,filters:state.filters});
-      const metaChat=Array.isArray(state.meta?.chat)?state.meta.chat:[];
-      setScopedHistoryMessages('medicare', metaChat.length ? metaChat : [...((active?.messages||[]).slice(-2))]);
+      const res=await postJson('/api/copilot',{prompt,filters:state.filters});
+      answer=res.answer||'I could not generate an answer from the current context.';
     }
   }catch(err){
-    const messageText = err?.message || String(err);
-    if(active)active.messages.push({role:'assistant', content: `I could not reach the AI service. ${messageText}`});
-    persistChatHistoryState();
+    answer=`I could not reach the AI service: ${err?.message||String(err)}`;
   }
-  if(key==='medicaid' && Array.isArray(state.medicaidChat)){setScopedHistoryMessages('medicaid', state.medicaidChat);}
-  if(key==='byo' && Array.isArray(state.byoChat)){setScopedHistoryMessages('byo', state.byoChat);}
-  if(key==='medicare'){const latestMeta=Array.isArray(state.meta?.chat)?state.meta.chat:[];setScopedHistoryMessages('medicare', latestMeta.length?latestMeta:((active?.messages||[]).filter(Boolean)));}
-  ensureAssistantBubble();
+  
+  const exactSession=bucket.sessions.find(s=>s.id===targetSessionId)||targetSession;
+  exactSession.messages.push({role:'assistant',content:answer});
+  
+  if(bucket.activeId===targetSessionId){
+    if(key==='medicaid') state.medicaidChat=exactSession.messages.slice();
+    if(key==='byo') state.byoChat=exactSession.messages.slice();
+    if(key==='medicare'){ state.meta=state.meta||{}; state.meta.chat=exactSession.messages.slice(); }
+  }
+  
+  persistChatHistoryState();
+  ensureAssistantBubble(true);
+  scrollBubbleToBottom();
+  
+  if((key==='medicare'&&state.page==='copilot')||(key==='medicaid'&&state.page==='medicaid-chat')||(key==='byo'&&state.page==='byo-ai')){
+    render();
+  }
 }
 function medMoney(v){const n=Number(v||0),a=Math.abs(n),sign=n<0?'-':'';if(a>=1e9)return `${sign}$${(a/1e9).toFixed(2)}B`;if(a>=1e6)return `${sign}$${(a/1e6).toFixed(2)}M`;if(a>=1e3)return `${sign}$${(a/1e3).toFixed(1)}K`;return `${sign}$${a.toLocaleString(undefined,{maximumFractionDigits:0})}`;}
 function medIssueLabel(id){return state.medicaidIssueLabels?.[id]||String(id||'').replaceAll('_',' ').replace(/\b\w/g,m=>m.toUpperCase());}
@@ -4435,7 +4535,35 @@ function medComparePage(d){state.medicaidIssueLabels=d.issue_labels||state.medic
 function medAnalyticsPage(a){state.medicaidIssueLabels=a.issue_labels||{};const s=a.stats||{};const total=Number(s.total_issues||0);const typeRows=(a.issue_type_stats||[]).map(x=>({'Issue type':medIssueLabel(x.issue_type),'Total':x.total,'Resolved':x.done,'Open':x.open,'Cancelled':x.cancelled,'Resolution %':`${x.total?x.done/x.total*100:0 .toFixed?.(1)}%`}));const risk=[];Object.entries(a.worst_states||{}).forEach(([it,rows])=>(rows||[]).forEach(r=>risk.push({'Issue type':medIssueLabel(it),'State':r.state_name,'Current metric':r.metric,'Open issues':r.open_issues,'Modeled money at risk':medMoney(r.money_at_risk)})));const chartRows=a.issue_type_stats||[];const script=`<scr${''}ipt>(function(){const rows=${JSON.stringify(chartRows)};if(!window.Plotly)return;Plotly.newPlot('medAnalyticsChart',[{type:'bar',name:'Resolved',x:rows.map(r=>r.issue_type.replaceAll('_',' ')),y:rows.map(r=>r.done)},{type:'bar',name:'Open',x:rows.map(r=>r.issue_type.replaceAll('_',' ')),y:rows.map(r=>r.open)},{type:'bar',name:'Cancelled',x:rows.map(r=>r.issue_type.replaceAll('_',' ')),y:rows.map(r=>r.cancelled)}],{barmode:'stack',margin:{l:45,r:20,t:20,b:125},paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{color:'#fff7d1'},xaxis:{tickangle:-35},legend:{orientation:'h',y:1.15}},{responsive:true,displayModeBar:false});})();</scr${''}ipt>`;return `${medTopbar('Analytics','System-wide issue analytics, tags, issue-type performance, and modeled financial exposure across Medicaid state programs.')} ${medKpis([['Total issues',intFmt(total),'All issue records'],['Resolved',intFmt(s.done),`${total?Number(s.done||0)/total*100:0 .toFixed?.(1)}% of total`],['Open',intFmt(s.open),'Current backlog','warn'],['Cancelled',intFmt(s.cancelled),'Closed without resolution'],['Issue types',intFmt(a.issue_type_stats?.length),'CMS quality categories']])}<br><div class="panel"><h3>Status mix by CMS issue type</h3><div id="medAnalyticsChart" class="medChart"></div>${script}</div><br><div class="grid grid2"><div class="panel"><h3>Issue-type performance</h3>${genericTable(typeRows,'medicaid_issue_type_analytics')}</div><div class="panel"><h3>Tag usage</h3>${genericTable((a.tag_stats||[]).map(x=>({'Tag':x.name,'Issues':x.count})),'medicaid_tag_usage')}</div></div><br><div class="panel"><h3>Highest modeled risk opportunities</h3><p class="muted">Uses the same deterministic cost multipliers represented by the standalone analytics logic. It is a prioritization proxy, not an audited recovery estimate.</p>${genericTable(risk.slice(0,25),'medicaid_modeled_risk')}</div>`;}
 function medInsightsPage(d){state.medicaidIssueLabels=state.medicaidIssueLabels||{};const m=d.meta||{};const cards=(d.insights||[]).map(x=>`<div class="panel medInsight ${esc(x.type)}"><span class="workspaceBadge">${esc(x.type.replaceAll('_',' '))}</span><h3>${esc(x.title)}</h3><p>${esc(x.description)}</p><div class="medRecommendation"><b>Recommended action</b><span>${esc(x.recommendation)}</span></div></div>`).join('');const rows=(d.data||[]).sort((a,b)=>b.composite_score-a.composite_score).slice(0,15).map((r,i)=>({'Rank':i+1,'State':r.state,'Quality score':r.composite_score,'Success %':`${r.success_rate}%`,'Backlog %':`${r.backlog_rate}%`,'Confidence %':`${r.confidence}%`,'Issues':r.total}));return `${medTopbar('AI Insights','Evidence-driven recommendations generated from the same deterministic state comparison model used by the standalone Medicaid app.',`<button class="btn secondary" onclick="showPage('medicaid-chat')">Open CMS Q&A</button>`)}<div class="panel"><div class="filterGrid" style="grid-template-columns:1fr 180px"><div class="field"><label>Issue type</label><select onchange="state.medicaidIssueType=this.value;render()">${medIssueOptions(state.medicaidIssueType||'',true)}</select></div><div class="field"><label>Minimum issues per state</label><input type="number" min="0" value="${Number(state.medicaidMinTotal||3)}" onchange="state.medicaidMinTotal=Number(this.value||3);render()"></div></div></div><br>${medKpis([['States analyzed',intFmt(m.states_analyzed),'Meet current sample threshold'],['States with data',intFmt(m.states_with_data),'Across current filter'],['Avg success',`${Number(m.avg_success_rate||0).toFixed(1)}%`,'Resolved share'],['Avg confidence',`${Number(m.avg_confidence||0).toFixed(1)}%`,'Sample-size confidence'],['Minimum sample',intFmt(m.min_total),'Issues per state']])}<br><div class="grid grid2">${cards}</div><br><div class="panel"><h3>Evidence table</h3>${genericTable(rows,'medicaid_ai_evidence')}</div>`;}
 function medChatPage(){const history=state.medicaidChat||[];return `${medTopbar('CMS Quality Q&A','Ask natural-language questions about state quality, duplicate claims, issue types, backlog, rankings, quarterly metrics, or modeled money at risk.')}<div class="grid grid2 medChatGrid"><div class="panel"><h3>Ask the Medicaid analyst</h3><div class="chat medChatHistory" id="medChatHistory">${history.length?history.map(m=>`<div class="bubble ${m.role==='user'?'user':'assistant'}">${m.role==='assistant'?renderMarkdown(m.content):esc(m.content)}</div>`).join(''):'<div class="empty">Ask a question to start the CMS quality conversation.</div>'}</div><br><div class="filterGrid" style="grid-template-columns:1fr auto"><input id="medChatPrompt" placeholder="Which states have the highest duplicate claim rates?" onkeydown="if(event.key==='Enter')askMedicaidChat()"><button class="btn" onclick="askMedicaidChat()">Ask</button></div></div><div class="panel"><h3>Suggested questions</h3><div class="medPromptList"><button onclick="askMedicaidChat('rank the states')">Rank the states</button><button onclick="askMedicaidChat('worst states for invalid diagnosis code')">Worst states for diagnosis-code issues</button><button onclick="askMedicaidChat('open issues in Texas')">Open issues in Texas</button><button onclick="askMedicaidChat('duplicate claim rate by state')">Duplicate claim rates</button><button onclick="askMedicaidChat('largest money at risk')">Largest modeled money at risk</button></div></div></div>`;}
-async function askMedicaidChat(prefill=''){const input=document.getElementById('medChatPrompt');const q=(prefill||input?.value||'').trim();if(!q)return;state.medicaidChat=state.medicaidChat||[];state.medicaidChat.push({role:'user',content:q});const result=await postJson('/api/medicaid/ai-chat',{question:q});let content=result.answer||'';if(result.details?.length)content+='\n\n'+result.details.map(x=>'- '+x).join('\n');state.medicaidChat.push({role:'assistant',content});await render();setTimeout(()=>document.getElementById('medChatHistory')?.scrollTo(0,999999),50);}
+async function askMedicaidChat(prefill=''){
+  const input=document.getElementById('medChatPrompt');
+  const q=(prefill||input?.value||'').trim();
+  if(!q)return;
+  if(input)input.value='';
+  const bucket=getScopedHistory('medicaid');
+  const session=getActiveSession('medicaid');
+  if(session.messages.length===0){
+    session.title=q.length>32?q.slice(0,30)+'…':q;
+  }
+  session.messages.push({role:'user',content:q});
+  state.medicaidChat=session.messages.slice();
+  persistChatHistoryState();
+  try{
+    const result=await postJson('/api/medicaid/ai-chat',{question:q});
+    let content=result.answer||'';
+    if(result.details?.length)content+='\n\n'+result.details.map(x=>'- '+x).join('\n');
+    session.messages.push({role:'assistant',content});
+  }catch(err){
+    session.messages.push({role:'assistant',content:`Could not reach CMS Q&A service: ${err?.message||err}`});
+  }
+  state.medicaidChat=session.messages.slice();
+  persistChatHistoryState();
+  await render();
+  setTimeout(()=>{
+    document.getElementById('medChatHistory')?.scrollTo(0,999999);
+    scrollBubbleToBottom();
+  },50);
+}
 function medExecPage(b){const k=b.kpis||{};const actions=b.actions_30_60_90||{};const top=(b.top_states||[]).map((r,i)=>({'Rank':i+1,'State':r.state,'Quality score':r.composite_score,'Success %':`${r.success_rate}%`,'Backlog %':`${r.backlog_rate}%`,'Confidence %':`${r.confidence}%`}));const watch=(b.watchlist||[]).map((r,i)=>({'Priority':i+1,'State':r.state,'Quality score':r.composite_score,'Backlog %':`${r.backlog_rate}%`,'Open':r.open,'Issues':r.total}));const actionCol=(title,items)=>`<div class="panel medActionCol"><span class="workspaceBadge">${esc(title)}</span>${(items||[]).map((x,i)=>`<div class="medActionItem"><b>${i+1}</b><span>${esc(x)}</span></div>`).join('')}</div>`;return `${medTopbar('Executive Brief','Leadership-ready Medicaid quality briefing with KPI coverage, top performers, watchlist states, and a 30/60/90-day action plan.')}<div class="panel"><div class="filterGrid" style="grid-template-columns:1fr 180px"><div class="field"><label>Issue type</label><select onchange="state.medicaidIssueType=this.value;render()">${medIssueOptions(state.medicaidIssueType||'',true)}</select></div><div class="field"><label>Minimum sample</label><input type="number" min="0" value="${Number(state.medicaidMinTotal||3)}" onchange="state.medicaidMinTotal=Number(this.value||3);render()"></div></div></div><br>${medKpis([['States analyzed',intFmt(k.states_analyzed),'Current executive scope'],['Avg success',`${Number(k.avg_success||0).toFixed(1)}%`,'Resolved issue rate'],['Avg backlog',`${Number(k.avg_backlog||0).toFixed(1)}%`,'Open issue share'],['Avg quality',Number(k.avg_quality||0).toFixed(1),'Composite score'],['Coverage',`${Number(k.coverage||0).toFixed(1)}%`,'States meeting threshold']])}<br><div class="panel medBriefSummary"><span class="workspaceBadge">Executive snapshot</span><h2>${esc(b.summary||'')}</h2></div><br><div class="grid grid2"><div class="panel"><h3>Top performers</h3>${genericTable(top,'medicaid_executive_top_states')}</div><div class="panel"><h3>Watchlist</h3>${genericTable(watch,'medicaid_executive_watchlist')}</div></div><br><div class="grid grid3">${actionCol('Next 30 days',actions['30_days'])}${actionCol('Next 60 days',actions['60_days'])}${actionCol('Next 90 days',actions['90_days'])}</div>`;}
 function medHeatSideEmpty(){return `<div class="medHeatSideEmpty"><div><b>Select a state on the map</b><span>Click any state to keep the national heatmap visible while reviewing that state's quality metrics and current issues here.</span></div></div>`;}
 function medCloseHeatState(){state.medicaidHeatSelectedId=0;const el=document.getElementById('medHeatStatePanel');if(el)el.innerHTML=medHeatSideEmpty();}
@@ -4641,8 +4769,45 @@ function compareExplorer(c){return `<div class="byoSplitTables"><div class="pane
 function compareDeepDive(c){return `<div class="grid grid2"><div class="panel"><h3>Common columns</h3>${genericTable(c.common_columns,'DIY common columns')}</div><div class="panel"><h3>Columns unique to each dataset</h3><div class="byoSplitTables byoUniqueTables"><div class="byoCompactTable">${genericTable(c.only_left,'Columns only in Dataset A')}</div><div class="byoCompactTable">${genericTable(c.only_right,'Columns only in Dataset B')}</div></div></div></div><br><div class="panel"><h3>Numeric field comparison</h3><p class="muted">Side-by-side means, medians, ranges, and mean deltas for shared numeric columns.</p>${genericTable(c.numeric_comparison,'DIY numeric comparison')}</div>`;}
 function byoAiStatus(info){return `<span class="aiStatus ${info.ai_configured?'on':'off'}">● ${info.ai_configured?'AI connected · '+esc(info.ai_model):'Local analysis · Groq client unavailable'}</span>`;}
 async function getByoChat(){if(!byoPairReady())return {chat:[],ai_configured:false};try{return await api(`/api/byo/chat?left=${encodeURIComponent(state.byoLeft)}&right=${encodeURIComponent(state.byoRight)}`);}catch{return {chat:[],ai_configured:false};}}
-async function askByoAI(prefill=''){if(!byoPairReady()){toast('Select two datasets first');return;}const input=document.getElementById('byoAiPrompt');const value=(prefill||input?.value||'').trim();if(!value)return;const send=document.getElementById('byoAiSend');if(send){send.disabled=true;send.textContent='Analyzing…';}try{await postJson('/api/byo/chat',{prompt:value,left:state.byoLeft,right:state.byoRight});const fresh=await getByoChat();state.byoChat=fresh.chat||[];await render();}catch(err){toast('AI analysis failed: '+String(err.message||err).slice(0,180));if(send){send.disabled=false;send.textContent='Send';}}}
-async function resetByoAI(){await postJson('/api/byo/chat/reset',{});state.byoChat=null;toast('AI conversation cleared');await render();}
+async function askByoAI(prefill=''){
+  if(!byoPairReady()){toast('Select two datasets first');return;}
+  const input=document.getElementById('byoAiPrompt');
+  const value=(prefill||input?.value||'').trim();
+  if(!value)return;
+  if(input)input.value='';
+  const send=document.getElementById('byoAiSend');
+  if(send){send.disabled=true;send.textContent='Analyzing…';}
+  const bucket=getScopedHistory('byo');
+  const session=getActiveSession('byo');
+  if(session.messages.length===0){
+    session.title=value.length>32?value.slice(0,30)+'…':value;
+  }
+  session.messages.push({role:'user',content:value});
+  state.byoChat=session.messages.slice();
+  persistChatHistoryState();
+  try{
+    const res=await postJson('/api/byo/chat',{prompt:value,left:state.byoLeft||'',right:state.byoRight||''});
+    session.messages.push({role:'assistant',content:res.answer||'I could not generate an answer from the selected dataset context.'});
+  }catch(err){
+    session.messages.push({role:'assistant',content:`AI analysis failed: ${err?.message||err}`});
+  }
+  if(send){send.disabled=false;send.textContent='Send';}
+  state.byoChat=session.messages.slice();
+  persistChatHistoryState();
+  await render();
+  scrollBubbleToBottom();
+}
+async function resetByoAI(){
+  await postJson('/api/byo/chat/reset',{});
+  const bucket=getScopedHistory('byo');
+  const session=getActiveSession('byo');
+  session.messages=[];
+  state.byoChat=[];
+  persistChatHistoryState();
+  toast('AI conversation cleared');
+  await render();
+  ensureAssistantBubble();
+}
 function byoAiPage(info,chat,c){const messages=chat?.chat||[];return `<div class="hero"><span class="workspaceBadge">Two-dataset AI</span><h1>AI Analyst</h1><p>Ask questions across the two selected saved datasets. The analyst uses the same Groq/OpenAI-compatible configuration as DART Copilot and is grounded in computed profiles, distributions, comparison metrics, key candidates, and representative records from both files.</p><div class="heroActions">${byoAiStatus(info)}<button class="btn secondary" type="button" onclick="resetByoAI()">Clear conversation</button></div></div>${byoPairPicker(info)}<br>${byoPairReady()?`<div class="byoChatShell"><div class="panel byoChatPanel"><div class="byoChat">${messages.length?messages.map(chatMessageHtml).join(''):'<div class="empty">Ask your first question about the selected pair.</div>'}</div><div class="byoChatComposer"><input id="byoAiPrompt" placeholder="Compare the two datasets, find likely keys, explain quality differences…" onkeydown="if(event.key==='Enter')askByoAI()"><button class="btn" id="byoAiSend" type="button" onclick="askByoAI()">Send</button></div><div class="heroActions"><button class="btn secondary small" type="button" onclick="askByoAI('Give me an executive comparison of these two datasets')">Executive comparison</button><button class="btn secondary small" type="button" onclick="askByoAI('What are the biggest data quality differences?')">Quality differences</button><button class="btn secondary small" type="button" onclick="askByoAI('Which columns are the best candidates to join these datasets and why?')">Find join keys</button><button class="btn secondary small" type="button" onclick="askByoAI('What anomalies or mismatches should I investigate first?')">Investigation priorities</button></div></div><aside class="panel byoContextCard"><h3>Active context</h3>${datasetSideCard('Dataset A',c.left)}<br>${datasetSideCard('Dataset B',c.right)}<br><div class="callout"><b>${intFmt(c.summary.common_columns)} shared columns</b><br>${intFmt(c.summary.type_mismatches)} type mismatches · ${intFmt(c.summary.key_candidates)} key candidates</div><p class="muted" style="font-size:.8rem">The model is not retrained on your files. Each answer is grounded in the two selected datasets at request time.</p></aside></div>`:`<div class="byoEmptyPair"><h3>Select two datasets to start the AI analyst</h3><p class="muted">Upload at least two files, then choose Dataset A and Dataset B above.</p></div>`}`;}
 function byoSingleDatasetPicker(info,selected,onchange,label='Dataset'){return `<div class="panel"><div class="field"><label>${esc(label)}</label><select onchange="${onchange}(this.value)">${byoDatasetOptions(info,selected)}</select></div></div>`;}
 async function setByoEditFile(value){state.byoEditFile=value;state.byoRawOffset=0;state.byoRawSearch='';state.byoRawData=null;sessionStorage.setItem('dart_byo_edit_file',value||'');await render();}
@@ -4724,7 +4889,7 @@ if(state.page==='explorer'){html+=`<div class="hero"><h1>System Explorer</h1><p>
 if(state.page==='quality'){let body=`${section('quality-signal','Quality signal',`<div class="hero"><h1>Quality Analytics</h1><p>Compare equal-weight field averages, volume-weighted match rates, and distribution-level patterns.</p></div>${miniDeck(data.summary)}`)}${section('distribution','Distribution and heatmap',`<div class="grid grid2"><div class="panel"><h3>Distribution</h3>${data.charts.hist}</div><div class="panel"><h3>Impact heatmap</h3>${data.charts.heatmap}</div></div>`)}${section('weighted','Weighted performance',`<div class="panel"><h3>Reconciliation volume</h3>${data.charts.weighted}</div>`)}`;html+=sectionShell([['quality-signal','Signal'],['distribution','Distribution'],['weighted','Reconciliation volume']],body);}
 if(state.page==='compare'){let body=`${section('compare-charts','Comparison charts',`<div class="hero"><h1>Stream Comparison</h1><p>Compare streams by average quality, weighted quality, unmatched volume, and risk concentration.</p></div><div class="grid grid2"><div class="panel"><h3>Field average vs weighted match</h3>${data.charts.compare}</div><div class="panel"><h3>Classification mix</h3>${data.charts.classmix}</div></div>`)}${section('compare-table','Comparison table',`<div class="panel">${simpleTable(data.compare_table)}</div>`)}`;html+=sectionShell([['compare-charts','Charts'],['compare-table','Table']],body);}
 if(state.page==='briefbuilder'){let body=`${section('brief-builder','Generated brief',`<div class="hero"><h1>Executive Brief Builder</h1><p>Create a leadership-ready brief from the current filtered scope.</p><div class="heroActions"><button class="btn" onclick="copyBrief()">Copy brief</button><button class="btn secondary" onclick="showPage('settings')">Update briefing settings</button></div></div>${miniDeck(data.summary)}<br><div class="panel"><h3>Generated brief</h3><div id="briefText" class="briefText">${esc(executiveBrief(data,meta))}</div></div>`)}`;html+=sectionShell([['brief-builder','Brief']],body);}
-if(state.page==='copilot'){let body=`${section('chat-area','Conversation',`<div class="hero"><h1>DART Copilot</h1><p>Ask DART Copilot questions about the filtered dataset. Without an API key, it still returns deterministic local analysis.</p></div><div class="panel"><h3>Conversation</h3><div class="chat">${meta.chat.map(chatMessageHtml).join('')}</div><br><div class="filterGrid" style="grid-template-columns:1fr auto"><input id="prompt" placeholder="What are the top risks and why?"><button class="btn" onclick="askCopilot()">Send</button></div></div>`)}${section('chat-context','Current context',`<div class="panel">${miniDeck(data.summary)}<br><h3>Suggested prompts</h3><button class="btn secondary" onclick="quickPrompt('Summarize the biggest quality risks in the current scope')">Summarize risks</button> <button class="btn secondary" onclick="quickPrompt('What should I investigate first?')">Next investigation</button> <button class="btn secondary" onclick="quickPrompt('Explain health score, field average, and event weighted match rate')">Explain metrics</button></div>`)}`;html+=sectionShell([['chat-area','Chat'],['chat-context','Context']],body);}
+if(state.page==='copilot'){let body=`${section('chat-area','Conversation',`<div class="hero"><h1>DART Copilot</h1><p>Ask DART Copilot questions about the filtered dataset. Without an API key, it still returns deterministic local analysis.</p></div><div class="panel"><h3>Conversation</h3><div class="chat" id="copilotChatHistory">${(meta.chat||[]).map(chatMessageHtml).join('')||'<div class="empty">Ask a question to start the DART Copilot conversation.</div>'}</div><br><div class="filterGrid" style="grid-template-columns:1fr auto"><input id="prompt" placeholder="What are the top risks and why?" onkeydown="if(event.key==='Enter')askCopilot()"><button class="btn" onclick="askCopilot()">Send</button></div></div>`)}${section('chat-context','Current context',`<div class="panel">${miniDeck(data.summary)}<br><h3>Suggested prompts</h3><button class="btn secondary" onclick="quickPrompt('Summarize the biggest quality risks in the current scope')">Summarize risks</button> <button class="btn secondary" onclick="quickPrompt('What should I investigate first?')">Next investigation</button> <button class="btn secondary" onclick="quickPrompt('Explain health score, field average, and event weighted match rate')">Explain metrics</button></div>`)}`;html+=sectionShell([['chat-area','Chat'],['chat-context','Context']],body);}
 if(state.page==='raweditor'){html+=rawDataPage(rawInfo);}
 if(state.page==='emailagent'){html+=emailAgentPage(emailInfo);}
 if(state.page==='data'){let body=`${section('data-source','Source files',`<div class="hero"><h1>Data Management</h1><p>DART loads the real reconciliation workbook automatically and enriches it with the CMS mapping workbook. Use the dedicated Raw Data Editor for controlled writeback and the Email Agent for workbook-change automation.</p><div class="heroActions"><button class="btn" onclick="showPage('raweditor')">Open Raw Data Editor</button><button class="btn secondary" onclick="showPage('emailagent')">Open Email Agent</button><button class="btn ghost" onclick="restoreDemo()">Reload Excel files</button><a class="btn ghost" href="/download/current.csv">Download current view</a></div></div><div class="grid grid2"><div class="panel"><h3>Current source</h3><p>${esc(meta.source)}</p><p class="muted">Rows: ${intFmt(meta.rows)} · Columns: ${intFmt(meta.columns)}</p></div><div class="panel"><h3>Detected structure</h3>${simpleTable(meta.profile)}</div></div>`)}${section('data-preview','Preview',`<div class="panel"><h3>Standardized preview</h3>${table(data.rows)}</div>`)}`;html+=sectionShell([['data-source','Source files'],['data-preview','Preview']],body);}
@@ -4773,8 +4938,59 @@ async function clearRawSearch(){state.rawSearch='';state.rawOffset=0;await rende
 async function rawPage(dir){state.rawOffset=Math.max(0,state.rawOffset+dir*state.rawLimit);await render();}
 
 async function addImpact(rows){if(!rows.length){toast('No rows to map');return;}const r=rows[Number(impactField.value)];await postJson('/api/impacts',{Stream:r.Stream,Field:r['NCH Target Column'],Report:impactReport.value,KPI:impactKpi.value,Owner:impactOwner.value,Impact:impactLevel.value,DecisionNeed:impactDecision.value});toast('Impact mapped');await render();}
-async function askCopilot(){const v=prompt.value;if(!v.trim())return;await postJson('/api/copilot',{prompt:v,filters:state.filters});await render();}
-async function quickPrompt(v){await postJson('/api/copilot',{prompt:v,filters:state.filters});await render();}
+async function askCopilot(){
+  const input=document.getElementById('prompt');
+  const v=(input?.value||'').trim();
+  if(!v)return;
+  if(input)input.value='';
+  const bucket=getScopedHistory('medicare');
+  const session=getActiveSession('medicare');
+  if(session.messages.length===0){
+    session.title=v.length>32?v.slice(0,30)+'…':v;
+  }
+  session.messages.push({role:'user',content:v});
+  state.meta=state.meta||{};
+  state.meta.chat=session.messages.slice();
+  persistChatHistoryState();
+  try{
+    const res=await postJson('/api/copilot',{prompt:v,filters:state.filters});
+    session.messages.push({role:'assistant',content:res.answer||'I could not generate an answer.'});
+  }catch(err){
+    session.messages.push({role:'assistant',content:`AI service error: ${err?.message||err}`});
+  }
+  state.meta.chat=session.messages.slice();
+  persistChatHistoryState();
+  await render();
+  setTimeout(()=>{
+    document.getElementById('copilotChatHistory')?.scrollTo(0,999999);
+    scrollBubbleToBottom();
+  },50);
+}
+async function quickPrompt(v){
+  if(!v)return;
+  const bucket=getScopedHistory('medicare');
+  const session=getActiveSession('medicare');
+  if(session.messages.length===0){
+    session.title=v.length>32?v.slice(0,30)+'…':v;
+  }
+  session.messages.push({role:'user',content:v});
+  state.meta=state.meta||{};
+  state.meta.chat=session.messages.slice();
+  persistChatHistoryState();
+  try{
+    const res=await postJson('/api/copilot',{prompt:v,filters:state.filters});
+    session.messages.push({role:'assistant',content:res.answer||'I could not generate an answer.'});
+  }catch(err){
+    session.messages.push({role:'assistant',content:`AI service error: ${err?.message||err}`});
+  }
+  state.meta.chat=session.messages.slice();
+  persistChatHistoryState();
+  await render();
+  setTimeout(()=>{
+    document.getElementById('copilotChatHistory')?.scrollTo(0,999999);
+    scrollBubbleToBottom();
+  },50);
+}
 async function uploadFile(){const f=file.files[0];if(!f){toast('Choose a file first');return;}const fd=new FormData();fd.append('file',f);const r=await fetch('/api/upload',{method:'POST',body:fd});if(!r.ok){toast(await r.text());return;}toast('Data loaded');await render();}
 async function restoreDemo(){await postJson('/api/restore-demo',{});toast('Excel files reloaded');await render();}
 function copyBrief(){const txt=document.getElementById('briefText')?.innerText||'';navigator.clipboard.writeText(txt);toast('Brief copied');}
@@ -5529,11 +5745,12 @@ async def byo_chat(request: Request) -> Any:
     if not prompt:
         return JSONResponse({"error": "Enter a question for the AI analyst."}, status_code=400)
     try:
+        if not left_name or not right_name or left_name == right_name:
+            guide_answer = "Please select two different saved datasets (Dataset A and Dataset B) in the dataset selector above or the Dataset Library to run comparative AI analysis."
+            return {"status": "ok", "answer": guide_answer, "chat": STATE.get("byo_chat", [])}
         # Validate both selected files before touching chat history.
         _byo_path(left_name)
         _byo_path(right_name)
-        if left_name == right_name:
-            raise ValueError("Choose two different datasets for AI analysis.")
         pair = [left_name, right_name]
         if pair != STATE.get("byo_chat_pair", []):
             STATE["byo_chat_pair"] = pair
@@ -5889,7 +6106,7 @@ async def smtp_test_route() -> Any:
 
 
 @app.post("/api/copilot")
-async def copilot(request: Request) -> Dict[str, str]:
+async def copilot(request: Request) -> Dict[str, Any]:
     payload = await request.json()
     prompt = str(payload.get("prompt", "")).strip()
     filters = payload.get("filters", {})
@@ -5933,7 +6150,7 @@ async def copilot(request: Request) -> Dict[str, str]:
             bullets = "\n".join([f"- {r['Stream']} · {r['NCH Target Column']}: {pct(r['MatchRate'])} match, {fmt_int(r['NotMatchedClaims'])} unmatched, {r['RiskTier']} risk" for _, r in top.iterrows()])
             answer = f"Current scope has {len(fdf):,} fields. Field average is {pct(field_average(fdf))}; overall average match is {pct(weighted_rate(fdf))}. The workspace also has {len(STATE.get('connections', []))} lineage mappings, {len(STATE.get('impacts', []))} impact mappings, and {len(STATE.get('governance', []))} governance controls. Top action candidates:\n{bullets}\n\nModel-backed Dartboard analysis is unavailable because the Groq/OpenAI client could not be initialized."
     STATE["chat"].append({"role": "assistant", "content": answer})
-    return {"status": "ok"}
+    return {"status": "ok", "answer": answer, "chat": STATE["chat"]}
 
 
 
