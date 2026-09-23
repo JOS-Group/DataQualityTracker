@@ -362,7 +362,7 @@ PERSONA_WORKSPACE_PAGES: Dict[str, List[str]] = {
     "medicare": [
         "home", "briefing", "metrics", "briefbuilder", "riskcenter", "insights",
         "scorecards", "actioncenter", "catalog", "governance",
-        "explorer", "quality", "compare", "raweditor", "emailagent", "data",
+        "explorer", "raweditor", "emailagent", "data",
         "copilot", "profile", "settings",
     ],
     "medicaid": [
@@ -379,7 +379,7 @@ PERSONA_WORKSPACE_PAGES: Dict[str, List[str]] = {
 
 PERSONA_ROLE_LANDING = {
     "Executive / Leadership": "briefing",
-    "Data / Analytics": "quality",
+    "Data / Analytics": "explorer",
     "Program / Policy": "briefing",
     "Operations": "actioncenter",
     "Quality / Compliance": "riskcenter",
@@ -395,9 +395,9 @@ PERSONA_ROLE_RECOMMENDATIONS: Dict[str, List[Tuple[str, str, str]]] = {
         ("governance", "Governance Center", "Review controls, ownership, and decision readiness."),
     ],
     "Data / Analytics": [
-        ("quality", "Quality Analytics", "Inspect distributions, averages, and weighted performance."),
         ("explorer", "System Explorer", "Trace the field-level evidence behind anomalies."),
-        ("compare", "Stream Comparison", "Compare streams and isolate structural differences."),
+        ("insights", "AI Insights", "Explore evidence-backed patterns and hypotheses."),
+        ("scorecards", "Scorecards", "Inspect stream-level distributions and metrics."),
     ],
     "Program / Policy": [
         ("briefing", "My Briefing", "Translate technical findings into program priorities."),
@@ -422,7 +422,7 @@ PERSONA_ROLE_RECOMMENDATIONS: Dict[str, List[Tuple[str, str, str]]] = {
     "Research": [
         ("insights", "AI Insights", "Explore evidence-backed patterns and hypotheses."),
         ("copilot", "DART Copilot", "Ask focused questions against the current data context."),
-        ("compare", "Stream Comparison", "Compare patterns across reconciliation streams."),
+        ("scorecards", "Scorecards", "Compare patterns across reconciliation streams."),
     ],
     "Other": [
         ("home", "Command Center", "Start with the overall quality and risk picture."),
@@ -3632,8 +3632,18 @@ HTML = r'''
     /* Global metric/statistic info tooltips */
     .metricHelpHost{position:relative!important;overflow:visible!important}.metricHelpHost:hover,.metricHelpHost:focus-within{z-index:35}.metricHelpHost.metric,.metricHelpHost.medKpi,.metricHelpHost.statusCard,.metricHelpHost.streamStat,.metricHelpHost.compareMetric,.metricHelpHost.medHeatMiniKpi,.metricHelpHost.scorecard,.metricHelpHost.miniCard{padding-right:44px!important}
     .metricInfoWrap{position:absolute;top:10px;right:10px;z-index:60;display:inline-flex;align-items:center;justify-content:center}.metricInfoButton{width:23px;height:23px;border-radius:999px;display:grid;place-items:center;background:linear-gradient(135deg,#6f5200 0%,#b9890b 46%,#efd169 100%);border:1px solid #c49a20;color:#fffdf1;font:900 13px/1 Georgia,serif;font-style:italic;cursor:help;box-shadow:0 5px 13px rgba(111,82,0,.22);user-select:none;outline:none;transition:transform .16s ease,box-shadow .16s ease}.metricInfoButton:hover,.metricInfoButton:focus{transform:translateY(-1px) scale(1.06);box-shadow:0 7px 18px rgba(111,82,0,.3),0 0 0 3px rgba(201,154,18,.13)}
-    .metricInfoTooltip{position:absolute;right:-2px;top:31px;width:min(310px,78vw);padding:12px 13px 13px;border-radius:14px;background:linear-gradient(135deg,#5d4500 0%,#966f06 48%,#d4aa32 100%);border:1px solid rgba(255,239,177,.7);color:#fff9df;box-shadow:0 18px 42px rgba(53,39,0,.3);opacity:0;visibility:hidden;transform:translateY(-5px) scale(.985);transform-origin:top right;transition:opacity .16s ease,visibility .16s ease,transform .16s ease;pointer-events:none;text-align:left;text-transform:none!important;letter-spacing:normal!important;font-size:.79rem!important;font-weight:650!important;line-height:1.45!important;white-space:normal!important}.metricInfoTooltip:before{content:"";position:absolute;right:7px;top:-7px;width:12px;height:12px;background:#a47a09;border-left:1px solid rgba(255,239,177,.55);border-top:1px solid rgba(255,239,177,.55);transform:rotate(45deg)}.metricInfoTooltip b{display:block;color:#fffce9;font-size:.8rem;margin-bottom:4px;position:relative;z-index:1}.metricInfoTooltip span{display:block;color:#fff5c8!important;font-size:.79rem!important;line-height:1.45!important;text-transform:none!important;letter-spacing:normal!important;position:relative;z-index:1}.metricInfoWrap:hover .metricInfoTooltip,.metricInfoWrap:focus-within .metricInfoTooltip{opacity:1;visibility:visible;transform:translateY(0) scale(1)}
+    .metricInfoTooltip{position:absolute;right:-2px;top:31px;width:min(320px,80vw);padding:13px 15px;border-radius:14px;background:#0f172a;border:1px solid #334155;color:#f8fafc;box-shadow:0 20px 48px rgba(0,0,0,.5);opacity:0;visibility:hidden;transform:translateY(-5px) scale(.985);transform-origin:top right;transition:opacity .16s ease,visibility .16s ease,transform .16s ease;pointer-events:none;text-align:left;text-transform:none!important;letter-spacing:normal!important;font-size:.82rem!important;font-weight:500!important;line-height:1.5!important;white-space:normal!important}.metricInfoTooltip:before{content:"";position:absolute;right:7px;top:-7px;width:12px;height:12px;background:#0f172a;border-left:1px solid #334155;border-top:1px solid #334155;transform:rotate(45deg)}.metricInfoTooltip b{display:block;color:#ffffff!important;font-size:.86rem;font-weight:800!important;margin-bottom:5px;position:relative;z-index:1}.metricInfoTooltip span{display:block;color:#f1f5f9!important;font-size:.82rem!important;line-height:1.5!important;text-transform:none!important;letter-spacing:normal!important;position:relative;z-index:1}.metricInfoWrap:hover .metricInfoTooltip,.metricInfoWrap:focus-within .metricInfoTooltip{opacity:1;visibility:visible;transform:translateY(0) scale(1)}
     @media(max-width:640px){.metricInfoTooltip{width:min(270px,74vw)}.metricInfoWrap{top:9px;right:9px}}
+
+    /* Metric Explanation Cards - High-contrast readable typography */
+    .explain .panel{background:#ffffff!important;border:1px solid #e2e8f0!important;border-radius:20px!important;padding:22px!important;box-shadow:0 10px 30px rgba(15,23,42,.06)!important}
+    .explain .panel h3{color:#0f172a!important;font-size:1.22rem!important;font-weight:850!important;margin-top:0!important;margin-bottom:12px!important;letter-spacing:-.01em!important}
+    .explain .panel p{color:#334155!important;font-size:.9rem!important;line-height:1.6!important;margin:9px 0!important}
+    .explain .panel b{color:#0f172a!important;font-weight:800!important}
+    :root[data-theme="dark"] .explain .panel{background:#15130e!important;border-color:#3f3824!important;box-shadow:0 14px 40px rgba(0,0,0,.35)!important}
+    :root[data-theme="dark"] .explain .panel h3{color:#f8fafc!important}
+    :root[data-theme="dark"] .explain .panel p{color:#cbd5e1!important}
+    :root[data-theme="dark"] .explain .panel b{color:#ffffff!important}
 
 
 
@@ -3920,13 +3930,19 @@ function setDartTheme(theme,persist=true){
 function toggleTheme(){setDartTheme(dartTheme()==='dark'?'light':'dark');}
 
 const navSets={
-    medicare:[['Overview',[['home','Command Center'],['briefing','Briefing'],['metrics','Metric Explanations'],['briefbuilder','Executive Brief']]],['Intelligence',[['riskcenter','Risk Center'],['insights','AI Insights'],['scorecards','Scorecards']]],['Operations',[['actioncenter','Remediation Center'],['catalog','Mapping Catalog'],['governance','Governance Center']],{hidden:true}],['Data',[['explorer','System Explorer'],['quality','Quality Analytics'],['compare','Stream Comparison'],['raweditor','Raw Data Editor'],['emailagent','Email Agent'],['data','Data Management']]],['More',[['copilot','DART Copilot'],['profile','Profile'],['settings','Settings']]]],
+    medicare:[
+      ['Overview',[['home','Command Center'],['briefing','Briefing'],['metrics','Metric Explanations'],['briefbuilder','Executive Brief']]],
+      ['Intelligence',[['riskcenter','Risk Center'],['insights','AI Insights'],['scorecards','Scorecards']]],
+      ['Operations',[['actioncenter','Remediation Center'],['catalog','Mapping Catalog'],['governance','Governance Center']],{hidden:true}],
+      ['Data',[['explorer','System Explorer'],['raweditor','Raw Data Editor'],['emailagent','Email Agent'],['data','Data Management']],{hiddenTabs:['data']}],
+      ['More',[['copilot','DART Copilot'],['profile','Profile'],['settings','Settings']]]
+    ],
   medicaid:[['Overview',[['medicaid-home','Dashboard'],['medicaid-heatmap','US Heatmap'],['medicaid-exec','Executive Brief']]],['States',[['medicaid-states','State Explorer'],['medicaid-compare','Compare States'],['medicaid-analytics','Analytics']]],['Intelligence',[['medicaid-ai','AI Insights'],['medicaid-chat','CMS Q&A']]],['Claims',[['medicaid-claims','Claims Analysis'],['medicaid-optimize','Optimize Spending'],['medicaid-methodology','Methodology']]],['More',[['profile','Profile'],['settings','Settings']]]],
   byo:[['Workspace',[['byo-home','DIY Home'],['byo-library','Dataset Library'],['byo-lab','Upload Data'],['byo-raw','Raw Data Editor'],['byo-email','Email Alerts']]],['Analyze',[['byo-compare','Compare Lab'],['byo-quality','Schema & Quality'],['byo-preview','Data Explorer']]],['AI',[['byo-ai','AI Analyst']]],['Output',[['byo-export','Export Center']]],['More',[['profile','Profile'],['settings','Settings']]]],
 };
 const workspaceLabels={medicare:'Medicare',medicaid:'Medicaid',byo:'Build Your Own'};
 const workspaceHomes={medicare:'home',medicaid:'medicaid-home',byo:'byo-home'};
-const personaLandingLabels={auto:'Recommended for my role',home:'Command Center',briefing:'My Briefing',riskcenter:'Risk Center',actioncenter:'Remediation Center',quality:'Quality Analytics',catalog:'Mapping Catalog',insights:'AI Insights',briefbuilder:'Executive Brief','medicaid-home':'Medicaid Home','byo-home':'DIY Home','byo-compare':'Compare Lab','byo-quality':'Schema & Quality','byo-raw':'Raw Data Editor','byo-email':'Email Alerts','byo-ai':'AI Analyst'};
+const personaLandingLabels={auto:'Recommended for my role',home:'Command Center',briefing:'My Briefing',riskcenter:'Risk Center',actioncenter:'Remediation Center',catalog:'Mapping Catalog',insights:'AI Insights',briefbuilder:'Executive Brief','medicaid-home':'Medicaid Home','byo-home':'DIY Home','byo-compare':'Compare Lab','byo-quality':'Schema & Quality','byo-raw':'Raw Data Editor','byo-email':'Email Alerts','byo-ai':'AI Analyst'};
 function personaPriorityLimit(meta){return Number(meta?.persona_effects?.priority_limit||8);}
 function currentWorkspacePageIds(){return new Set(activeNavGroups().flatMap(g=>g[1].map(x=>x[0])));}
 function personaRecommendations(meta){const allowed=currentWorkspacePageIds();return (meta?.persona_effects?.recommended_pages||[]).filter(x=>allowed.has(x.id));}
@@ -3934,7 +3950,7 @@ function personaQuickActions(meta){const recs=personaRecommendations(meta).slice
 function personaLensPanel(meta){const p=meta?.persona||{};const e=meta?.persona_effects||{};const recs=personaRecommendations(meta);const focus=(e.focus||[]).map(x=>`<span class="personaTag">${esc(x)}</span>`).join('');return `<div class="panel personaLens"><div class="personaLensHead"><div><span class="workspaceBadge">Personalized workspace</span><h3>${esc(e.lens_title||'Your DART lens')}</h3><p class="muted">${esc(e.lens_summary||'DART is prioritizing the most relevant views for your role.')}</p></div><button class="btn ghost small" onclick="showPage('settings')">Edit persona</button></div><div class="personaTags"><span class="personaTag">${esc(p.role||'General')}</span><span class="personaTag">${esc(p.depth||'Balanced')} detail</span><span class="personaTag">Audience: ${esc(p.audience||'Myself')}</span>${focus}</div>${recs.length?`<div class="personaRecommendations">${recs.map(r=>`<button class="personaRec" onclick="showPage('${r.id}')"><b>${esc(r.label)}</b><span>${esc(r.reason)}</span></button>`).join('')}</div>`:''}</div>`;}
 function personaLandingOptions(selected='auto'){const allowed=currentWorkspacePageIds();return Object.entries(personaLandingLabels).filter(([id])=>id==='auto'||allowed.has(id)).map(([id,label])=>`<option value="${id}" ${selected===id?'selected':''}>${esc(label)}</option>`).join('');}
 
-const filterPages=new Set(['home','briefing','explorer','quality','compare','catalog','briefbuilder','riskcenter','insights','scorecards','actioncenter','governance']);
+const filterPages=new Set(['home','briefing','explorer','catalog','briefbuilder','riskcenter','insights','scorecards','actioncenter','governance']);
 const defaultChatHistories={medicare:{activeId:'general',sessions:[{id:'general',title:'DART Copilot',messages:[]}]},medicaid:{activeId:'medicaid',sessions:[{id:'medicaid',title:'CMS Q&A',messages:[]}]},byo:{activeId:'byo',sessions:[{id:'byo',title:'AI Analyst',messages:[]}]} };const persistedChatHistories=(()=>{try{const raw=sessionStorage.getItem('dart_chat_histories_v1');if(!raw)return null;const parsed=JSON.parse(raw);return parsed&&typeof parsed==='object'?parsed:null;}catch(_err){return null;}})();
 let state={workspace:sessionStorage.getItem('dart_workspace')||'medicare',page:'home',priorityQueueLimit:10,filters:{streams:null,classes:null,tiers:null,reasons:null,min_rate:0,min_impact:0,min_unmatched:0,actions_only:false,search:'',custom_filters:[]},meta:null,emailEditingId:null,rawSearch:'',rawOffset:0,rawLimit:75,emailAgent:null,rawData:null,byoLeft:sessionStorage.getItem('dart_byo_left')||'',byoRight:sessionStorage.getItem('dart_byo_right')||'',byoEditFile:sessionStorage.getItem('dart_byo_edit_file')||'',byoEmailFile:sessionStorage.getItem('dart_byo_email_file')||'',byoRawSearch:'',byoRawOffset:0,byoRawLimit:75,byoRawData:null,byoEmailEditingId:null,byoEmailAgent:null,byoCompare:null,byoChat:null,medicaidStateId:1,medicaidStateStatus:'',medicaidStateType:'',medicaidIssueType:'',medicaidMinTotal:3,medicaidHeatMetric:'quality_score',medicaidHeatStatus:'',medicaidHeatType:'',medicaidHeatSelectedId:0,medicaidHeatRows:[],medicaidStateReturnPage:'medicaid-states',medicaidIssueLabels:null,medicaidChat:[],chatHistories:{...defaultChatHistories,...(persistedChatHistories||{})},assistantBubbleOpen:false};
 let modalState={key:null,title:'',items:[],selected:[]};
@@ -3992,7 +4008,16 @@ async function postJson(path,body){return api(path,{method:'POST',headers:{'Cont
 async function putJson(path,body){return api(path,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});}
 async function del(path){return api(path,{method:'DELETE'});}
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2200)}
-function activeNavGroups(){const raw=navSets[state.workspace]||navSets.medicare;return raw.filter(g=>!g[2]?.hidden&&g[0]!=='Operations');}
+function activeNavGroups(){
+  const raw=navSets[state.workspace]||navSets.medicare;
+  return raw
+    .filter(g=>!g[2]?.hidden&&g[0]!=='Operations')
+    .map(g=>{
+      const hiddenTabs=new Set(g[2]?.hiddenTabs||[]);
+      return [g[0], g[1].filter(([id])=>!hiddenTabs.has(id)&&id!=='data'&&id!=='quality'&&id!=='compare')];
+    })
+    .filter(g=>g[1].length>0);
+}
 function pageInGroup(group){return group[1].some(([id])=>id===state.page)}
 function closeAllMenus(){document.querySelectorAll('.menu').forEach(m=>{m.classList.remove('open');const b=m.querySelector('.menuBtn');if(b)b.setAttribute('aria-expanded','false');});}
 function closeWorkspaceMenu(){const sw=document.getElementById('workspaceSwitcher');if(sw)sw.classList.remove('open');const b=document.getElementById('workspaceButton');if(b)b.setAttribute('aria-expanded','false');}
@@ -4906,8 +4931,6 @@ if(state.page==='impactexplorer'){let body=`${section('impact-overview','Impact 
 if(state.page==='catalog'){let body=`${section('catalog-edit','Editable catalog',`<div class="hero"><h1>Mapping Catalog</h1><p>Add, edit, validate, and delete field mappings. Seeded mappings are created from the highest-impact fields.</p></div>${lineageEditor(meta.connections)}`)}`;html+=sectionShell([['catalog-edit','Catalog']],body);}
 if(state.page==='governance'){let body=`${section('gov-overview','Governance overview',`<div class="hero"><h1>Governance Center</h1><p>Track controls, owners, evidence, cadence, and decision readiness for DART findings.</p></div><div class="grid grid4"><div class="panel metric metricClickable" role="button" tabindex="0" onclick='openLocalDrill("Governance controls","${(meta.governance||[]).length} saved governance control${(meta.governance||[]).length===1?"":"s"}.",${JSON.stringify(meta.governance||[]).replace(/'/g,"&#39;")})' onkeydown="keyActivate(event,()=>this.click())"><div class="label">Controls</div><div class="value">${(meta.governance||[]).length}</div><div class="sub">Saved governance items</div></div><div class="panel metric metricClickable" role="button" tabindex="0" onclick='openLocalDrill("Active governance controls","${(meta.governance||[]).filter(x=>x.Status==='Active').length} active control${(meta.governance||[]).filter(x=>x.Status==='Active').length===1?"":"s"}.",${JSON.stringify((meta.governance||[]).filter(x=>x.Status==='Active')).replace(/'/g,"&#39;")})' onkeydown="keyActivate(event,()=>this.click())"><div class="label">Active</div><div class="value">${(meta.governance||[]).filter(x=>x.Status==='Active').length}</div><div class="sub">Controls in motion</div></div><div class="panel metric metricClickable" role="button" tabindex="0" onclick='openLocalDrill("Lineage mappings","${(meta.connections||[]).length} saved lineage mapping${(meta.connections||[]).length===1?"":"s"}.",${JSON.stringify(meta.connections||[]).replace(/'/g,"&#39;")})' onkeydown="keyActivate(event,()=>this.click())"><div class="label">Mappings</div><div class="value">${(meta.connections||[]).length}</div><div class="sub">Lineage catalog rows</div></div><div class="panel metric metricClickable" role="button" tabindex="0" onclick='openLocalDrill("Workflow issues","${(meta.issues||[]).length} saved workflow item${(meta.issues||[]).length===1?"":"s"}.",${JSON.stringify(meta.issues||[]).replace(/'/g,"&#39;")})' onkeydown="keyActivate(event,()=>this.click())"><div class="label">Issues</div><div class="value">${(meta.issues||[]).length}</div><div class="sub">Workflow items</div></div></div>`)}${section('gov-controls','Control register',governanceEditor(meta.governance))}${section('gov-links','Governance evidence links',`<div class="grid grid3"><div class="panel"><h3>Lineage evidence</h3><p class="muted">Use Mapping Catalog statuses as evidence that source-to-target lineage has been reviewed.</p><button class="btn secondary" onclick="showPage('catalog')">Open Mapping Catalog</button></div><div class="panel"><h3>Impact evidence</h3><p class="muted">Use Impact Explorer mappings to document downstream report/KPI exposure.</p><button class="btn secondary" onclick="showPage('impactexplorer')">Open Impact Explorer</button></div><div class="panel"><h3>Issue evidence</h3><p class="muted">Use Remediation Center workflow items to show owner assignment and remediation progress.</p><button class="btn secondary" onclick="showPage('actioncenter')">Open Remediation Center</button></div></div>`)}`;html+=sectionShell([['gov-overview','Overview'],['gov-controls','Controls'],['gov-links','Evidence links']],body);}
 if(state.page==='explorer'){html+=`<div class="hero"><h1>System Explorer</h1><p>Search and inspect System A to System B relationships with risk tier and volume context next to each mapped field.</p></div><div class="panel"><h3>${intFmt(data.summary.rows)} fields in view</h3>${table(data.rows)}</div>`;}
-if(state.page==='quality'){let body=`${section('quality-signal','Quality signal',`<div class="hero"><h1>Quality Analytics</h1><p>Compare equal-weight field averages, volume-weighted match rates, and distribution-level patterns.</p></div>${miniDeck(data.summary)}`)}${section('distribution','Distribution and heatmap',`<div class="grid grid2"><div class="panel"><h3>Distribution</h3>${data.charts.hist}</div><div class="panel"><h3>Impact heatmap</h3>${data.charts.heatmap}</div></div>`)}${section('weighted','Weighted performance',`<div class="panel"><h3>Reconciliation volume</h3>${data.charts.weighted}</div>`)}`;html+=sectionShell([['quality-signal','Signal'],['distribution','Distribution'],['weighted','Reconciliation volume']],body);}
-if(state.page==='compare'){let body=`${section('compare-charts','Comparison charts',`<div class="hero"><h1>Stream Comparison</h1><p>Compare streams by average quality, weighted quality, unmatched volume, and risk concentration.</p></div><div class="grid grid2"><div class="panel"><h3>Field average vs weighted match</h3>${data.charts.compare}</div><div class="panel"><h3>Classification mix</h3>${data.charts.classmix}</div></div>`)}${section('compare-table','Comparison table',`<div class="panel">${simpleTable(data.compare_table)}</div>`)}`;html+=sectionShell([['compare-charts','Charts'],['compare-table','Table']],body);}
 if(state.page==='briefbuilder'){let body=`${section('brief-builder','Generated brief',`<div class="hero"><h1>Executive Brief Builder</h1><p>Create a leadership-ready brief from the current filtered scope.</p><div class="heroActions"><button class="btn" onclick="copyBrief()">Copy brief</button><button class="btn secondary" onclick="showPage('settings')">Update briefing settings</button></div></div>${miniDeck(data.summary)}<br><div class="panel"><h3>Generated brief</h3><div id="briefText" class="briefText">${esc(executiveBrief(data,meta))}</div></div>`)}`;html+=sectionShell([['brief-builder','Brief']],body);}
 if(state.page==='copilot'){let body=`${section('chat-area','Conversation',`<div class="hero"><h1>DART Copilot</h1><p>Ask DART Copilot questions about the filtered dataset. Without an API key, it still returns deterministic local analysis.</p></div><div class="panel"><h3>Conversation</h3><div class="chat" id="copilotChatHistory">${(meta.chat||[]).map(chatMessageHtml).join('')||'<div class="empty">Ask a question to start the DART Copilot conversation.</div>'}</div><br><div class="filterGrid" style="grid-template-columns:1fr auto"><input id="prompt" placeholder="What are the top risks and why?" onkeydown="if(event.key==='Enter')askCopilot()"><button class="btn" onclick="askCopilot()">Send</button></div></div>`)}${section('chat-context','Current context',`<div class="panel">${miniDeck(data.summary)}<br><h3>Suggested prompts</h3><button class="btn secondary" onclick="quickPrompt('Summarize the biggest quality risks in the current scope')">Summarize risks</button> <button class="btn secondary" onclick="quickPrompt('What should I investigate first?')">Next investigation</button> <button class="btn secondary" onclick="quickPrompt('Explain health score, field average, and event weighted match rate')">Explain metrics</button></div>`)}`;html+=sectionShell([['chat-area','Chat'],['chat-context','Context']],body);}
 if(state.page==='raweditor'){html+=rawDataPage(rawInfo);}
