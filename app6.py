@@ -3820,7 +3820,7 @@ HTML = r'''
     /* AI Insights Hub styling */
     .aiInsightsHero{background:radial-gradient(circle at 6% 0%,rgba(231,201,87,.24),transparent 36%),linear-gradient(135deg,#fffdf7,#fff8e4 58%,#ffffff);border:1px solid #e8d59a;border-radius:28px;padding:32px;box-shadow:0 18px 48px rgba(88,66,0,.10);margin-bottom:18px}
     .aiIntelligenceBadge{display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:6px 12px;background:linear-gradient(135deg,#fff5cf,#ffea9f);border:1px solid #dfc366;color:#6f5200;font-size:.78rem;font-weight:900;margin-bottom:12px;box-shadow:0 3px 10px rgba(111,82,0,.08)}
-    .aiInsightsKpiGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:20px}
+    .aiInsightsKpiGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:20px}
     .aiKpiCard{background:#fff;border:1px solid #e8e1cf;border-radius:18px;padding:16px 18px;box-shadow:0 10px 30px rgba(15,23,42,.06);cursor:pointer;transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease;position:relative}
     .aiKpiCard:hover{transform:translateY(-2px);border-color:#c99a12;box-shadow:0 16px 36px rgba(15,23,42,.12)}
     .aiKpiCard .kpiLabel{font-size:.75rem;font-weight:850;color:#64748b;text-transform:uppercase;letter-spacing:.06em}
@@ -3881,20 +3881,6 @@ HTML = r'''
     .aiAnomalyCardFoot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:auto;padding-top:8px;border-top:1px solid #f1f5f9}
     .aiAnomalyCardFoot span{font-size:.76rem;font-weight:800;color:#854d0e}
     
-    /* What-If Simulator */
-    .aiSimulatorBox{background:linear-gradient(135deg,#fffdf7,#fff9ec);border:1px solid #ebd89e;border-radius:20px;padding:22px;box-shadow:0 10px 30px rgba(111,82,0,.06)}
-    .aiSimHeader{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:16px}
-    .aiSimPills{display:flex;gap:8px}
-    .aiSimPill{border:1px solid #d4af37;background:#fff;color:#725500;border-radius:10px;padding:8px 14px;font-size:.82rem;font-weight:850;cursor:pointer;transition:all .15s ease}
-    .aiSimPill:hover{background:#fff3c8}
-    .aiSimPill.active{background:linear-gradient(135deg,#6f5200,#b98809,#dfbd4d);color:#fff;border-color:#b98809}
-    
-    .aiSimGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
-    .aiSimCard{background:#fff;border:1px solid #e7dfcb;border-radius:14px;padding:14px;text-align:center}
-    .aiSimCard .simK{font-size:.72rem;font-weight:800;color:#64748b;text-transform:uppercase}
-    .aiSimCard .simV{font-size:1.45rem;font-weight:950;color:#0f172a;margin:4px 0}
-    .aiSimCard .simDelta{font-size:.78rem;font-weight:850;color:#16a34a}
-    
     /* Diagnostic Dossier Modal */
     .fieldDossierWrap{display:flex;flex-direction:column;gap:16px}
     .dossierStatsGrid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
@@ -3946,11 +3932,6 @@ HTML = r'''
     :root[data-theme="dark"] .aiAnomalyMetricItem .amV{color:#f8fafc!important}
     :root[data-theme="dark"] .aiAnomalyCardFoot{border-top-color:#2a2517!important}
     :root[data-theme="dark"] .aiAnomalyCardFoot span{color:#f0d271!important}
-    :root[data-theme="dark"] .aiSimulatorBox{background:linear-gradient(135deg,#1c170d,#11100c)!important;border-color:#5e4a1e!important}
-    :root[data-theme="dark"] .aiSimPill{background:#1c1912!important;border-color:#5e4a1e!important;color:#f0d271!important}
-    :root[data-theme="dark"] .aiSimCard{background:#15130e!important;border-color:#3f3824!important}
-    :root[data-theme="dark"] .aiSimCard .simK{color:#94a3b8!important}
-    :root[data-theme="dark"] .aiSimCard .simV{color:#f8fafc!important}
     :root[data-theme="dark"] .dossierStat{background:#1c1912!important;border-color:#3f3824!important}
     :root[data-theme="dark"] .dossierStat .k{color:#94a3b8!important}
     :root[data-theme="dark"] .dossierStat .v{color:#f8fafc!important}
@@ -3965,13 +3946,13 @@ HTML = r'''
     :root[data-theme="dark"] .dossierMetaGrid b{color:#94a3b8!important}
     
     @media(max-width:960px){
-      .aiInsightsKpiGrid,.dossierStatsGrid,.aiSimGrid,.dossierMetaGrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .aiInsightsKpiGrid,.dossierStatsGrid,.dossierMetaGrid{grid-template-columns:repeat(2,minmax(0,1fr))}
       .aiDiagnosticsGrid{grid-template-columns:1fr}
       .dossierLineageGrid{grid-template-columns:1fr}
       .lineageArrow{transform:rotate(90deg);margin:4px 0}
     }
     @media(max-width:540px){
-      .aiInsightsKpiGrid,.dossierStatsGrid,.aiSimGrid,.dossierMetaGrid{grid-template-columns:1fr}
+      .aiInsightsKpiGrid,.dossierStatsGrid,.dossierMetaGrid{grid-template-columns:1fr}
     }
 
   </style>
@@ -4699,88 +4680,9 @@ function filterInvestigationCards(category, query){
   });
 }
 
-function setSimulatorScenario(count){
-  state.simScenarioCount = Number(count || 3);
-  const data = state.lastViewData;
-  if(!data) return;
-  const simHolder = document.getElementById('aiSimulatorHolder');
-  if(simHolder){
-    simHolder.innerHTML = renderSimulatorHtml(data);
-  }
-}
-
-function renderSimulatorHtml(data){
-  const rows = data.rows || [];
-  const s = data.summary || {};
-  const currentHealth = parseFloat(s.health_score || '0') || 0;
-  const currentUnmatched = rows.reduce((acc, r) => acc + Number(r.NotMatchedClaims || 0), 0);
-  const currentMatched = rows.reduce((acc, r) => acc + Number(r.MatchedClaims || 0), 0);
-  const totalClaims = currentMatched + currentUnmatched;
-  
-  const count = Number(state.simScenarioCount || 3);
-  const sortedCandidates = rows.slice().sort((a,b) => {
-    const unmA = Number(a.NotMatchedClaims || 0);
-    const unmB = Number(b.NotMatchedClaims || 0);
-    if(unmB !== unmA) return unmB - unmA;
-    return (Number(a.MatchRate||0)) - (Number(b.MatchRate||0));
-  }).filter(r => Number(r.NotMatchedClaims || 0) > 0);
-  
-  const selectedCandidates = sortedCandidates.slice(0, count);
-  const recoveredClaims = selectedCandidates.reduce((acc, r) => acc + Number(r.NotMatchedClaims || 0), 0);
-  const projectedMatched = currentMatched + recoveredClaims;
-  const projectedUnmatched = Math.max(0, currentUnmatched - recoveredClaims);
-  const projectedHealth = totalClaims > 0 ? ((projectedMatched / totalClaims) * 100).toFixed(1) : currentHealth.toFixed(1);
-  const healthDelta = (parseFloat(projectedHealth) - currentHealth).toFixed(1);
-  const recoveryPct = currentUnmatched > 0 ? ((recoveredClaims / currentUnmatched) * 100).toFixed(1) : '0.0';
-  
-  const candidateJson = JSON.stringify(selectedCandidates).replace(/'/g, "&#39;");
-  
-  return `
-    <div class="aiSimHeader">
-      <div>
-        <h3 style="margin:0 0 4px;color:#0f172a">Simulate Remediation Impact</h3>
-        <p class="muted" style="margin:0">Forecast data health gains and claim recovery by fixing prioritized anomaly candidates.</p>
-      </div>
-      <div class="aiSimPills">
-        <button class="aiSimPill ${count===1?'active':''}" onclick="setSimulatorScenario(1)">Top 1 Blocker</button>
-        <button class="aiSimPill ${count===3?'active':''}" onclick="setSimulatorScenario(3)">Top 3 Anomalies</button>
-        <button class="aiSimPill ${count===5?'active':''}" onclick="setSimulatorScenario(5)">Top 5 Fields</button>
-        <button class="aiSimPill ${count===10?'active':''}" onclick="setSimulatorScenario(10)">Top 10 Priority</button>
-      </div>
-    </div>
-    <div class="aiSimGrid">
-      <div class="aiSimCard">
-        <div class="simK">Projected Health Score</div>
-        <div class="simV">${projectedHealth}</div>
-        <div class="simDelta">+${healthDelta} pts gain</div>
-      </div>
-      <div class="aiSimCard">
-        <div class="simK">Claims Recovered</div>
-        <div class="simV" style="color:var(--good)">${intFmt(recoveredClaims)}</div>
-        <div class="simDelta">${recoveryPct}% of unmatched total</div>
-      </div>
-      <div class="aiSimCard">
-        <div class="simK">Remaining Unmatched</div>
-        <div class="simV" style="color:var(--bad)">${intFmt(projectedUnmatched)}</div>
-        <div class="simDelta">Down from ${intFmt(currentUnmatched)}</div>
-      </div>
-      <div class="aiSimCard">
-        <div class="simK">Candidate Fields</div>
-        <div class="simV">${selectedCandidates.length}</div>
-        <div class="simDelta">Targeted for action</div>
-      </div>
-    </div>
-    <div style="display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap">
-      <button class="btn small" onclick='openInvestigationDrill("Top ${count} Remediation Simulation Candidates", "These ${selectedCandidates.length} fields yield +${healthDelta} pts in health score and recover ${intFmt(recoveredClaims)} claims.", ${candidateJson}, "simulation_candidates_top_${count}")'>Inspect ${selectedCandidates.length} Candidate Records</button>
-      <button class="btn secondary small" onclick="quickPrompt('Draft a technical remediation plan for the top ${count} reconciliation anomalies: ${safeArg(selectedCandidates.map(c=>c.Stream+' · '+c['NCH Target Column']).join(', '))}')">Ask Copilot for Fix Plan</button>
-    </div>
-  `;
-}
-
 function aiInsightsPageHtml(data, meta){
   state.lastViewData = data;
   state.insightsTab = state.insightsTab || 'all';
-  state.simScenarioCount = state.simScenarioCount || 3;
   const s = data.summary || {};
   const p = meta.persona || {};
   const richInsights = generateRichAiInsights(data, meta);
@@ -4911,11 +4813,6 @@ function aiInsightsPageHtml(data, meta){
         <div class="kpiVal" style="color:#d97706">${zeroMatchCount}</div>
         <div class="kpiSub">Schema/Join drops <span>Inspect →</span></div>
       </div>
-      <div class="aiKpiCard" onclick="showPage('impactexplorer')">
-        <div class="kpiLabel">Downstream Reports</div>
-        <div class="kpiVal">${s.affected_reports || '0'}</div>
-        <div class="kpiSub">Exposed dashboards <span>Explore →</span></div>
-      </div>
     </div>
     
     <div id="strategic-diagnostics" class="sectionBlock">
@@ -4947,37 +4844,6 @@ function aiInsightsPageHtml(data, meta){
         </div>
         <div class="aiAnomalyGrid" id="aiAnomalyGrid">
           ${anomalyCardsHtml}
-        </div>
-      </div>
-    </div>
-    
-    <br>
-    
-    <div id="what-if-simulator" class="sectionBlock">
-      <div class="aiSimulatorBox" id="aiSimulatorHolder">
-        ${renderSimulatorHtml(data)}
-      </div>
-    </div>
-    
-    <br>
-    
-    <div id="copilot-prompts" class="sectionBlock">
-      <div class="panel">
-        <h3 style="margin:0 0 6px;color:#0f172a;font-size:1.15rem;font-weight:900">1-Click Diagnostic Copilot Prompts</h3>
-        <p class="muted" style="margin:0 0 14px;font-size:.85rem">Ask targeted root-cause questions against the current filtered scope with instant AI analysis.</p>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">
-          <button class="btn secondary" style="text-align:left;padding:12px;font-size:.84rem" onclick="quickPrompt('Why is Inpatient unmatched volume so high compared to other streams?')">
-            <b>Stream Comparison:</b> Why is Inpatient unmatched volume elevated?
-          </button>
-          <button class="btn secondary" style="text-align:left;padding:12px;font-size:.84rem" onclick="quickPrompt('Which reconciliation fields have a 0% match rate and what are their source mappings?')">
-            <b>Zero-Match Analysis:</b> Show all 0% match fields and their mappings
-          </button>
-          <button class="btn secondary" style="text-align:left;padding:12px;font-size:.84rem" onclick="quickPrompt('What is the single highest-impact field to fix today to improve data health?')">
-            <b>Highest Impact:</b> What is the single highest-impact field to fix?
-          </button>
-          <button class="btn secondary" style="text-align:left;padding:12px;font-size:.84rem" onclick="quickPrompt('How do the current reconciliation errors impact downstream executive reports and compliance?')">
-            <b>Downstream Risk:</b> How do errors impact executive dashboards?
-          </button>
         </div>
       </div>
     </div>
