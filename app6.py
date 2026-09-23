@@ -635,11 +635,27 @@ def standardize(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = ""
 
     df["Comparable"] = df["Classification"].astype(str).str.lower().str.strip().isin(["match", "different", "mismatch"])
-    disp = df["Disposition"].astype(str).str.lower().str.replace(r"\s+", " ", regex=True).str.strip()
+    def normalized_action_text(column: str) -> pd.Series:
+        return (
+            df[column]
+            .astype(str)
+            .str.lower()
+            .str.replace(r"[^a-z0-9\s]", "", regex=True)
+            .str.replace(r"\s+", " ", regex=True)
+            .str.strip()
+        )
+
+    disp = normalized_action_text("Disposition")
+    recommendation = normalized_action_text("Recommendation")
+    lynette_recommendation = normalized_action_text("Lynette Recommendation")
     cls = df["Classification"].astype(str).str.lower()
-    # A record explicitly marked as requiring no action is not actionable,
-    # even if its classification would otherwise identify a mismatch.
-    no_action_needed = disp.isin({"no action needed", "no action is needed", "no action required"})
+    # Explicit no-action recommendations override a mismatch classification.
+    no_action_values = {"no action needed", "no action is needed", "no action required"}
+    no_action_needed = (
+        disp.isin(no_action_values)
+        | recommendation.isin(no_action_values)
+        | lynette_recommendation.isin(no_action_values)
+    )
     df["NeedsChange"] = (
         disp.str.contains("action|change|review|fix|remediate", na=False)
         | cls.isin(["missing", "different", "mismatch"])
