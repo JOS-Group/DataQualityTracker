@@ -4671,7 +4671,7 @@ function filterInvestigationCards(category, query){
     
     let matchesCat = (activeCat === 'all');
     if(activeCat === 'critical') matchesCat = card.dataset.risk === 'Critical';
-    if(activeCat === 'zero') matchesCat = Number(card.dataset.match || 1) <= 0.1;
+    if(activeCat === 'zero') matchesCat = (parseFloat(card.dataset.match || '0') <= 0.1) && (Number(card.dataset.unmatched || 0) > 0);
     if(activeCat === 'volume') matchesCat = Number(card.dataset.unmatched || 0) >= 10000;
     if(activeCat === 'kpi') matchesCat = Number(card.dataset.impact || 0) >= 3.0;
     
@@ -4692,6 +4692,7 @@ function aiInsightsPageHtml(data, meta){
   const zeroMatchCount = rows.filter(r => (r.MatchRate == null || Number(r.MatchRate) <= 0.1) && Number(r.NotMatchedClaims || 0) > 0).length;
   const highVolCount = rows.filter(r => Number(r.NotMatchedClaims || 0) >= 10000).length;
   const kpiCount = rows.filter(r => Number(r.ImpactScore || 0) >= 3.0).length;
+  const totalAnomaliesCount = criticalCount + zeroMatchCount + highVolCount + kpiCount;
   
   const diagnosticCardsHtml = richInsights.map(item => {
     const jsonRows = JSON.stringify(item.rows || []).replace(/'/g, "&#39;");
@@ -4741,7 +4742,7 @@ function aiInsightsPageHtml(data, meta){
   }).join('');
   
   // Sorted anomaly candidate rows for deep-dive investigation workspace
-  const anomalyRows = (s.top_actions || rows).slice(0, 48);
+  const anomalyRows = (s.top_actions && s.top_actions.length ? s.top_actions : rows);
   const anomalyCardsHtml = anomalyRows.map(r => {
     const jsonRow = JSON.stringify(r).replace(/'/g, "&#39;");
     const mRate = Number(r.MatchRate || 0);
@@ -4784,7 +4785,7 @@ function aiInsightsPageHtml(data, meta){
   const allUnmatchedRows = JSON.stringify(rows.filter(r => Number(r.NotMatchedClaims || 0) > 0)).replace(/'/g, "&#39;");
   
   return `
-    <div class="aiInsightsHero">
+    <div class="aiInsightsHero" id="insight-top">
       <span class="aiIntelligenceBadge">AI Diagnostic & Anomaly Engine</span>
       <h1 style="color:#0f172a;margin:0 0 8px;font-size:2.2rem;font-weight:950">AI Insights & Root-Cause Diagnostics</h1>
       <p style="color:#475569;margin:0;font-size:.95rem;line-height:1.55;max-width:980px">
@@ -4836,7 +4837,7 @@ function aiInsightsPageHtml(data, meta){
           <input id="aiInvestigationSearch" placeholder="Search field, stream, or table..." style="max-width:260px;padding:9px 12px;font-size:.84rem;border-radius:10px" oninput="filterInvestigationCards(undefined, this.value)">
         </div>
         <div class="aiFilterPills" style="margin-bottom:16px">
-          <button class="aiFilterChip ${state.insightsTab==='all'?'active':''}" data-category="all" onclick="filterInvestigationCards('all')">All Anomalies (${anomalyRows.length})</button>
+          <button class="aiFilterChip ${state.insightsTab==='all'?'active':''}" data-category="all" onclick="filterInvestigationCards('all')">All Anomalies (${totalAnomaliesCount})</button>
           <button class="aiFilterChip ${state.insightsTab==='critical'?'active':''}" data-category="critical" onclick="filterInvestigationCards('critical')">Critical Mappings (${criticalCount})</button>
           <button class="aiFilterChip ${state.insightsTab==='zero'?'active':''}" data-category="zero" onclick="filterInvestigationCards('zero')">Zero-Match Drops (${zeroMatchCount})</button>
           <button class="aiFilterChip ${state.insightsTab==='volume'?'active':''}" data-category="volume" onclick="filterInvestigationCards('volume')">High Volume Loss (${highVolCount})</button>
@@ -5523,7 +5524,7 @@ if(state.page==='home'){
 if(state.page==='metrics'){html+=`<div class="hero"><h1>Metric Explanations</h1><p>Plain-English definitions for the DART metrics so leadership, analysts, and owners can interpret the same dashboard consistently.</p></div>${metricExplanations()}`;}
 if(state.page==='briefing'){let body=`${section('brief-top','Briefing snapshot',`<div class="hero"><span class="workspaceBadge">${esc(meta.persona_effects?.lens_title||'Personalized briefing')}</span><h1>My Briefing</h1><p>${esc(p.first_question||'What should I investigate first?')} This view is tuned for <b>${esc(p.role||'your role')}</b>, a <b>${esc(p.audience||'general')}</b> audience, and <b>${esc(p.depth||'balanced')}</b> detail.</p></div>${miniDeck(data.summary)}<br>${personaLensPanel(meta)}`)}${section('focus','Recommended focus',`<div class="panel">${cards(data.summary.top_actions.slice(0,personaPriorityLimit(meta)))}</div>`)}${section('streams','Stream summary',`<div class="panel">${simpleTable((data.summary.stream_summary||[]).slice(0,Math.max(4,personaPriorityLimit(meta))))}</div>`)}`;html+=sectionShell([['brief-top','Snapshot'],['focus','Focus'],['streams','Streams']],body);}
 if(state.page==='riskcenter'){let body=`${section('risk-overview','Risk overview',`<div class="hero"><h1>Risk Center</h1><p>Concentrated view of critical findings, risk drivers, and the field-level evidence behind the current risk picture.</p></div>${miniDeck(data.summary)}`)}${section('risk-drivers','Top risk drivers',`<div class="panel"><h3>Top risk drivers</h3>${data.charts.drivers}</div>`)}${section('risk-list','Critical and elevated findings',`<div class="panel">${table(data.issues,true)}</div>`)}`;html+=sectionShell([['risk-overview','Overview'],['risk-drivers','Risk drivers'],['risk-list','Findings']],body);}
-if(state.page==='insights'){let body=aiInsightsPageHtml(data,meta);html+=sectionShell([['insight-top','Overview'],['strategic-diagnostics','AI Diagnostics'],['investigation-workspace','Anomaly Explorer'],['what-if-simulator','What-If Simulator'],['copilot-prompts','Diagnostic Copilot']],body);}
+if(state.page==='insights'){let body=aiInsightsPageHtml(data,meta);html+=sectionShell([['insight-top','Overview'],['strategic-diagnostics','AI Diagnostics'],['investigation-workspace','Anomaly Explorer']],body);}
 if(state.page==='scorecards'){html+=`<div class="hero"><h1>Stream Scorecards</h1><p>One executive card per stream, showing quality, volume, criticality, and impact.</p></div>${scorecards(data.summary.stream_summary)}`;}
 if(state.page==='actioncenter'){let body=`${section('action-overview','Action status',`<div class="hero"><h1>Remediation Center</h1><p>Seeded workflow issues are loaded automatically, so the board is useful before you add anything manually.</p></div><div class="grid grid4">${['Open','In progress','Blocked','Resolved'].map(status=>{const rows=(meta.issues||[]).filter(x=>x.Status===status);return `<div class="panel metric metricClickable" role="button" tabindex="0" onclick='openLocalDrill("${status} remediation items","${rows.length} saved workflow item${rows.length===1?"":"s"} with status ${status}.",${JSON.stringify(rows).replace(/'/g,"&#39;")})' onkeydown="keyActivate(event,()=>this.click())"><div class="label">${status}</div><div class="value">${rows.length}</div><div class="sub">Saved workflow items</div></div>`;}).join('')}</div>`)}${section('action-candidates','Action candidates',`<div class="panel">${table(data.issues,true)}</div>`)}${section('board','Workflow board',`<div class="panel">${kanban(meta.issues)}</div>`)}`;html+=sectionShell([['action-overview','Status'],['action-candidates','Candidates'],['board','Board']],body);}
 if(state.page==='impactexplorer'){let body=`${section('impact-overview','Impact overview',`<div class="hero"><h1>Impact Explorer</h1><p>Explore how field-level reconciliation findings connect to reports, KPIs, owners, and decision needs.</p></div>${miniDeck(data.summary)}`)}${section('impact-chart','Mapped impact chart',`<div class="panel">${data.charts.impact}</div>`)}${section('impact-map','Impact mapping',impactEditor(meta.impacts,data.rows))}`;html+=sectionShell([['impact-overview','Overview'],['impact-chart','Chart'],['impact-map','Mapping']],body);}
