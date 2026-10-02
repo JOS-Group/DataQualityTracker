@@ -1989,8 +1989,14 @@ def _s3_client(region: str, access_key: str, secret_key: str, session_token: str
     if boto3 is None:
         raise RuntimeError("The 'boto3' package is not installed on the server. Run: pip install boto3")
     kwargs: Dict[str, Any] = {}
+    region = (region or "").strip()
     if region:
         kwargs["region_name"] = region
+    elif os.getenv("AWS_DEFAULT_REGION") or os.getenv("AWS_REGION"):
+        kwargs["region_name"] = os.getenv("AWS_DEFAULT_REGION") or os.getenv("AWS_REGION")
+    access_key = (access_key or "").strip()
+    secret_key = (secret_key or "").strip()
+    session_token = (session_token or "").strip()
     if access_key and secret_key:
         kwargs["aws_access_key_id"] = access_key
         kwargs["aws_secret_access_key"] = secret_key
@@ -5283,7 +5289,9 @@ function byoUploadPanel(info){return `<div class="byoDrop"><span class="workspac
 async function uploadByoFiles(){const input=document.getElementById('byoFiles');const files=[...(input?.files||[])];if(!files.length){toast('Choose at least one CSV or Excel file');return;}const fd=new FormData();files.forEach(f=>fd.append('files',f));try{const r=await fetch('/api/byo/upload',{method:'POST',body:fd});const payload=await r.json().catch(()=>({error:'Upload failed'}));if(!r.ok)throw new Error(payload.error||'Upload failed');const names=(payload.saved||[]).map(x=>x.name);if(names.length){state.byoLeft=state.byoLeft||names[0];if(!state.byoRight&&names.length>1)state.byoRight=names[1];saveByoSelection();}toast(`${names.length} dataset${names.length===1?'':'s'} saved to ${payload.storage_path||'Data/DIY'}`);await render();}catch(err){toast('Upload failed: '+String(err.message||err).slice(0,180));}}
 function byoImportPanel(){
   const s3=state.byoS3Items;
+  const s3Ctx=state.byoS3Context||{};
   const sp=state.byoSharePointItems;
+  const spCtx=state.byoSharePointContext||{};
   return `<div class="grid grid2">
     <div class="panel byoImportPanel">
       <span class="workspaceBadge">Online folder / URL</span>
@@ -5295,39 +5303,108 @@ function byoImportPanel(){
     <div class="panel byoImportPanel">
       <span class="workspaceBadge">Amazon S3</span>
       <h3>Import from an S3 bucket</h3>
-      <p class="muted">List CSV/XLSX objects in a bucket (optionally under a prefix/folder), then choose which ones to save. Leave the keys blank to use the server's default AWS credentials.</p>
+      <p class="muted">List and select Excel (.xlsx) or CSV files stored in an Amazon S3 bucket. You can enter an S3 bucket name (or full <code>s3://bucket/folder/</code> path), optional prefix, AWS credentials, and region.</p>
       <div class="byoS3Fields">
-        <input id="byoS3Bucket" type="text" placeholder="Bucket name">
-        <input id="byoS3Prefix" type="text" placeholder="Prefix / folder (optional)">
-        <input id="byoS3Region" type="text" placeholder="Region (optional)">
-        <input id="byoS3AccessKey" type="text" placeholder="Access key (optional)">
-        <input id="byoS3SecretKey" type="password" placeholder="Secret key (optional)">
-        <input id="byoS3SessionToken" type="password" placeholder="Session token (optional)">
+        <input id="byoS3Bucket" type="text" placeholder="Bucket name or s3://bucket/path" value="${esc(s3Ctx.bucket||'')}">
+        <input id="byoS3Prefix" type="text" placeholder="Prefix / folder (optional)" value="${esc(s3Ctx.prefix||'')}">
+        <input id="byoS3Region" type="text" placeholder="Region (e.g. us-east-1)" value="${esc(s3Ctx.region||'')}">
+        <input id="byoS3AccessKey" type="text" placeholder="Access key ID (optional)" value="${esc(s3Ctx.access_key||'')}">
+        <input id="byoS3SecretKey" type="password" placeholder="Secret access key (optional)" value="${esc(s3Ctx.secret_key||'')}">
+        <input id="byoS3SessionToken" type="password" placeholder="Session token (optional)" value="${esc(s3Ctx.session_token||'')}">
       </div>
-      <div class="heroActions" style="justify-content:flex-start"><button class="btn secondary" type="button" onclick="listByoS3Files()">List bucket files</button></div>
+      <div class="heroActions" style="justify-content:flex-start;margin-top:12px;gap:8px">
+        <button class="btn secondary" type="button" onclick="listByoS3Files()">List bucket files</button>
+        ${s3?`<button class="btn ghost small" type="button" onclick="clearByoS3List()">Clear list</button>`:''}
+      </div>
       ${s3?byoS3ResultsHtml(s3):''}
+      <details class="byoHelpBox" style="margin-top:14px;border:1px solid #eedda5;border-radius:12px;padding:12px;background:#fffdf8;font-size:.82rem;color:#475569">
+        <summary style="cursor:pointer;font-weight:800;color:#725500"><b>AWS S3 Setup Guide & Instructions</b></summary>
+        <div style="margin-top:10px;line-height:1.55">
+          <p style="margin:4px 0"><b>1. Upload file to AWS S3:</b> In the AWS Console, upload your <code>.xlsx</code> or <code>.csv</code> file into your S3 bucket (e.g. <code>my-data-bucket</code>).</p>
+          <p style="margin:4px 0"><b>2. Required IAM Permissions:</b> Your IAM user or role only needs read access:</p>
+          <pre style="margin:6px 0;background:#172033;color:#f8fafc;padding:10px;border-radius:8px;font-size:.76rem;overflow:auto"><code>{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "arn:aws:s3:::YOUR-BUCKET-NAME"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": "arn:aws:s3:::YOUR-BUCKET-NAME/*"
+    }
+  ]
+}</code></pre>
+          <p style="margin:4px 0"><b>3. Authentication options:</b></p>
+          <ul style="margin:4px 0 6px 18px;padding:0">
+            <li><b>Direct Form:</b> Enter your AWS Access Key ID & Secret Key in the boxes above.</li>
+            <li><b>Server Env Vars:</b> Set <code>AWS_ACCESS_KEY_ID</code>, <code>AWS_SECRET_ACCESS_KEY</code>, and <code>AWS_REGION</code> on your hosting server (Render, EC2, ECS, etc.) to leave the form credentials blank.</li>
+            <li><b>Temporary / SSO Credentials:</b> If using AWS SSO or AssumeRole, paste the temporary Session Token into the Session Token field.</li>
+          </ul>
+        </div>
+      </details>
     </div>
     <div class="panel byoImportPanel" style="grid-column:1/-1">
       <span class="workspaceBadge">SharePoint / OneDrive (private)</span>
       <h3>Import from a private SharePoint or OneDrive folder</h3>
       <p class="muted">Paste a SharePoint or OneDrive (work/school account) sharing link to a folder or file. This needs an Azure AD app registration with the <b>Sites.Read.All</b> (or Files.Read.All) application permission, admin-consented in your tenant — DART signs in app-only, so no user login or cookie is required. Personal <b>outlook.com</b> OneDrive accounts aren't supported by this flow.</p>
       <div class="byoS3Fields">
-        <input id="byoSpTenant" type="text" placeholder="Azure AD tenant ID">
-        <input id="byoSpClientId" type="text" placeholder="App (client) ID">
-        <input id="byoSpClientSecret" type="password" placeholder="Client secret">
-        <input id="byoSpShareUrl" type="text" placeholder="SharePoint/OneDrive share link" style="grid-column:1/-1">
+        <input id="byoSpTenant" type="text" placeholder="Azure AD tenant ID" value="${esc(spCtx.tenant_id||'')}">
+        <input id="byoSpClientId" type="text" placeholder="App (client) ID" value="${esc(spCtx.client_id||'')}">
+        <input id="byoSpClientSecret" type="password" placeholder="Client secret" value="${esc(spCtx.client_secret||'')}">
+        <input id="byoSpShareUrl" type="text" placeholder="SharePoint/OneDrive share link" style="grid-column:1/-1" value="${esc(spCtx.share_url||'')}">
       </div>
-      <div class="heroActions" style="justify-content:flex-start"><button class="btn secondary" type="button" onclick="listByoSharePointFiles()">List folder files</button></div>
+      <div class="heroActions" style="justify-content:flex-start;margin-top:12px">
+        <button class="btn secondary" type="button" onclick="listByoSharePointFiles()">List folder files</button>
+        ${sp?`<button class="btn ghost small" type="button" onclick="clearByoSpList()">Clear list</button>`:''}
+      </div>
       ${sp?byoSharePointResultsHtml(sp):''}
     </div>
   </div>`;
 }
 function byoS3ResultsHtml(items){
-  if(!items.length)return '<div class="empty" style="margin-top:12px">No matching .csv/.xlsx objects found for that bucket/prefix.</div>';
+  if(!items.length)return '<div class="empty" style="margin-top:12px">No matching .xlsx/.csv files found for that bucket/prefix.</div>';
   return `<div class="byoS3Results">
-    <div class="byoS3ResultsHead"><b>${items.length} file${items.length===1?'':'s'} found</b><button class="btn small" type="button" onclick="importByoFromS3()">Import selected</button></div>
-    ${items.map(x=>`<label class="byoS3Row"><input type="checkbox" class="byoS3Check" value="${esc(x.key)}"><span class="byoS3Key">${esc(x.key)}</span><span class="byoS3Size muted">${x.size_mb} MB</span></label>`).join('')}
+    <div class="byoS3ResultsHead">
+      <div><b>${items.length} file${items.length===1?'':'s'} found</b></div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <input type="text" placeholder="Filter files..." oninput="filterByoS3Rows(this.value)" style="padding:4px 8px;font-size:.76rem;border-radius:6px;width:120px;border:1px solid #d9dfe8;background:#fff">
+        <button class="btn ghost small" type="button" onclick="byoToggleAllS3(true)" style="padding:4px 8px;font-size:.74rem">Select all</button>
+        <button class="btn ghost small" type="button" onclick="byoToggleAllS3(false)" style="padding:4px 8px;font-size:.74rem">Clear</button>
+        <button class="btn small" type="button" onclick="importByoFromS3()" style="padding:5px 11px;font-size:.78rem">Import selected</button>
+      </div>
+    </div>
+    <div id="byoS3RowsContainer">
+      ${items.map(x=>`<label class="byoS3Row" data-key="${esc((x.key||'').toLowerCase())}">
+        <input type="checkbox" class="byoS3Check" value="${esc(x.key)}">
+        <span class="byoS3Key" title="${esc(x.key)}"><b>${esc(x.name||x.key)}</b>${x.key!==x.name?`<small class="muted" style="margin-left:6px;font-size:.72rem">(${esc(x.key)})</small>`:''}</span>
+        <span class="byoS3Size muted">${x.size_mb} MB</span>
+      </label>`).join('')}
+    </div>
   </div>`;
+}
+function byoToggleAllS3(checked){
+  document.querySelectorAll('.byoS3Check').forEach(el=>{
+    const row = el.closest('.byoS3Row');
+    if(!row || row.style.display !== 'none') el.checked = checked;
+  });
+}
+function filterByoS3Rows(query){
+  const q = (query||'').toLowerCase().trim();
+  document.querySelectorAll('.byoS3Row').forEach(el=>{
+    const key = el.dataset.key || '';
+    el.style.display = (!q || key.includes(q)) ? 'flex' : 'none';
+  });
+}
+function clearByoS3List(){
+  state.byoS3Items = null;
+  render();
+}
+function clearByoSpList(){
+  state.byoSharePointItems = null;
+  render();
 }
 async function importByoFromUrl(){
   const box=document.getElementById('byoImportUrls');
@@ -5344,25 +5421,37 @@ async function importByoFromUrl(){
   }catch(err){toast('Import failed: '+String(err.message||err).slice(0,200));}
 }
 function byoS3Context(){
+  let bucket = document.getElementById('byoS3Bucket')?.value.trim()||state.byoS3Context?.bucket||'';
+  let prefix = document.getElementById('byoS3Prefix')?.value.trim()||state.byoS3Context?.prefix||'';
+  if(bucket.startsWith('s3://')){
+    const rest = bucket.slice(5);
+    const slashIdx = rest.indexOf('/');
+    if(slashIdx !== -1){
+      bucket = rest.slice(0, slashIdx);
+      if(!prefix) prefix = rest.slice(slashIdx + 1);
+    } else {
+      bucket = rest;
+    }
+  }
   return {
-    bucket:document.getElementById('byoS3Bucket')?.value.trim()||'',
-    prefix:document.getElementById('byoS3Prefix')?.value.trim()||'',
-    region:document.getElementById('byoS3Region')?.value.trim()||'',
-    access_key:document.getElementById('byoS3AccessKey')?.value.trim()||'',
-    secret_key:document.getElementById('byoS3SecretKey')?.value.trim()||'',
-    session_token:document.getElementById('byoS3SessionToken')?.value.trim()||'',
+    bucket,
+    prefix,
+    region: document.getElementById('byoS3Region')?.value.trim()||state.byoS3Context?.region||'',
+    access_key: document.getElementById('byoS3AccessKey')?.value.trim()||state.byoS3Context?.access_key||'',
+    secret_key: document.getElementById('byoS3SecretKey')?.value.trim()||state.byoS3Context?.secret_key||'',
+    session_token: document.getElementById('byoS3SessionToken')?.value.trim()||state.byoS3Context?.session_token||'',
   };
 }
 async function listByoS3Files(){
   const ctx=byoS3Context();
   if(!ctx.bucket){toast('Enter an S3 bucket name');return;}
+  state.byoS3Context=ctx;
   try{
     const r=await fetch('/api/byo/import/s3/list',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(ctx)});
     const payload=await r.json().catch(()=>({error:'S3 list failed'}));
     if(!r.ok)throw new Error(payload.error||'S3 list failed');
     state.byoS3Items=payload.items||[];
-    state.byoS3Context=ctx;
-    toast(`${state.byoS3Items.length} matching file(s) found`);
+    toast(`${state.byoS3Items.length} matching file(s) found in S3 bucket`);
     await render();
   }catch(err){toast('S3 list failed: '+String(err.message||err).slice(0,200));}
 }
@@ -5390,15 +5479,16 @@ function byoSharePointResultsHtml(items){
 }
 function byoSharePointContext(){
   return {
-    tenant_id:document.getElementById('byoSpTenant')?.value.trim()||'',
-    client_id:document.getElementById('byoSpClientId')?.value.trim()||'',
-    client_secret:document.getElementById('byoSpClientSecret')?.value.trim()||'',
-    share_url:document.getElementById('byoSpShareUrl')?.value.trim()||'',
+    tenant_id:document.getElementById('byoSpTenant')?.value.trim()||state.byoSharePointContext?.tenant_id||'',
+    client_id:document.getElementById('byoSpClientId')?.value.trim()||state.byoSharePointContext?.client_id||'',
+    client_secret:document.getElementById('byoSpClientSecret')?.value.trim()||state.byoSharePointContext?.client_secret||'',
+    share_url:document.getElementById('byoSpShareUrl')?.value.trim()||state.byoSharePointContext?.share_url||'',
   };
 }
 async function listByoSharePointFiles(){
   const ctx=byoSharePointContext();
   if(!ctx.tenant_id||!ctx.client_id||!ctx.client_secret||!ctx.share_url){toast('Fill in the tenant ID, app ID, client secret, and share link');return;}
+  state.byoSharePointContext=ctx;
   try{
     const r=await fetch('/api/byo/import/sharepoint/list',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(ctx)});
     const payload=await r.json().catch(()=>({error:'SharePoint list failed'}));
@@ -6075,12 +6165,23 @@ async def import_byo_from_url(request: Request) -> Any:
 @app.post("/api/byo/import/s3/list")
 async def list_byo_s3_files(request: Request) -> Any:
     body = await request.json()
-    bucket = str(body.get("bucket", "") or "").strip()
+    raw_bucket = str(body.get("bucket", "") or "").strip()
     prefix = str(body.get("prefix", "") or "").strip()
     region = str(body.get("region", "") or "").strip()
     access_key = str(body.get("access_key", "") or "").strip()
     secret_key = str(body.get("secret_key", "") or "").strip()
     session_token = str(body.get("session_token", "") or "").strip()
+
+    if raw_bucket.startswith("s3://"):
+        raw_bucket = raw_bucket[5:]
+    if "/" in raw_bucket:
+        parts = raw_bucket.split("/", 1)
+        bucket = parts[0].strip()
+        if not prefix:
+            prefix = parts[1].strip()
+    else:
+        bucket = raw_bucket
+
     if not bucket:
         return JSONResponse({"error": "Provide an S3 bucket name."}, status_code=400)
     try:
@@ -6090,11 +6191,18 @@ async def list_byo_s3_files(request: Request) -> Any:
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get("Contents", []):
                 key = str(obj["Key"])
-                if key.lower().endswith((".csv", ".xlsx")):
-                    items.append({"key": key, "size_bytes": int(obj["Size"]), "size_mb": round(obj["Size"] / (1024 * 1024), 2)})
-                if len(items) >= 200:
+                if key.endswith("/"):
+                    continue
+                if key.lower().endswith((".csv", ".xlsx", ".xlsm")):
+                    items.append({
+                        "key": key,
+                        "name": Path(key).name,
+                        "size_bytes": int(obj["Size"]),
+                        "size_mb": round(obj["Size"] / (1024 * 1024), 2),
+                    })
+                if len(items) >= 500:
                     break
-            if len(items) >= 200:
+            if len(items) >= 500:
                 break
         return {"bucket": bucket, "prefix": prefix, "items": items}
     except Exception as exc:
@@ -6104,12 +6212,21 @@ async def list_byo_s3_files(request: Request) -> Any:
 @app.post("/api/byo/import/s3")
 async def import_byo_from_s3(request: Request) -> Any:
     body = await request.json()
-    bucket = str(body.get("bucket", "") or "").strip()
+    raw_bucket = str(body.get("bucket", "") or "").strip()
     region = str(body.get("region", "") or "").strip()
     access_key = str(body.get("access_key", "") or "").strip()
     secret_key = str(body.get("secret_key", "") or "").strip()
     session_token = str(body.get("session_token", "") or "").strip()
-    keys = [str(k).strip() for k in (body.get("keys") or []) if str(k).strip()][:20]
+    keys = [str(k).strip() for k in (body.get("keys") or []) if str(k).strip()][:50]
+
+    if raw_bucket.startswith("s3://"):
+        raw_bucket = raw_bucket[5:]
+    if "/" in raw_bucket:
+        parts = raw_bucket.split("/", 1)
+        bucket = parts[0].strip()
+    else:
+        bucket = raw_bucket
+
     if not bucket or not keys:
         return JSONResponse({"error": "Provide a bucket and at least one file to import."}, status_code=400)
     try:
@@ -6120,12 +6237,16 @@ async def import_byo_from_s3(request: Request) -> Any:
     errors: List[str] = []
     for key in keys:
         try:
-            if Path(key).suffix.lower() not in {".csv", ".xlsx"}:
-                raise ValueError("Only .csv and .xlsx keys are supported.")
+            if Path(key).suffix.lower() not in {".csv", ".xlsx", ".xlsm"}:
+                raise ValueError("Only .csv, .xlsx, and .xlsm files are supported.")
             obj = client.get_object(Bucket=bucket, Key=key)
             content = obj["Body"].read()
-            info = _save_byo_bytes(content, Path(key).name)
+            safe_hint = Path(key).name
+            if safe_hint.lower().endswith(".xlsm"):
+                safe_hint = safe_hint[:-5] + ".xlsx"
+            info = _save_byo_bytes(content, safe_hint)
             info["source_key"] = key
+            info["bucket"] = bucket
             saved.append(info)
         except Exception as exc:
             errors.append(f"{key}: {exc}")
