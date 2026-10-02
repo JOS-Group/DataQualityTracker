@@ -1985,18 +1985,18 @@ def _validate_public_import_url(url: str) -> str:
     return url
 
 
-def _s3_client(region: str, access_key: str, secret_key: str, session_token: str):
+def _s3_client(region: str = "", access_key: str = "", secret_key: str = "", session_token: str = ""):
     if boto3 is None:
         raise RuntimeError("The 'boto3' package is not installed on the server. Run: pip install boto3")
     kwargs: Dict[str, Any] = {}
-    region = (region or "").strip()
+    region = (region or "").strip() or os.getenv("AWS_DEFAULT_REGION", "").strip() or os.getenv("AWS_REGION", "").strip()
     if region:
         kwargs["region_name"] = region
-    elif os.getenv("AWS_DEFAULT_REGION") or os.getenv("AWS_REGION"):
-        kwargs["region_name"] = os.getenv("AWS_DEFAULT_REGION") or os.getenv("AWS_REGION")
-    access_key = (access_key or "").strip()
-    secret_key = (secret_key or "").strip()
-    session_token = (session_token or "").strip()
+
+    access_key = (access_key or "").strip() or os.getenv("AWS_ACCESS_KEY_ID", "").strip()
+    secret_key = (secret_key or "").strip() or os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
+    session_token = (session_token or "").strip() or os.getenv("AWS_SESSION_TOKEN", "").strip()
+
     if access_key and secret_key:
         kwargs["aws_access_key_id"] = access_key
         kwargs["aws_secret_access_key"] = secret_key
@@ -2193,12 +2193,19 @@ def _byo_library_records() -> List[Dict[str, Any]]:
 
 def byo_payload() -> Dict[str, Any]:
     datasets = _byo_library_records()
+    aws_key = os.getenv("AWS_ACCESS_KEY_ID", "").strip()
+    aws_secret = os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
+    aws_region = os.getenv("AWS_DEFAULT_REGION", "").strip() or os.getenv("AWS_REGION", "").strip()
+    aws_bucket = os.getenv("AWS_S3_BUCKET", "").strip() or os.getenv("S3_BUCKET", "").strip() or os.getenv("AWS_BUCKET", "").strip()
     return {
         "datasets": datasets,
         "dataset_count": len(datasets),
         "storage_path": str(Path("Data") / "DIY"),
         "ai_configured": bool(OpenAI and groq_api_key()),
         "ai_model": groq_model(),
+        "aws_iam_configured": bool(aws_key and aws_secret),
+        "aws_region": aws_region,
+        "aws_bucket": aws_bucket,
         "chat": STATE.get("byo_chat", []),
         # Compatibility fields for older front-end references.
         "loaded": False, "source": "", "uploaded_at": "", "rows": 0, "columns": 0,
@@ -5287,11 +5294,15 @@ async function renderMedicaid(meta){
 function byoStats(info,prefix=''){return `<div class="grid grid6"><div class="panel metric"><div class="label">Rows</div><div class="value">${intFmt(info.rows)}</div><div class="sub">${prefix||'Dataset'}</div></div><div class="panel metric"><div class="label">Columns</div><div class="value">${intFmt(info.columns)}</div><div class="sub">Detected fields</div></div><div class="panel metric"><div class="label">Completeness</div><div class="value">${pctNum(info.completeness)}</div><div class="sub">Non-missing cells</div></div><div class="panel metric"><div class="label">Missing cells</div><div class="value">${intFmt(info.missing_cells)}</div><div class="sub">Across all fields</div></div><div class="panel metric"><div class="label">Duplicate rows</div><div class="value">${intFmt(info.duplicate_rows)}</div><div class="sub">Exact duplicates</div></div><div class="panel metric"><div class="label">Numeric fields</div><div class="value">${intFmt(info.numeric_columns)}</div><div class="sub">Detected numeric</div></div></div>`;}
 function byoUploadPanel(info){return `<div class="byoDrop"><span class="workspaceBadge">Persistent upload</span><h3>Save datasets to your repo</h3><p class="muted">Upload one or more CSV/XLSX files. DART validates each file, then saves the original file under <span class="byoStoragePath">${esc(info.storage_path||'Data/DIY')}</span>. Files remain available after FastAPI restarts.</p><input id="byoFiles" type="file" accept=".csv,.xlsx" multiple><div class="heroActions" style="justify-content:center"><button class="btn" type="button" onclick="uploadByoFiles()">Upload & save</button><button class="btn secondary" type="button" onclick="showPage('byo-library')">Open Dataset Library</button></div></div>`;}
 async function uploadByoFiles(){const input=document.getElementById('byoFiles');const files=[...(input?.files||[])];if(!files.length){toast('Choose at least one CSV or Excel file');return;}const fd=new FormData();files.forEach(f=>fd.append('files',f));try{const r=await fetch('/api/byo/upload',{method:'POST',body:fd});const payload=await r.json().catch(()=>({error:'Upload failed'}));if(!r.ok)throw new Error(payload.error||'Upload failed');const names=(payload.saved||[]).map(x=>x.name);if(names.length){state.byoLeft=state.byoLeft||names[0];if(!state.byoRight&&names.length>1)state.byoRight=names[1];saveByoSelection();}toast(`${names.length} dataset${names.length===1?'':'s'} saved to ${payload.storage_path||'Data/DIY'}`);await render();}catch(err){toast('Upload failed: '+String(err.message||err).slice(0,180));}}
-function byoImportPanel(){
+function byoImportPanel(info){
+  info = info || {};
   const s3=state.byoS3Items;
   const s3Ctx=state.byoS3Context||{};
   const sp=state.byoSharePointItems;
   const spCtx=state.byoSharePointContext||{};
+  const hasEnvAws = Boolean(info.aws_iam_configured);
+  const defaultBucket = s3Ctx.bucket || info.aws_bucket || '';
+  const defaultRegion = s3Ctx.region || info.aws_region || '';
   return `<div class="grid grid2">
     <div class="panel byoImportPanel">
       <span class="workspaceBadge">Online folder / URL</span>
@@ -5301,15 +5312,18 @@ function byoImportPanel(){
       <div class="heroActions" style="justify-content:flex-start"><button class="btn" type="button" onclick="importByoFromUrl()">Import from URL(s)</button></div>
     </div>
     <div class="panel byoImportPanel">
-      <span class="workspaceBadge">Amazon S3</span>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <span class="workspaceBadge">Amazon S3</span>
+        ${hasEnvAws ? `<span class="pill Stable" title="AWS IAM credentials detected from Render environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)">AWS IAM Connected (${esc(info.aws_region||'env')}) ✓</span>` : `<span class="pill" style="background:#f1f5f9;color:#64748b" title="No IAM env vars detected. Enter credentials directly or configure Render env vars.">Manual Credentials / Env</span>`}
+      </div>
       <h3>Import from an S3 bucket</h3>
-      <p class="muted">List and select Excel (.xlsx) or CSV files stored in an Amazon S3 bucket. You can enter an S3 bucket name (or full <code>s3://bucket/folder/</code> path), optional prefix, AWS credentials, and region.</p>
+      <p class="muted">${hasEnvAws ? 'Your AWS IAM credentials from Render environment variables are automatically connected. Enter your bucket name or path to list and import files.' : 'List and select Excel (.xlsx) or CSV files stored in an Amazon S3 bucket. You can enter an S3 bucket name (or full <code>s3://bucket/folder/</code> path), optional prefix, AWS credentials, and region.'}</p>
       <div class="byoS3Fields">
-        <input id="byoS3Bucket" type="text" placeholder="Bucket name or s3://bucket/path" value="${esc(s3Ctx.bucket||'')}">
+        <input id="byoS3Bucket" type="text" placeholder="Bucket name or s3://bucket/path" value="${esc(defaultBucket)}">
         <input id="byoS3Prefix" type="text" placeholder="Prefix / folder (optional)" value="${esc(s3Ctx.prefix||'')}">
-        <input id="byoS3Region" type="text" placeholder="Region (e.g. us-east-1)" value="${esc(s3Ctx.region||'')}">
-        <input id="byoS3AccessKey" type="text" placeholder="Access key ID (optional)" value="${esc(s3Ctx.access_key||'')}">
-        <input id="byoS3SecretKey" type="password" placeholder="Secret access key (optional)" value="${esc(s3Ctx.secret_key||'')}">
+        <input id="byoS3Region" type="text" placeholder="Region (e.g. us-east-1)" value="${esc(defaultRegion)}">
+        <input id="byoS3AccessKey" type="text" placeholder="${hasEnvAws ? 'Access key ID (connected from env)' : 'Access key ID (optional)'}" value="${esc(s3Ctx.access_key||'')}">
+        <input id="byoS3SecretKey" type="password" placeholder="${hasEnvAws ? 'Secret key (connected from env)' : 'Secret access key (optional)'}" value="${esc(s3Ctx.secret_key||'')}">
         <input id="byoS3SessionToken" type="password" placeholder="Session token (optional)" value="${esc(s3Ctx.session_token||'')}">
       </div>
       <div class="heroActions" style="justify-content:flex-start;margin-top:12px;gap:8px">
@@ -5339,8 +5353,8 @@ function byoImportPanel(){
 }</code></pre>
           <p style="margin:4px 0"><b>3. Authentication options:</b></p>
           <ul style="margin:4px 0 6px 18px;padding:0">
-            <li><b>Direct Form:</b> Enter your AWS Access Key ID & Secret Key in the boxes above.</li>
-            <li><b>Server Env Vars:</b> Set <code>AWS_ACCESS_KEY_ID</code>, <code>AWS_SECRET_ACCESS_KEY</code>, and <code>AWS_REGION</code> on your hosting server (Render, EC2, ECS, etc.) to leave the form credentials blank.</li>
+            <li><b>Render Environment Variables (Recommended):</b> <code>AWS_ACCESS_KEY_ID</code>, <code>AWS_SECRET_ACCESS_KEY</code>, and <code>AWS_DEFAULT_REGION</code> configured in Render dashboard are used automatically.</li>
+            <li><b>Direct Form:</b> Enter your AWS Access Key ID & Secret Key in the boxes above if you wish to override server environment credentials.</li>
             <li><b>Temporary / SSO Credentials:</b> If using AWS SSO or AssumeRole, paste the temporary Session Token into the Session Token field.</li>
           </ul>
         </div>
@@ -6183,7 +6197,10 @@ async def list_byo_s3_files(request: Request) -> Any:
         bucket = raw_bucket
 
     if not bucket:
-        return JSONResponse({"error": "Provide an S3 bucket name."}, status_code=400)
+        bucket = os.getenv("AWS_S3_BUCKET", "").strip() or os.getenv("S3_BUCKET", "").strip() or os.getenv("AWS_BUCKET", "").strip()
+
+    if not bucket:
+        return JSONResponse({"error": "Provide an S3 bucket name (or set AWS_S3_BUCKET environment variable)."}, status_code=400)
     try:
         client = _s3_client(region, access_key, secret_key, session_token)
         paginator = client.get_paginator("list_objects_v2")
@@ -6227,8 +6244,11 @@ async def import_byo_from_s3(request: Request) -> Any:
     else:
         bucket = raw_bucket
 
+    if not bucket:
+        bucket = os.getenv("AWS_S3_BUCKET", "").strip() or os.getenv("S3_BUCKET", "").strip() or os.getenv("AWS_BUCKET", "").strip()
+
     if not bucket or not keys:
-        return JSONResponse({"error": "Provide a bucket and at least one file to import."}, status_code=400)
+        return JSONResponse({"error": "Provide a bucket and at least one file to import (or set AWS_S3_BUCKET environment variable)."}, status_code=400)
     try:
         client = _s3_client(region, access_key, secret_key, session_token)
     except Exception as exc:
