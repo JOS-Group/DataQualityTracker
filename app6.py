@@ -1584,7 +1584,7 @@ PERSONA_WORKSPACE_PAGES: Dict[str, List[str]] = {
         "medicaid-methodology", "profile", "settings",
     ],
     "byo": [
-        "byo-home", "byo-library", "byo-lab", "byo-compare", "byo-quality",
+        "byo-home", "byo-library", "byo-lab", "byo-compare", "byo-reconcile", "byo-quality",
         "byo-preview", "byo-raw", "byo-email", "byo-ai", "byo-export", "profile", "settings",
     ],
 }
@@ -1708,6 +1708,7 @@ def persona_effects(persona: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
     if workspace == "byo":
         recs = [
+            ("byo-reconcile", "Reconciliation Studio", "Interactive row-level matching, value diffing, and drift matrix."),
             ("byo-compare", "Compare Lab", "Run deterministic analysis across the selected dataset pair."),
             ("byo-ai", "AI Analyst", "Ask grounded questions across both selected datasets."),
             ("byo-quality", "Schema & Quality", "Inspect missingness, schema, and column-level differences."),
@@ -4059,6 +4060,477 @@ def compare_byo_datasets(left_name: str, right_name: str, include_previews: bool
     }
 
 
+def reconcile_byo_datasets(
+    left_name: str,
+    right_name: str,
+    left_keys: Optional[Any] = None,
+    right_keys: Optional[Any] = None,
+    case_sensitive: bool = False,
+    trim_whitespace: bool = True,
+    strip_leading_zeros: bool = False,
+    numeric_tolerance: float = 0.0,
+    tolerance_mode: str = "absolute",
+    partition_filter: str = "all",
+    search_query: str = "",
+    column_filter: str = "",
+    page_offset: int = 0,
+    page_limit: int = 50,
+) -> Dict[str, Any]:
+    if not left_name or not right_name:
+        raise ValueError("Choose two saved datasets to reconcile.")
+    if left_name == right_name:
+        raise ValueError("Choose two different datasets for reconciliation.")
+
+    left_df = _read_byo_dataset(left_name)
+    right_df = _read_byo_dataset(right_name)
+
+    # Clean / format requested keys
+    if isinstance(left_keys, str):
+        left_keys = [x.strip() for x in left_keys.split(",") if x.strip()]
+    if isinstance(right_keys, str):
+        right_keys = [x.strip() for x in right_keys.split(",") if x.strip()]
+    left_keys = [k for k in (left_keys or []) if k in left_df.columns]
+    right_keys = [k for k in (right_keys or []) if k in right_df.columns]
+
+    # Generate candidate join keys
+    common_pairs = _byo_common_pairs(left_df, right_df)
+    key_candidates_scored = []
+    
+    # Check all pairs for key suitability
+    candidate_pool = list(common_pairs)
+    if not candidate_pool:
+        # Cross product of columns with ID/key hints
+        for ca in left_df.columns:
+            for cb in right_df.columns:
+                candidate_pool.append((ca, cb))
+
+    for ca, cb in candidate_pool:
+        sa = left_df[ca]
+        sb = right_df[cb]
+        unq_a = float(sa.nunique(dropna=True)) / float(len(sa)) * 100 if len(sa) else 0.0
+        unq_b = float(sb.nunique(dropna=True)) / float(len(sb)) * 100 if len(sb) else 0.0
+        overlap = _series_overlap_stats(sa, sb)
+        shared_distinct = int(overlap.get("Shared distinct", 0))
+        match_rate = float(overlap.get("A values found in B %", 0))
+        name_hint = bool(re.search(r"(^|[^a-z])(id|key|code|number|num|npi|tin|mrn|ssn|identifier)([^a-z]|$)", str(ca).lower()))
+        score = (min(unq_a, unq_b) * 0.4) + (match_rate * 0.6) + (25 if name_hint else 0)
+        if shared_distinct > 0 or name_hint:
+            key_candidates_scored.append({
+                "col_a": ca,
+                "col_b": cb,
+                "uniqueness_a": round(unq_a, 1),
+                "uniqueness_b": round(unq_b, 1),
+                "match_rate": round(match_rate, 1),
+                "shared_count": shared_distinct,
+                "score": score,
+            })
+
+    key_candidates_scored.sort(key=lambda x: x["score"], reverse=True)
+    suggested_keys = key_candidates_scored[:8]
+
+    # Fallback to top candidate if no keys chosen
+    if not left_keys or not right_keys:
+        if suggested_keys:
+            left_keys = [suggested_keys[0]["col_a"]]
+            right_keys = [suggested_keys[0]["col_b"]]
+        else:
+            left_keys = [str(left_df.columns[0])] if len(left_df.columns) else []
+            right_keys = [str(right_df.columns[0])] if len(right_df.columns) else []
+
+    # Aligned non-key attribute columns for comparison
+    left_key_set = set(left_keys)
+    right_key_set = set(right_keys)
+    aligned_columns = []
+    
+    # 1. Aligned common pairs
+    paired_left = set()
+    paired_right = set()
+    for ca, cb in common_pairs:
+        if ca not in left_key_set and cb not in right_key_set:
+            aligned_columns.append({
+                "col_a": ca,
+                "col_b": cb,
+                "type_a": str(left_df[ca].dtype),
+                "type_b": str(right_df[cb].dtype),
+                "is_numeric": bool(pd.api.types.is_numeric_dtype(left_df[ca]) and pd.api.types.is_numeric_dtype(right_df[cb])),
+            })
+            paired_left.add(ca)
+            paired_right.add(cb)
+
+    # 2. Add remaining columns from A and B for side-by-side visibility
+    unaligned_a = [c for c in left_df.columns if c not in left_key_set and c not in paired_left]
+    unaligned_b = [c for c in right_df.columns if c not in right_key_set and c not in paired_right]
+
+    def _normalize_key_token(v: Any) -> str:
+        if v is None or pd.isna(v):
+            return "<DART_NULL>"
+        s = str(v)
+        if trim_whitespace:
+            s = s.strip()
+        if strip_leading_zeros:
+            s = re.sub(r"^0+(?=\d)", "", s)
+        if not case_sensitive:
+            s = s.lower()
+        return s
+
+    def _build_composite_key(row_dict: Dict[str, Any], keys: List[str]) -> str:
+        tokens = [_normalize_key_token(row_dict.get(k)) for k in keys]
+        if all(t == "<DART_NULL>" for t in tokens):
+            return "<DART_NULL>"
+        return "||".join(tokens)
+
+    # Build row index maps
+    left_indexed: Dict[str, List[Dict[str, Any]]] = {}
+    for idx, row in left_df.iterrows():
+        rdict = row.to_dict()
+        k = _build_composite_key(rdict, left_keys)
+        left_indexed.setdefault(k, []).append({"_row_idx": int(idx), **rdict})
+
+    right_indexed: Dict[str, List[Dict[str, Any]]] = {}
+    for idx, row in right_df.iterrows():
+        rdict = row.to_dict()
+        k = _build_composite_key(rdict, right_keys)
+        right_indexed.setdefault(k, []).append({"_row_idx": int(idx), **rdict})
+
+    all_keys = list(dict.fromkeys(list(left_indexed.keys()) + list(right_indexed.keys())))
+    if "<DART_NULL>" in all_keys:
+        all_keys.remove("<DART_NULL>")
+
+    column_stats = {
+        col_info["col_a"]: {
+            "col_a": col_info["col_a"],
+            "col_b": col_info["col_b"],
+            "is_numeric": col_info["is_numeric"],
+            "total_compared": 0,
+            "exact_matches": 0,
+            "tolerance_matches": 0,
+            "discrepancies": 0,
+            "null_a": 0,
+            "null_b": 0,
+            "sum_a": 0.0,
+            "sum_b": 0.0,
+            "net_delta": 0.0,
+            "abs_delta_sum": 0.0,
+            "max_delta": 0.0,
+            "transitions": {},
+        }
+        for col_info in aligned_columns
+    }
+
+    reconciled_rows = []
+    exact_count = 0
+    discrepant_count = 0
+    only_a_count = 0
+    only_b_count = 0
+    matched_pairs_count = 0
+
+    for k in all_keys:
+        in_a = k in left_indexed
+        in_b = k in right_indexed
+
+        if in_a and in_b:
+            l_rows = left_indexed[k]
+            r_rows = right_indexed[k]
+            pairs_len = max(len(l_rows), len(r_rows))
+            for p_idx in range(pairs_len):
+                row_a = l_rows[p_idx] if p_idx < len(l_rows) else None
+                row_b = r_rows[p_idx] if p_idx < len(r_rows) else None
+
+                if row_a is not None and row_b is not None:
+                    matched_pairs_count += 1
+                    row_discrepancies = []
+                    col_cells = {}
+
+                    for col_info in aligned_columns:
+                        ca, cb = col_info["col_a"], col_info["col_b"]
+                        va, vb = row_a.get(ca), row_b.get(cb)
+                        stat = column_stats[ca]
+                        stat["total_compared"] += 1
+
+                        na_val = (va is None or pd.isna(va))
+                        nb_val = (vb is None or pd.isna(vb))
+
+                        if na_val and nb_val:
+                            col_cells[ca] = {"val_a": None, "val_b": None, "status": "match", "delta": 0}
+                            stat["exact_matches"] += 1
+                        elif na_val and not nb_val:
+                            col_cells[ca] = {"val_a": None, "val_b": _ai_safe_scalar(vb), "status": "null_a", "delta": None}
+                            stat["null_a"] += 1
+                            stat["discrepancies"] += 1
+                            row_discrepancies.append(ca)
+                        elif not na_val and nb_val:
+                            col_cells[ca] = {"val_a": _ai_safe_scalar(va), "val_b": None, "status": "null_b", "delta": None}
+                            stat["null_b"] += 1
+                            stat["discrepancies"] += 1
+                            row_discrepancies.append(ca)
+                        else:
+                            # Both present
+                            is_num = stat["is_numeric"]
+                            if is_num:
+                                try:
+                                    fa = float(va)
+                                    fb = float(vb)
+                                    delta = round(fb - fa, 6)
+                                    stat["sum_a"] += fa
+                                    stat["sum_b"] += fb
+                                    stat["net_delta"] += delta
+                                    stat["abs_delta_sum"] += abs(delta)
+                                    if abs(delta) > abs(stat["max_delta"]):
+                                        stat["max_delta"] = delta
+
+                                    if tolerance_mode == "percent":
+                                        pct_diff = (abs(delta) / abs(fa) * 100) if fa != 0 else (0.0 if delta == 0 else 100.0)
+                                        within = pct_diff <= max(0.0, float(numeric_tolerance))
+                                    else:
+                                        within = abs(delta) <= max(0.0, float(numeric_tolerance))
+
+                                    if delta == 0:
+                                        col_cells[ca] = {"val_a": _ai_safe_scalar(va), "val_b": _ai_safe_scalar(vb), "status": "match", "delta": 0}
+                                        stat["exact_matches"] += 1
+                                    elif within:
+                                        col_cells[ca] = {"val_a": _ai_safe_scalar(va), "val_b": _ai_safe_scalar(vb), "status": "tolerance", "delta": delta}
+                                        stat["tolerance_matches"] += 1
+                                    else:
+                                        col_cells[ca] = {"val_a": _ai_safe_scalar(va), "val_b": _ai_safe_scalar(vb), "status": "diff", "delta": delta}
+                                        stat["discrepancies"] += 1
+                                        row_discrepancies.append(ca)
+                                except Exception:
+                                    is_num = False
+
+                            if not is_num:
+                                sa = str(va).strip() if trim_whitespace else str(va)
+                                sb = str(vb).strip() if trim_whitespace else str(vb)
+                                if strip_leading_zeros:
+                                    sa = re.sub(r"^0+(?=\d)", "", sa)
+                                    sb = re.sub(r"^0+(?=\d)", "", sb)
+                                sa_cmp = sa.lower() if not case_sensitive else sa
+                                sb_cmp = sb.lower() if not case_sensitive else sb
+
+                                if sa_cmp == sb_cmp:
+                                    col_cells[ca] = {"val_a": _ai_safe_scalar(va), "val_b": _ai_safe_scalar(vb), "status": "match", "delta": None}
+                                    stat["exact_matches"] += 1
+                                else:
+                                    col_cells[ca] = {"val_a": _ai_safe_scalar(va), "val_b": _ai_safe_scalar(vb), "status": "diff", "delta": None}
+                                    stat["discrepancies"] += 1
+                                    row_discrepancies.append(ca)
+                                    trans_key = f"{sa[:30]} ➔ {sb[:30]}"
+                                    stat["transitions"][trans_key] = stat["transitions"].get(trans_key, 0) + 1
+
+                    partition = "exact" if len(row_discrepancies) == 0 else "discrepancy"
+                    if partition == "exact":
+                        exact_count += 1
+                    else:
+                        discrepant_count += 1
+
+                    key_display = ", ".join(f"{k}={row_a.get(k)}" for k in left_keys)
+                    reconciled_rows.append({
+                        "_partition": partition,
+                        "_key": k,
+                        "_key_display": key_display,
+                        "_discrepant_columns": row_discrepancies,
+                        "_discrepancy_count": len(row_discrepancies),
+                        "_values": col_cells,
+                        "_raw_a": {col: _ai_safe_scalar(val) for col, val in row_a.items() if not col.startswith("_")},
+                        "_raw_b": {col: _ai_safe_scalar(val) for col, val in row_b.items() if not col.startswith("_")},
+                    })
+                elif row_a is not None:
+                    only_a_count += 1
+                    key_display = ", ".join(f"{k}={row_a.get(k)}" for k in left_keys)
+                    reconciled_rows.append({
+                        "_partition": "only_a",
+                        "_key": k,
+                        "_key_display": key_display,
+                        "_discrepant_columns": [],
+                        "_discrepancy_count": 0,
+                        "_values": {col_info["col_a"]: {"val_a": _ai_safe_scalar(row_a.get(col_info["col_a"])), "val_b": None, "status": "only_a", "delta": None} for col_info in aligned_columns},
+                        "_raw_a": {col: _ai_safe_scalar(val) for col, val in row_a.items() if not col.startswith("_")},
+                        "_raw_b": {},
+                    })
+                elif row_b is not None:
+                    only_b_count += 1
+                    key_display = ", ".join(f"{k}={row_b.get(k)}" for k in right_keys)
+                    reconciled_rows.append({
+                        "_partition": "only_b",
+                        "_key": k,
+                        "_key_display": key_display,
+                        "_discrepant_columns": [],
+                        "_discrepancy_count": 0,
+                        "_values": {col_info["col_a"]: {"val_a": None, "val_b": _ai_safe_scalar(row_b.get(col_info["col_b"])), "status": "only_b", "delta": None} for col_info in aligned_columns},
+                        "_raw_a": {},
+                        "_raw_b": {col: _ai_safe_scalar(val) for col, val in row_b.items() if not col.startswith("_")},
+                    })
+        elif in_a:
+            for row_a in left_indexed[k]:
+                only_a_count += 1
+                key_display = ", ".join(f"{k}={row_a.get(k)}" for k in left_keys)
+                reconciled_rows.append({
+                    "_partition": "only_a",
+                    "_key": k,
+                    "_key_display": key_display,
+                    "_discrepant_columns": [],
+                    "_discrepancy_count": 0,
+                    "_values": {col_info["col_a"]: {"val_a": _ai_safe_scalar(row_a.get(col_info["col_a"])), "val_b": None, "status": "only_a", "delta": None} for col_info in aligned_columns},
+                    "_raw_a": {col: _ai_safe_scalar(val) for col, val in row_a.items() if not col.startswith("_")},
+                    "_raw_b": {},
+                })
+        elif in_b:
+            for row_b in right_indexed[k]:
+                only_b_count += 1
+                key_display = ", ".join(f"{k}={row_b.get(k)}" for k in right_keys)
+                reconciled_rows.append({
+                    "_partition": "only_b",
+                    "_key": k,
+                    "_key_display": key_display,
+                    "_discrepant_columns": [],
+                    "_discrepancy_count": 0,
+                    "_values": {col_info["col_a"]: {"val_a": None, "val_b": _ai_safe_scalar(row_b.get(col_info["col_b"])), "status": "only_b", "delta": None} for col_info in aligned_columns},
+                    "_raw_a": {},
+                    "_raw_b": {col: _ai_safe_scalar(val) for col, val in row_b.items() if not col.startswith("_")},
+                })
+
+    # Summary metrics & Health score
+    tot_a = len(left_df)
+    tot_b = len(right_df)
+    match_rate_a = round((matched_pairs_count / tot_a * 100) if tot_a else 0.0, 2)
+    match_rate_b = round((matched_pairs_count / tot_b * 100) if tot_b else 0.0, 2)
+    exact_match_pct = round((exact_count / matched_pairs_count * 100) if matched_pairs_count else 0.0, 2)
+    discrepancy_pct = round((discrepant_count / matched_pairs_count * 100) if matched_pairs_count else 0.0, 2)
+    health_score = round((match_rate_a * 0.45 + match_rate_b * 0.15 + exact_match_pct * 0.40), 1)
+
+    if health_score >= 90:
+        health_grade = "Excellent"
+    elif health_score >= 75:
+        health_grade = "Good"
+    elif health_score >= 55:
+        health_grade = "Watch"
+    else:
+        health_grade = "Critical Drift"
+
+    # Column statistics & Automated Anomaly Detection
+    col_summary = []
+    anomalies = []
+    for ca, stat in column_stats.items():
+        tot = stat["total_compared"]
+        disc = stat["discrepancies"]
+        disc_rate = round((disc / tot * 100) if tot else 0.0, 2)
+        match_rate = round(((stat["exact_matches"] + stat["tolerance_matches"]) / tot * 100) if tot else 0.0, 2)
+        mae = round((stat["abs_delta_sum"] / tot) if tot and stat["is_numeric"] else 0.0, 4)
+        net_d = round(stat["net_delta"], 4) if stat["is_numeric"] else None
+
+        top_trans = sorted(stat["transitions"].items(), key=lambda x: x[1], reverse=True)[:3]
+
+        col_summary.append({
+            "column_a": ca,
+            "column_b": stat["col_b"],
+            "is_numeric": stat["is_numeric"],
+            "total_compared": tot,
+            "exact_matches": stat["exact_matches"],
+            "tolerance_matches": stat["tolerance_matches"],
+            "discrepancies": disc,
+            "discrepancy_rate_pct": disc_rate,
+            "match_rate_pct": match_rate,
+            "null_drift_a": stat["null_a"],
+            "null_drift_b": stat["null_b"],
+            "net_variance": net_d,
+            "mean_absolute_error": mae,
+            "max_delta": stat["max_delta"] if stat["is_numeric"] else None,
+            "top_transitions": [{"transition": t, "count": cnt} for t, cnt in top_trans],
+        })
+
+        if stat["is_numeric"] and disc > 3 and abs(net_d or 0) > 0:
+            if abs(stat["net_delta"]) >= (stat["abs_delta_sum"] * 0.80):
+                dir_str = "higher" if (net_d or 0) > 0 else "lower"
+                anomalies.append({
+                    "title": f"Systematic Directional Drift: {ca}",
+                    "severity": "Watch",
+                    "description": f"Values in Dataset B are consistently {dir_str} than Dataset A with a net variance of {net_d:+,} across {disc} discrepant rows (Mean Absolute Error: {mae}).",
+                })
+        if stat["null_b"] >= max(3, int(tot * 0.15)):
+            anomalies.append({
+                "title": f"Null Value Depletion: {ca}",
+                "severity": "Warning",
+                "description": f"{stat['null_b']} records in Dataset B are missing values for '{ca}' where Dataset A contains populated values.",
+            })
+        if top_trans and top_trans[0][1] >= max(3, int(disc * 0.4)):
+            anomalies.append({
+                "title": f"Dominant Categorical Transition: {ca}",
+                "severity": "Insight",
+                "description": f"Frequent value transformation in '{ca}': '{top_trans[0][0]}' occurred across {top_trans[0][1]} records.",
+            })
+
+    col_summary.sort(key=lambda x: (x["discrepancy_rate_pct"], x["discrepancies"]), reverse=True)
+
+    # Filtering for the paginated grid
+    partition_counts = {
+        "all": len(reconciled_rows),
+        "discrepancy": sum(1 for r in reconciled_rows if r["_partition"] == "discrepancy"),
+        "exact": sum(1 for r in reconciled_rows if r["_partition"] == "exact"),
+        "only_a": sum(1 for r in reconciled_rows if r["_partition"] == "only_a"),
+        "only_b": sum(1 for r in reconciled_rows if r["_partition"] == "only_b"),
+    }
+
+    filtered_rows = reconciled_rows
+    if partition_filter and partition_filter != "all":
+        filtered_rows = [r for r in filtered_rows if r["_partition"] == partition_filter]
+
+    if column_filter and column_filter != "all":
+        filtered_rows = [r for r in filtered_rows if column_filter in r.get("_discrepant_columns", []) or r["_partition"] in {"only_a", "only_b"}]
+
+    if search_query:
+        sq = search_query.lower().strip()
+        filtered_rows = [
+            r for r in filtered_rows
+            if sq in str(r.get("_key_display", "")).lower()
+            or sq in str(r.get("_key", "")).lower()
+            or any(sq in str(cell.get("val_a", "")).lower() or sq in str(cell.get("val_b", "")).lower() for cell in r.get("_values", {}).values())
+        ]
+
+    total_filtered_rows = len(filtered_rows)
+    paged_rows = filtered_rows[page_offset : page_offset + page_limit]
+
+    return {
+        "dataset_a": left_name,
+        "dataset_b": right_name,
+        "left_keys": left_keys,
+        "right_keys": right_keys,
+        "all_columns_a": [str(c) for c in left_df.columns],
+        "all_columns_b": [str(c) for c in right_df.columns],
+        "aligned_columns": aligned_columns,
+        "unaligned_columns_a": unaligned_a,
+        "unaligned_columns_b": unaligned_b,
+        "suggested_keys": suggested_keys,
+        "summary": {
+            "total_rows_a": tot_a,
+            "total_rows_b": tot_b,
+            "matched_keys_count": matched_pairs_count,
+            "match_rate_a_pct": match_rate_a,
+            "match_rate_b_pct": match_rate_b,
+            "exact_matches_count": exact_count,
+            "exact_match_pct": exact_match_pct,
+            "discrepant_rows_count": discrepant_count,
+            "discrepancy_pct": discrepancy_pct,
+            "only_a_count": only_a_count,
+            "only_b_count": only_b_count,
+            "reconciliation_health_score": health_score,
+            "health_grade": health_grade,
+        },
+        "tuning": {
+            "case_sensitive": case_sensitive,
+            "trim_whitespace": trim_whitespace,
+            "strip_leading_zeros": strip_leading_zeros,
+            "numeric_tolerance": numeric_tolerance,
+            "tolerance_mode": tolerance_mode,
+        },
+        "column_summary": col_summary,
+        "anomalies": anomalies,
+        "partition_counts": partition_counts,
+        "total_filtered_rows": total_filtered_rows,
+        "page_offset": page_offset,
+        "page_limit": page_limit,
+        "rows": paged_rows,
+    }
+
+
 def _prompt_terms(prompt: str) -> List[str]:
     stop = {
         "the", "and", "for", "with", "from", "that", "this", "what", "which", "where",
@@ -5339,6 +5811,66 @@ HTML = r'''
     :root[data-theme="dark"] .dossierMetaGrid div{background:#1c1912!important;border-color:#3f3824!important;color:#cbd5e1!important}
     :root[data-theme="dark"] .dossierMetaGrid b{color:#94a3b8!important}
     
+    /* Reconciliation Studio Styles */
+    .byoRecKeyBar{background:#fff;border:1px solid #e5dfcf;border-radius:18px;padding:18px;display:flex;flex-direction:column;gap:14px;box-shadow:0 10px 30px rgba(15,23,42,.05)}
+    .byoKeyPills{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    .byoKeyPill{background:#fef9c3;border:1px solid #fde047;border-radius:999px;padding:5px 12px;font-size:.78rem;font-weight:800;color:#725500;cursor:pointer;transition:all .15s ease;display:inline-flex;align-items:center;gap:6px}
+    .byoKeyPill:hover{background:#fef08a;border-color:#eab308;transform:translateY(-1px)}
+    .byoKeyPill.active{background:linear-gradient(135deg,#785900,#c99b20,#f0d271);color:#100d05;border-color:#d4af37}
+    .byoRecTuningGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr)) auto;gap:12px;align-items:end}
+    .reconcileScoreGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
+    .reconcileScoreCard{background:#fff;border:1px solid #e5dfcf;border-radius:18px;padding:16px;box-shadow:0 10px 30px rgba(15,23,42,.05);display:flex;flex-direction:column;gap:6px;position:relative}
+    .reconcileScoreCard .rkLabel{font-size:.74rem;font-weight:850;color:#64748b;text-transform:uppercase;letter-spacing:.05em}
+    .reconcileScoreCard .rkVal{font-size:1.8rem;font-weight:950;color:#0f172a;line-height:1.1}
+    .reconcileScoreCard .rkSub{font-size:.78rem;color:#64748b}
+    .reconcileScoreCard.healthCard{background:linear-gradient(135deg,#fffdf7,#fef3c7);border-color:#fcd34d}
+    
+    .reconcilePartitionBar{display:flex;width:100%;height:14px;border-radius:999px;overflow:hidden;background:#e2e8f0;margin:14px 0 8px;border:1px solid rgba(0,0,0,.08)}
+    .reconcilePartitionBar span{height:100%;transition:width .3s ease}
+    .partExact{background:#16a34a}
+    .partDiscrepant{background:#d97706}
+    .partOnlyA{background:#2563eb}
+    .partOnlyB{background:#9333ea}
+    
+    .reconcileFilterBar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:14px 0}
+    .reconcileTabs{display:flex;gap:6px;flex-wrap:wrap}
+    .reconcileTab{border:1px solid #cbd5e1;background:#f8fafc;color:#475569;border-radius:999px;padding:6px 14px;font-size:.82rem;font-weight:800;cursor:pointer;transition:all .15s ease}
+    .reconcileTab:hover{background:#f1f5f9;border-color:#94a3b8}
+    .reconcileTab.active{background:linear-gradient(135deg,#6f5200,#b98809,#dfbd4d);color:#fff;border-color:#b98809}
+    
+    .diffPill{display:inline-flex;align-items:center;gap:6px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:3px 8px;font-size:.84rem}
+    .diffA{color:#991b1b;font-weight:800;background:rgba(254,226,226,.7);padding:1px 5px;border-radius:4px}
+    .diffB{color:#0369a1;font-weight:800;background:rgba(224,242,254,.7);padding:1px 5px;border-radius:4px}
+    .diffDelta{font-size:.72rem;font-weight:850;color:#c2410c;background:#ffedd5;padding:1px 5px;border-radius:4px}
+    .diffNull{color:#94a3b8;font-style:italic}
+    .diffMatch{color:#15803d;font-weight:600}
+    
+    .recPillExact{background:#dcfce7;color:#166534;border:1px solid #86efac;border-radius:999px;padding:3px 9px;font-size:.72rem;font-weight:900}
+    .recPillDiff{background:#ffedd5;color:#9a3412;border:1px solid #fdba74;border-radius:999px;padding:3px 9px;font-size:.72rem;font-weight:900}
+    .recPillOnlyA{background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;border-radius:999px;padding:3px 9px;font-size:.72rem;font-weight:900}
+    .recPillOnlyB{background:#f3e8ff;color:#6b21a8;border:1px solid #e9d5ff;border-radius:999px;padding:3px 9px;font-size:.72rem;font-weight:900}
+    
+    .recRowDetailGrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    .recRowDetailCol{background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:14px}
+    .recRowDetailCol h4{margin:0 0 10px;font-size:.9rem;color:#0f172a}
+    
+    /* Dark mode for Reconciliation Studio */
+    :root[data-theme="dark"] .byoRecKeyBar{background:#15130e!important;border-color:#3f3824!important;box-shadow:0 12px 36px rgba(0,0,0,.4)!important}
+    :root[data-theme="dark"] .byoKeyPill{background:#2b240f!important;border-color:#796124!important;color:#f0d271!important}
+    :root[data-theme="dark"] .byoKeyPill:hover{background:#382e13!important}
+    :root[data-theme="dark"] .reconcileScoreCard{background:#15130e!important;border-color:#3f3824!important;box-shadow:0 12px 36px rgba(0,0,0,.4)!important}
+    :root[data-theme="dark"] .reconcileScoreCard .rkLabel{color:#94a3b8!important}
+    :root[data-theme="dark"] .reconcileScoreCard .rkVal{color:#f8fafc!important}
+    :root[data-theme="dark"] .reconcileScoreCard.healthCard{background:linear-gradient(135deg,#211a0d,#15130e)!important;border-color:#745e27!important}
+    :root[data-theme="dark"] .reconcileTab{background:#1c1912!important;border-color:#3f3824!important;color:#cbd5e1!important}
+    :root[data-theme="dark"] .reconcileTab:hover{background:#282317!important;color:#f8fafc!important}
+    :root[data-theme="dark"] .diffPill{background:#26180a!important;border-color:#5c3812!important}
+    :root[data-theme="dark"] .diffA{background:#3b1318!important;color:#fca5a5!important}
+    :root[data-theme="dark"] .diffB{background:#0c2d48!important;color:#7dd3fc!important}
+    :root[data-theme="dark"] .diffDelta{background:#431407!important;color:#fdba74!important}
+    :root[data-theme="dark"] .recRowDetailCol{background:#1c1912!important;border-color:#3f3824!important}
+    :root[data-theme="dark"] .recRowDetailCol h4{color:#f8fafc!important}
+
     @media(max-width:960px){
       .aiInsightsKpiGrid,.dossierStatsGrid,.dossierMetaGrid{grid-template-columns:repeat(2,minmax(0,1fr))}
       .aiDiagnosticsGrid{grid-template-columns:1fr}
@@ -5470,11 +6002,11 @@ const navSets={
       ['More',[['copilot','DART Copilot'],['profile','Profile'],['settings','Settings']]]
     ],
   medicaid:[['Overview',[['medicaid-home','Dashboard'],['medicaid-heatmap','US Heatmap'],['medicaid-exec','Executive Brief']]],['States',[['medicaid-states','State Explorer'],['medicaid-compare','Compare States'],['medicaid-analytics','Analytics']]],['Intelligence',[['medicaid-ai','AI Insights'],['medicaid-chat','CMS Q&A']]],['Claims',[['medicaid-claims','Claims Analysis'],['medicaid-optimize','Optimize Spending'],['medicaid-methodology','Methodology']]],['More',[['profile','Profile'],['settings','Settings']]]],
-  byo:[['Workspace',[['byo-home','DIY Home'],['byo-library','Dataset Library'],['byo-lab','Upload Data'],['byo-raw','Raw Data Editor'],['byo-email','Email Alerts']]],['Analyze',[['byo-compare','Compare Lab'],['byo-quality','Schema & Quality'],['byo-preview','Data Explorer']]],['AI',[['byo-ai','AI Analyst']]],['Output',[['byo-export','Export Center']]],['More',[['profile','Profile'],['settings','Settings']]]],
+  byo:[['Workspace',[['byo-home','DIY Home'],['byo-library','Dataset Library'],['byo-lab','Upload Data'],['byo-raw','Raw Data Editor'],['byo-email','Email Alerts']]],['Analyze',[['byo-reconcile','Reconciliation Studio'],['byo-compare','Compare Lab'],['byo-quality','Schema & Quality'],['byo-preview','Data Explorer']]],['AI',[['byo-ai','AI Analyst']]],['Output',[['byo-export','Export Center']]],['More',[['profile','Profile'],['settings','Settings']]]],
 };
 const workspaceLabels={medicare:'Medicare',medicaid:'Medicaid',byo:'Build Your Own'};
 const workspaceHomes={medicare:'home',medicaid:'medicaid-home',byo:'byo-home'};
-const personaLandingLabels={auto:'Recommended for my role',home:'Command Center',briefing:'My Briefing',riskcenter:'Risk Center',actioncenter:'Remediation Center',catalog:'Mapping Catalog',insights:'AI Insights',briefbuilder:'Executive Brief','medicaid-home':'Medicaid Home','byo-home':'DIY Home','byo-compare':'Compare Lab','byo-quality':'Schema & Quality','byo-raw':'Raw Data Editor','byo-email':'Email Alerts','byo-ai':'AI Analyst'};
+const personaLandingLabels={auto:'Recommended for my role',home:'Command Center',briefing:'My Briefing',riskcenter:'Risk Center',actioncenter:'Remediation Center',catalog:'Mapping Catalog',insights:'AI Insights',briefbuilder:'Executive Brief','medicaid-home':'Medicaid Home','byo-home':'DIY Home','byo-reconcile':'Reconciliation Studio','byo-compare':'Compare Lab','byo-quality':'Schema & Quality','byo-raw':'Raw Data Editor','byo-email':'Email Alerts','byo-ai':'AI Analyst'};
 function personaPriorityLimit(meta){return Number(meta?.persona_effects?.priority_limit||8);}
 function currentWorkspacePageIds(){return new Set(activeNavGroups().flatMap(g=>g[1].map(x=>x[0])));}
 function personaRecommendations(meta){const allowed=currentWorkspacePageIds();return (meta?.persona_effects?.recommended_pages||[]).filter(x=>allowed.has(x.id));}
@@ -5484,7 +6016,7 @@ function personaLandingOptions(selected='auto'){const allowed=currentWorkspacePa
 
 const filterPages=new Set(['home','briefing','explorer','catalog','briefbuilder','riskcenter','insights','scorecards','actioncenter','governance']);
 const defaultChatHistories={medicare:{activeId:'general',sessions:[{id:'general',title:'DART Copilot',messages:[]}]},medicaid:{activeId:'medicaid',sessions:[{id:'medicaid',title:'CMS Q&A',messages:[]}]},byo:{activeId:'byo',sessions:[{id:'byo',title:'AI Analyst',messages:[]}]} };const persistedChatHistories=(()=>{try{const raw=sessionStorage.getItem('dart_chat_histories_v1');if(!raw)return null;const parsed=JSON.parse(raw);return parsed&&typeof parsed==='object'?parsed:null;}catch(_err){return null;}})();
-let state={workspace:sessionStorage.getItem('dart_workspace')||'medicare',page:'home',priorityQueueLimit:10,filters:{streams:null,classes:null,tiers:null,reasons:null,min_rate:0,min_impact:0,min_unmatched:0,actions_only:false,search:'',custom_filters:[]},meta:null,emailEditingId:null,rawSearch:'',rawOffset:0,rawLimit:75,emailAgent:null,rawData:null,byoLeft:sessionStorage.getItem('dart_byo_left')||'',byoRight:sessionStorage.getItem('dart_byo_right')||'',byoEditFile:sessionStorage.getItem('dart_byo_edit_file')||'',byoEmailFile:sessionStorage.getItem('dart_byo_email_file')||'',byoRawSearch:'',byoRawOffset:0,byoRawLimit:75,byoRawData:null,byoEmailEditingId:null,byoEmailAgent:null,byoCompare:null,byoChat:null,medicaidStateId:1,medicaidStateStatus:'',medicaidStateType:'',medicaidIssueType:'',medicaidMinTotal:3,medicaidHeatMetric:'quality_score',medicaidHeatStatus:'',medicaidHeatType:'',medicaidHeatSelectedId:0,medicaidHeatRows:[],medicaidStateReturnPage:'medicaid-states',medicaidIssueLabels:null,medicaidChat:[],chatHistories:{...defaultChatHistories,...(persistedChatHistories||{})},assistantBubbleOpen:false};
+let state={workspace:sessionStorage.getItem('dart_workspace')||'medicare',page:'home',priorityQueueLimit:10,filters:{streams:null,classes:null,tiers:null,reasons:null,min_rate:0,min_impact:0,min_unmatched:0,actions_only:false,search:'',custom_filters:[]},meta:null,emailEditingId:null,rawSearch:'',rawOffset:0,rawLimit:75,emailAgent:null,rawData:null,byoLeft:sessionStorage.getItem('dart_byo_left')||'',byoRight:sessionStorage.getItem('dart_byo_right')||'',byoEditFile:sessionStorage.getItem('dart_byo_edit_file')||'',byoEmailFile:sessionStorage.getItem('dart_byo_email_file')||'',byoRawSearch:'',byoRawOffset:0,byoRawLimit:75,byoRawData:null,byoEmailEditingId:null,byoEmailAgent:null,byoCompare:null,byoChat:null,byoRecLeftKeys:null,byoRecRightKeys:null,byoRecCaseSens:false,byoRecTrim:true,byoRecStripZeros:false,byoRecTol:0.0,byoRecTolMode:'absolute',byoRecFilter:'all',byoRecSearch:'',byoRecColFilter:'',byoRecOffset:0,byoRecLimit:50,byoRecData:null,byoRecModalRow:null,byoRecAiDiagnosis:null,medicaidStateId:1,medicaidStateStatus:'',medicaidStateType:'',medicaidIssueType:'',medicaidMinTotal:3,medicaidHeatMetric:'quality_score',medicaidHeatStatus:'',medicaidHeatType:'',medicaidHeatSelectedId:0,medicaidHeatRows:[],medicaidStateReturnPage:'medicaid-states',medicaidIssueLabels:null,medicaidChat:[],chatHistories:{...defaultChatHistories,...(persistedChatHistories||{})},assistantBubbleOpen:false};
 let modalState={key:null,title:'',items:[],selected:[]};
 function esc(v){return String(v??'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));}
 function mdInline(v){
@@ -7217,6 +7749,464 @@ async function runByoEmail(id,send){try{const r=await postJson('/api/byo/email-a
 async function testByoEmail(id){try{const r=await postJson('/api/byo/email-agent/test/'+encodeURIComponent(id),{});toast(r.status||'Test email sent');}catch(err){toast('Test failed: '+String(err.message||err).slice(0,160));}}
 async function checkAllByoEmails(){const r=await postJson('/api/byo/email-agent/check',{});toast(`Checked ${r.results?.length||0} enabled BYO alert(s)`);await render();}
 async function previewByoEmailTemplate(){try{const r=await postJson('/api/byo/email-agent/preview',collectByoEmailTemplate());const holder=document.getElementById('byoEmailPreviewHolder');holder.innerHTML=`<div class="panel"><h3>Preview · ${intFmt(r.matches)} current matching row(s)</h3><div class="emailPreview"><iframe id="byoEmailPreviewFrame"></iframe></div></div>`;document.getElementById('byoEmailPreviewFrame').srcdoc=r.html||'<p>No preview available.</p>';}catch(err){toast('Preview failed: '+String(err.message||err).slice(0,160));}}
+function byoReconcileScoreGrid(s){
+  return `<div class="reconcileScoreGrid">
+    <div class="reconcileScoreCard healthCard">
+      <div class="rkLabel">Reconciliation Health</div>
+      <div class="rkVal" style="color:${s.reconciliation_health_score>=80?'#15803d':s.reconciliation_health_score>=60?'#b45309':'#b91c1c'}">${s.reconciliation_health_score}<small style="font-size:1rem;color:var(--muted)">/100</small></div>
+      <div class="rkSub"><span class="pill ${s.health_grade==='Excellent'||s.health_grade==='Good'?'Stable':'Watch'}" style="padding:2px 8px;font-size:.72rem">${esc(s.health_grade)}</span> Overall integrity</div>
+    </div>
+    <div class="reconcileScoreCard">
+      <div class="rkLabel">Matched Records</div>
+      <div class="rkVal">${intFmt(s.matched_keys_count)}</div>
+      <div class="rkSub"><b>${s.match_rate_a_pct}%</b> of Dataset A · <b>${s.match_rate_b_pct}%</b> of B</div>
+    </div>
+    <div class="reconcileScoreCard">
+      <div class="rkLabel">Exact Matches</div>
+      <div class="rkVal" style="color:#16a34a">${intFmt(s.exact_matches_count)}</div>
+      <div class="rkSub"><span class="recPillExact">🟢 ${s.exact_match_pct}%</span> identical across fields</div>
+    </div>
+    <div class="reconcileScoreCard">
+      <div class="rkLabel">Value Discrepancies</div>
+      <div class="rkVal" style="color:#d97706">${intFmt(s.discrepant_rows_count)}</div>
+      <div class="rkSub"><span class="recPillDiff">🟠 ${s.discrepancy_pct}%</span> matched keys with drift</div>
+    </div>
+    <div class="reconcileScoreCard">
+      <div class="rkLabel">Unmatched Population</div>
+      <div class="rkVal">${intFmt(s.only_a_count + s.only_b_count)}</div>
+      <div class="rkSub"><span class="recPillOnlyA">🔵 ${intFmt(s.only_a_count)} only in A</span> · <span class="recPillOnlyB">🟣 ${intFmt(s.only_b_count)} only in B</span></div>
+    </div>
+  </div>`;
+}
+
+function byoReconcileKeyBar(data){
+  const leftKeys = data.left_keys || [];
+  const rightKeys = data.right_keys || [];
+  const suggested = data.suggested_keys || [];
+  const tuning = data.tuning || {};
+
+  const suggestedPills = suggested.map(k => {
+    const isAct = leftKeys.includes(k.col_a) && rightKeys.includes(k.col_b);
+    return `<button class="byoKeyPill ${isAct?'active':''}" type="button" onclick="setByoRecKeys('${safeArg(k.col_a)}','${safeArg(k.col_b)}')">⚡ Key: <b>${esc(k.col_a)}</b> ↔ <b>${esc(k.col_b)}</b> <small>(${k.match_rate}% match · ${k.uniqueness_a}% unq)</small></button>`;
+  }).join('');
+
+  const optA = (data.all_columns_a||[]).map(c=>`<option value="${esc(c)}" ${leftKeys.includes(c)?'selected':''}>${esc(c)}</option>`).join('');
+  const optB = (data.all_columns_b||[]).map(c=>`<option value="${esc(c)}" ${rightKeys.includes(c)?'selected':''}>${esc(c)}</option>`).join('');
+
+  return `<div class="byoRecKeyBar">
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px">
+        <b style="font-size:.92rem;color:var(--text)">1 · Select Join Key(s) & Candidate Presets</b>
+        <span class="muted" style="font-size:.78rem">Keys match records across datasets even if column names or casing differ</span>
+      </div>
+      ${suggestedPills ? `<div class="byoKeyPills">${suggestedPills}</div>` : ''}
+    </div>
+    <div class="byoRecTuningGrid">
+      <div class="field">
+        <label>Dataset A Key Field</label>
+        <select id="byoRecLeftKeySelect" onchange="setByoRecKeys(this.value, document.getElementById('byoRecRightKeySelect').value)">${optA}</select>
+      </div>
+      <div class="field">
+        <label>Dataset B Key Field</label>
+        <select id="byoRecRightKeySelect" onchange="setByoRecKeys(document.getElementById('byoRecLeftKeySelect').value, this.value)">${optB}</select>
+      </div>
+      <div class="field">
+        <label>Numeric Tolerance (${tuning.tolerance_mode==='percent'?'%':'$ / unit'})</label>
+        <div style="display:flex;gap:4px">
+          <input type="number" id="byoRecTolInput" step="any" min="0" value="${tuning.numeric_tolerance||0}" style="padding:8px 10px;font-size:.85rem;width:100px">
+          <select id="byoRecTolModeSelect" style="padding:8px 6px;font-size:.82rem;width:90px">
+            <option value="absolute" ${tuning.tolerance_mode==='absolute'?'selected':''}>Absolute</option>
+            <option value="percent" ${tuning.tolerance_mode==='percent'?'selected':''}>Percent %</option>
+          </select>
+        </div>
+      </div>
+      <div class="field" style="display:flex;gap:12px;align-items:center;padding-bottom:6px;flex-wrap:wrap">
+        <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:.8rem;text-transform:none">
+          <input type="checkbox" id="byoRecTrimCheck" ${tuning.trim_whitespace?'checked':''}> Trim spaces
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:.8rem;text-transform:none">
+          <input type="checkbox" id="byoRecStripZerosCheck" ${tuning.strip_leading_zeros?'checked':''}> Strip leading 0s
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:.8rem;text-transform:none">
+          <input type="checkbox" id="byoRecCaseSensCheck" ${tuning.case_sensitive?'checked':''}> Case sensitive
+        </label>
+      </div>
+      <div>
+        <button class="btn" type="button" onclick="applyByoRecTuning()" style="height:42px;padding:0 20px">⚡ Re-Reconcile</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function byoReconcilePartitionBar(counts){
+  const tot = counts.all || 1;
+  const pExact = ((counts.exact || 0) / tot * 100).toFixed(1);
+  const pDisc = ((counts.discrepancy || 0) / tot * 100).toFixed(1);
+  const pOnlyA = ((counts.only_a || 0) / tot * 100).toFixed(1);
+  const pOnlyB = ((counts.only_b || 0) / tot * 100).toFixed(1);
+
+  return `<div>
+    <div class="reconcilePartitionBar">
+      <span class="partExact" style="width:${pExact}%" title="Exact Matches: ${pExact}%"></span>
+      <span class="partDiscrepant" style="width:${pDisc}%" title="Discrepancies: ${pDisc}%"></span>
+      <span class="partOnlyA" style="width:${pOnlyA}%" title="Only in Dataset A: ${pOnlyA}%"></span>
+      <span class="partOnlyB" style="width:${pOnlyB}%" title="Only in Dataset B: ${pOnlyB}%"></span>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:.76rem;color:var(--muted);flex-wrap:wrap;gap:8px">
+      <span>🟢 Exact Matches: <b>${pExact}%</b> (${intFmt(counts.exact)})</span>
+      <span>🟠 Value Discrepancies: <b>${pDisc}%</b> (${intFmt(counts.discrepancy)})</span>
+      <span>🔵 Only in A: <b>${pOnlyA}%</b> (${intFmt(counts.only_a)})</span>
+      <span>🟣 Only in B: <b>${pOnlyB}%</b> (${intFmt(counts.only_b)})</span>
+    </div>
+  </div>`;
+}
+
+function byoReconcileGrid(data){
+  const counts = data.partition_counts || {};
+  const activeTab = state.byoRecFilter || 'all';
+  const aligned = data.aligned_columns || [];
+  const rows = data.rows || [];
+  const totalFiltered = data.total_filtered_rows || 0;
+  const offset = data.page_offset || 0;
+  const limit = data.page_limit || 50;
+  const colOpt = aligned.map(c=>`<option value="${esc(c.col_a)}" ${state.byoRecColFilter===c.col_a?'selected':''}>Diff in: ${esc(c.col_a)}</option>`).join('');
+
+  const rowHtml = rows.map((r, idx) => {
+    const p = r._partition;
+    const badge = p==='exact' ? '<span class="recPillExact">🟢 Exact</span>' :
+                  p==='discrepancy' ? `<span class="recPillDiff">🟠 ${r._discrepancy_count} Diff${r._discrepancy_count===1?'':'s'}</span>` :
+                  p==='only_a' ? '<span class="recPillOnlyA">🔵 Only A</span>' :
+                  '<span class="recPillOnlyB">🟣 Only B</span>';
+
+    const vals = r._values || {};
+    const cells = aligned.map(col => {
+      const ca = col.col_a;
+      const cdata = vals[ca] || {};
+      const st = cdata.status;
+      if(st === 'match'){
+        return `<td style="color:var(--muted);font-size:.84rem">${cdata.val_a===null?'<span class="diffNull">null</span>':esc(cdata.val_a)}</td>`;
+      }
+      if(st === 'tolerance'){
+        return `<td><span class="diffPill" style="background:#f0fdf4;border-color:#bbf7d0"><span style="color:#15803d;font-weight:700">${esc(cdata.val_a)}</span> ➔ <span style="color:#0369a1;font-weight:700">${esc(cdata.val_b)}</span> <span class="diffDelta" style="background:#dcfce7;color:#166534">Δ ${cdata.delta>0?'+':''}${cdata.delta}</span></span></td>`;
+      }
+      if(st === 'diff'){
+        return `<td><span class="diffPill"><span class="diffA">${cdata.val_a===null?'<i class="diffNull">null</i>':esc(cdata.val_a)}</span> ➔ <span class="diffB">${cdata.val_b===null?'<i class="diffNull">null</i>':esc(cdata.val_b)}</span> ${cdata.delta!==null?`<span class="diffDelta">Δ ${cdata.delta>0?'+':''}${cdata.delta}</span>`:''}</span></td>`;
+      }
+      if(st === 'null_a'){
+        return `<td><span class="diffPill"><span class="diffNull">null</span> ➔ <span class="diffB">${esc(cdata.val_b)}</span></span></td>`;
+      }
+      if(st === 'null_b'){
+        return `<td><span class="diffPill"><span class="diffA">${esc(cdata.val_a)}</span> ➔ <span class="diffNull">null</span></span></td>`;
+      }
+      if(st === 'only_a'){
+        return `<td style="color:#1e40af;font-size:.84rem">${cdata.val_a===null?'—':esc(cdata.val_a)}</td>`;
+      }
+      if(st === 'only_b'){
+        return `<td style="color:#6b21a8;font-size:.84rem">${cdata.val_b===null?'—':esc(cdata.val_b)}</td>`;
+      }
+      return `<td>—</td>`;
+    }).join('');
+
+    return `<tr class="reconcileRow" onclick="openByoRecRowModal(${idx})" style="cursor:pointer">
+      <td style="font-weight:700;color:var(--muted)">${offset + idx + 1}</td>
+      <td style="font-weight:800;color:var(--text);font-family:monospace">${esc(r._key_display || r._key)}</td>
+      <td>${badge}</td>
+      ${cells}
+      <td><button class="btn secondary small" type="button" onclick="event.stopPropagation();openByoRecRowModal(${idx})" style="font-size:.72rem;padding:3px 8px">Inspect</button></td>
+    </tr>`;
+  }).join('');
+
+  return `<div class="panel">
+    <div class="reconcileFilterBar">
+      <div class="reconcileTabs">
+        <button class="reconcileTab ${activeTab==='all'?'active':''}" type="button" onclick="setByoRecFilter('all')">All Records (${intFmt(counts.all||0)})</button>
+        <button class="reconcileTab ${activeTab==='discrepancy'?'active':''}" type="button" onclick="setByoRecFilter('discrepancy')" style="${activeTab==='discrepancy'?'':'color:#c2410c'}">Discrepancies (${intFmt(counts.discrepancy||0)})</button>
+        <button class="reconcileTab ${activeTab==='exact'?'active':''}" type="button" onclick="setByoRecFilter('exact')" style="${activeTab==='exact'?'':'color:#15803d'}">Exact Matches (${intFmt(counts.exact||0)})</button>
+        <button class="reconcileTab ${activeTab==='only_a'?'active':''}" type="button" onclick="setByoRecFilter('only_a')" style="${activeTab==='only_a'?'':'color:#1d4ed8'}">Only in A (${intFmt(counts.only_a||0)})</button>
+        <button class="reconcileTab ${activeTab==='only_b'?'active':''}" type="button" onclick="setByoRecFilter('only_b')" style="${activeTab==='only_b'?'':'color:#7e22ce'}">Only in B (${intFmt(counts.only_b||0)})</button>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="byoRecColFilterSelect" onchange="state.byoRecColFilter=this.value;state.byoRecOffset=0;render()" style="padding:6px 10px;font-size:.82rem;border-radius:8px">
+          <option value="">All Aligned Columns</option>
+          ${colOpt}
+        </select>
+        <input id="byoRecSearchBox" placeholder="🔍 Search key or cell values..." value="${esc(state.byoRecSearch||'')}" onkeydown="if(event.key==='Enter')applyByoRecSearch()" style="padding:6px 12px;font-size:.82rem;border-radius:8px;width:200px">
+        <button class="btn secondary small" type="button" onclick="applyByoRecSearch()">Filter</button>
+        ${state.byoRecSearch?`<button class="btn ghost small" type="button" onclick="clearByoRecSearch()">Clear</button>`:''}
+      </div>
+    </div>
+    
+    ${rows.length ? `
+    <div class="tableWrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th style="width:50px">#</th>
+            <th>Match Key (${esc((data.left_keys||[]).join('+'))})</th>
+            <th style="width:110px">Status</th>
+            ${aligned.map(c=>`<th>${esc(c.col_a)} <small style="color:var(--muted)">↔ ${esc(c.col_b)}</small></th>`).join('')}
+            <th style="width:70px">Inspect</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowHtml}
+        </tbody>
+      </table>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;flex-wrap:wrap;gap:8px">
+      <div class="muted" style="font-size:.82rem">Showing ${offset + 1} – ${Math.min(offset + limit, totalFiltered)} of ${intFmt(totalFiltered)} matching records</div>
+      <div style="display:flex;gap:6px">
+        <button class="btn secondary small" type="button" onclick="byoRecPage(-1)" ${offset===0?'disabled':''}>◀ Previous</button>
+        <button class="btn secondary small" type="button" onclick="byoRecPage(1)" ${offset + limit >= totalFiltered?'disabled':''}>Next ▶</button>
+      </div>
+    </div>
+    ` : `<div class="empty">No records found matching partition '${activeTab}' and search query.</div>`}
+  </div>`;
+}
+
+function byoReconcileDriftMatrix(data){
+  const cols = data.column_summary || [];
+  if(!cols.length) return '';
+
+  return `<div class="panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+      <div>
+        <h3>Column Drift & Value Variance Matrix</h3>
+        <p class="muted">Ranked breakdown of field-level error rates, numeric net variance, and value transition patterns</p>
+      </div>
+    </div>
+    <div class="tableWrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Field (A ↔ B)</th>
+            <th>Type</th>
+            <th>Evaluated</th>
+            <th>Discrepancy Rate</th>
+            <th>Exact Match Rate</th>
+            <th>Net Variance (B − A)</th>
+            <th>Mean Abs Error</th>
+            <th>Null Drift (A / B)</th>
+            <th>Top Observed Value Shift</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${cols.map(c => {
+            const barWidth = Math.min(100, c.discrepancy_rate_pct);
+            const topTrans = c.top_transitions && c.top_transitions.length ? `${esc(c.top_transitions[0].transition)} <small>(${c.top_transitions[0].count}x)</small>` : '—';
+            return `<tr>
+              <td><b>${esc(c.column_a)}</b> <span class="muted">↔ ${esc(c.column_b)}</span></td>
+              <td><span class="pill" style="font-size:.7rem;padding:2px 7px">${c.is_numeric?'Numeric':'Text / Cat'}</span></td>
+              <td>${intFmt(c.total_compared)}</td>
+              <td>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span style="font-weight:800;color:${c.discrepancy_rate_pct>20?'#b91c1c':c.discrepancy_rate_pct>0?'#c2410c':'#16a34a'}">${c.discrepancy_rate_pct}%</span>
+                  <div style="width:60px;height:6px;background:#e2e8f0;border-radius:999px;overflow:hidden">
+                    <div style="width:${barWidth}%;height:100%;background:${c.discrepancy_rate_pct>20?'#b91c1c':'#ea580c'}"></div>
+                  </div>
+                </div>
+              </td>
+              <td style="color:#16a34a;font-weight:700">${c.match_rate_pct}%</td>
+              <td style="font-family:monospace;font-weight:700">${c.net_variance !== null ? (c.net_variance > 0 ? `+${c.net_variance.toLocaleString()}` : c.net_variance.toLocaleString()) : '—'}</td>
+              <td style="font-family:monospace">${c.mean_absolute_error !== null ? c.mean_absolute_error.toLocaleString() : '—'}</td>
+              <td>${c.null_drift_a ? `<span style="color:#b91c1c">${c.null_drift_a} in A</span>` : '0'} / ${c.null_drift_b ? `<span style="color:#b91c1c">${c.null_drift_b} in B</span>` : '0'}</td>
+              <td style="font-size:.82rem">${topTrans}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function byoReconcileAnomalies(anomalies){
+  if(!anomalies || !anomalies.length) return '';
+  return `<div class="panel" style="border-left:5px solid #d4af37">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <span class="workspaceBadge" style="margin-bottom:0">⚡ Automated Anomaly Detection</span>
+      <h3 style="margin:0">${anomalies.length} Systematic Drift Pattern${anomalies.length===1?'':'s'} Discovered</h3>
+    </div>
+    <div class="grid grid3">
+      ${anomalies.map(a => `
+        <div style="background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <b style="font-size:.88rem;color:var(--text)">${esc(a.title)}</b>
+            <span class="pill ${a.severity==='Warning'?'Critical':a.severity==='Watch'?'Elevated':'Stable'}" style="font-size:.68rem;padding:2px 7px">${esc(a.severity)}</span>
+          </div>
+          <p class="muted" style="font-size:.82rem;margin:0;line-height:1.45">${esc(a.description)}</p>
+        </div>
+      `).join('')}
+    </div>
+  </div>`;
+}
+
+function byoReconcilePage(info, data){
+  const modalRow = state.byoRecModalRow;
+  let modalHtml = '';
+  if(modalRow){
+    const leftCols = Object.keys(modalRow._raw_a || {});
+    const rightCols = Object.keys(modalRow._raw_b || {});
+    const discCols = new Set(modalRow._discrepant_columns || []);
+
+    modalHtml = `<div class="modalBackdrop" style="display:flex" onclick="if(event.target===this)closeByoRecRowModal()">
+      <div class="modal" style="width:min(900px,96vw)">
+        <div class="modalHeader">
+          <div>
+            <h2>Record Deep-Dive: ${esc(modalRow._key_display || modalRow._key)}</h2>
+            <p class="muted">Side-by-side attribute inspection across Dataset A ('${esc(data.dataset_a)}') and Dataset B ('${esc(data.dataset_b)}')</p>
+          </div>
+          <button class="btn ghost" onclick="closeByoRecRowModal()">Close</button>
+        </div>
+        <div class="recRowDetailGrid" style="margin-top:14px">
+          <div class="recRowDetailCol">
+            <h4>Dataset A: ${esc(data.dataset_a)}</h4>
+            <div class="tableWrap">
+              <table class="table" style="min-width:auto">
+                <thead><tr><th>Field</th><th>Value</th></tr></thead>
+                <tbody>
+                  ${leftCols.map(c=>`<tr style="${discCols.has(c)?'background:rgba(254,226,226,.25)':''}"><td><b>${esc(c)}</b></td><td>${modalRow._raw_a[c]===null?'<i class="diffNull">null</i>':esc(modalRow._raw_a[c])}</td></tr>`).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="recRowDetailCol">
+            <h4>Dataset B: ${esc(data.dataset_b)}</h4>
+            <div class="tableWrap">
+              <table class="table" style="min-width:auto">
+                <thead><tr><th>Field</th><th>Value</th></tr></thead>
+                <tbody>
+                  ${rightCols.map(c=>`<tr style="${discCols.has(c)?'background:rgba(224,242,254,.25)':''}"><td><b>${esc(c)}</b></td><td>${modalRow._raw_b[c]===null?'<i class="diffNull">null</i>':esc(modalRow._raw_b[c])}</td></tr>`).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <br>
+        <div class="heroActions">
+          <button class="btn" onclick="closeByoRecRowModal()">Done</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  let aiDiagModal = '';
+  if(state.byoRecAiDiagnosis){
+    aiDiagModal = `<div class="modalBackdrop" style="display:flex" onclick="if(event.target===this)closeByoRecAiModal()">
+      <div class="modal" style="width:min(850px,96vw)">
+        <div class="modalHeader">
+          <div>
+            <h2>🤖 AI Reconciliation Diagnosis Report</h2>
+            <p class="muted">Automated root-cause analysis across ${esc(data.dataset_a)} and ${esc(data.dataset_b)}</p>
+          </div>
+          <button class="btn ghost" onclick="closeByoRecAiModal()">Close</button>
+        </div>
+        <div class="aiMarkdown" style="margin-top:16px;line-height:1.65;font-size:.9rem">
+          ${renderMarkdown(state.byoRecAiDiagnosis)}
+        </div>
+        <br>
+        <div class="heroActions">
+          <button class="btn" onclick="closeByoRecAiModal()">Close Diagnosis</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  return `
+    ${byoReconcileScoreGrid(data.summary)}
+    <br>
+    ${byoReconcileKeyBar(data)}
+    <br>
+    ${byoReconcilePartitionBar(data.partition_counts)}
+    <br>
+    ${byoReconcileAnomalies(data.anomalies)}
+    <br>
+    ${byoReconcileGrid(data)}
+    <br>
+    ${byoReconcileDriftMatrix(data)}
+    ${modalHtml}
+    ${aiDiagModal}
+  `;
+}
+
+async function setByoRecKeys(colA, colB){
+  state.byoRecLeftKeys = [colA];
+  state.byoRecRightKeys = [colB];
+  state.byoRecOffset = 0;
+  await render();
+}
+
+async function applyByoRecTuning(){
+  const leftKey = document.getElementById('byoRecLeftKeySelect')?.value;
+  const rightKey = document.getElementById('byoRecRightKeySelect')?.value;
+  if(leftKey) state.byoRecLeftKeys = [leftKey];
+  if(rightKey) state.byoRecRightKeys = [rightKey];
+
+  state.byoRecTol = Number(document.getElementById('byoRecTolInput')?.value || 0);
+  state.byoRecTolMode = document.getElementById('byoRecTolModeSelect')?.value || 'absolute';
+  state.byoRecTrim = document.getElementById('byoRecTrimCheck')?.checked !== false;
+  state.byoRecStripZeros = Boolean(document.getElementById('byoRecStripZerosCheck')?.checked);
+  state.byoRecCaseSens = Boolean(document.getElementById('byoRecCaseSensCheck')?.checked);
+  state.byoRecOffset = 0;
+  toast('Reconciliation updated');
+  await render();
+}
+
+async function setByoRecFilter(partition){
+  state.byoRecFilter = partition;
+  state.byoRecOffset = 0;
+  await render();
+}
+
+async function applyByoRecSearch(){
+  state.byoRecSearch = document.getElementById('byoRecSearchBox')?.value.trim() || '';
+  state.byoRecOffset = 0;
+  await render();
+}
+
+async function clearByoRecSearch(){
+  state.byoRecSearch = '';
+  state.byoRecOffset = 0;
+  await render();
+}
+
+async function byoRecPage(dir){
+  state.byoRecOffset = Math.max(0, (state.byoRecOffset || 0) + dir * (state.byoRecLimit || 50));
+  await render();
+}
+
+function openByoRecRowModal(idx){
+  if(state.byoRecData && state.byoRecData.rows && state.byoRecData.rows[idx]){
+    state.byoRecModalRow = state.byoRecData.rows[idx];
+    render();
+  }
+}
+
+function closeByoRecRowModal(){
+  state.byoRecModalRow = null;
+  render();
+}
+
+async function askByoRecAiDiagnosis(){
+  if(!byoPairReady()){toast('Select two datasets first');return;}
+  toast('Generating AI reconciliation diagnosis...');
+  try{
+    const res = await postJson('/api/byo/reconcile/ai-diagnose', {
+      left: state.byoLeft,
+      right: state.byoRight,
+      reconciliation_data: state.byoRecData
+    });
+    state.byoRecAiDiagnosis = res.diagnosis || 'Diagnosis completed.';
+    await render();
+  }catch(err){
+    toast('AI Diagnosis failed: '+String(err.message||err).slice(0,160));
+  }
+}
+
+function closeByoRecAiModal(){
+  state.byoRecAiDiagnosis = null;
+  render();
+}
+
 async function renderByo(meta,info){
   ensureByoSelections(info);
   state.byoInfo=info;
@@ -7224,6 +8214,31 @@ async function renderByo(meta,info){
   if(byoPairReady()&&['byo-compare','byo-quality','byo-preview','byo-ai','byo-export'].includes(state.page)){
     try{comparison=await postJson('/api/byo/compare',{left:state.byoLeft,right:state.byoRight});state.byoCompare=comparison;}
     catch(err){state.byoCompare=null;toast('Comparison failed: '+String(err.message||err).slice(0,160));}
+  }
+  let reconcileData=null;
+  if(byoPairReady()&&state.page==='byo-reconcile'){
+    try{
+      reconcileData=await postJson('/api/byo/reconcile',{
+        left:state.byoLeft,
+        right:state.byoRight,
+        left_keys:state.byoRecLeftKeys||[],
+        right_keys:state.byoRecRightKeys||[],
+        case_sensitive:state.byoRecCaseSens||false,
+        trim_whitespace:state.byoRecTrim!==false,
+        strip_leading_zeros:state.byoRecStripZeros||false,
+        numeric_tolerance:state.byoRecTol||0,
+        tolerance_mode:state.byoRecTolMode||'absolute',
+        partition_filter:state.byoRecFilter||'all',
+        search_query:state.byoRecSearch||'',
+        column_filter:state.byoRecColFilter||'',
+        page_offset:state.byoRecOffset||0,
+        page_limit:state.byoRecLimit||50
+      });
+      state.byoRecData=reconcileData;
+    }catch(err){
+      state.byoRecData=null;
+      toast('Reconciliation failed: '+String(err.message||err).slice(0,160));
+    }
   }
   let rawInfo=null,emailInfo=null;
   if(state.page==='byo-raw'&&state.byoEditFile)rawInfo=await api(`/api/byo/raw-data?filename=${encodeURIComponent(state.byoEditFile)}&search=${encodeURIComponent(state.byoRawSearch)}&offset=${state.byoRawOffset}&limit=${state.byoRawLimit}`);
@@ -7237,6 +8252,8 @@ async function renderByo(meta,info){
     html=`<div class="hero"><span class="workspaceBadge">Build Your Own</span><h1>Upload Data</h1><p>Add reusable datasets to the persistent DIY library. Multiple files can be uploaded at once and duplicate filenames are saved safely with a numeric suffix.</p></div>${byoUploadPanel(info)}<br>${byoImportPanel(info)}<br><div class="panel"><h3>Saved location</h3><p>Files are written to <span class="byoStoragePath">${esc(info.storage_path||'Data/DIY')}</span> relative to this Python app. Once uploaded, the same file can be opened in Raw Data Editor and selected in Email Alerts.</p></div>`;
   }else if(state.page==='byo-library'){
     html=`<div class="hero"><span class="workspaceBadge">Persistent library</span><h1>Dataset Library</h1><p>Choose, download, export, or delete the files saved in your repo. Every ready file is also available to the BYO Raw Data Editor and Email Alerts pages.</p><div class="heroActions"><button class="btn" onclick="showPage('byo-lab')">Upload more files</button><button class="btn secondary" onclick="showPage('byo-raw')">Edit a file</button><button class="btn ghost" onclick="showPage('byo-email')">Configure alerts</button></div></div><div class="byoLibraryGrid"><div class="panel"><h3>${intFmt(info.dataset_count||0)} saved datasets</h3>${byoLibraryCards(info)}</div><div>${byoPairPicker(info)}</div></div>`;
+  }else if(state.page==='byo-reconcile'){
+    html=`<div class="hero"><span class="workspaceBadge">Universal Reconciliation & Value Diff</span><h1>Reconciliation Studio</h1><p>Perform interactive record-level matching, value discrepancy diffing, live tolerance tuning, and systematic drift discovery across any two datasets.</p><div class="heroActions"><button class="btn" type="button" onclick="askByoRecAiDiagnosis()">🤖 AI Diagnosis</button><a class="btn secondary" href="/download/byo-reconcile-csv?left=${encodeURIComponent(state.byoLeft)}&right=${encodeURIComponent(state.byoRight)}&left_keys=${encodeURIComponent((state.byoRecLeftKeys||[]).join(','))}&right_keys=${encodeURIComponent((state.byoRecRightKeys||[]).join(','))}&partition=all&numeric_tolerance=${encodeURIComponent(state.byoRecTol||0)}&tolerance_mode=${encodeURIComponent(state.byoRecTolMode||'absolute')}">Export Reconciled CSV</a><a class="btn ghost" href="/download/byo-reconcile-csv?left=${encodeURIComponent(state.byoLeft)}&right=${encodeURIComponent(state.byoRight)}&left_keys=${encodeURIComponent((state.byoRecLeftKeys||[]).join(','))}&right_keys=${encodeURIComponent((state.byoRecRightKeys||[]).join(','))}&partition=discrepancy&numeric_tolerance=${encodeURIComponent(state.byoRecTol||0)}&tolerance_mode=${encodeURIComponent(state.byoRecTolMode||'absolute')}">Export Discrepancies Only</a></div></div>${byoPairPicker(info)}${reconcileData?`<br>${byoReconcilePage(info,reconcileData)}`:`<br>${needPair}`}`;
   }else if(state.page==='byo-compare'){
     html=`<div class="hero"><span class="workspaceBadge">Dataset A ↔ Dataset B</span><h1>Compare Lab</h1><p>Run a structured comparison across two saved datasets: shape, schema, completeness, duplicate burden, shared fields, type mismatches, numeric distributions, and likely join keys.</p></div>${byoPairPicker(info)}${comparison?`<br>${compareOverview(comparison)}<br><div class="panel"><h3>Detailed field comparison</h3>${genericTable(comparison.column_comparison,'DIY detailed field comparison')}</div><br>${compareDeepDive(comparison)}`:`<br>${needPair}`}`;
   }else if(state.page==='byo-quality'){
@@ -8814,6 +9831,142 @@ async def compare_byo_route(request: Request) -> Any:
     payload = await request.json()
     try:
         return compare_byo_datasets(str(payload.get("left", "")), str(payload.get("right", "")), include_previews=True)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/byo/reconcile")
+async def reconcile_byo_route(request: Request) -> Any:
+    payload = await request.json()
+    try:
+        return reconcile_byo_datasets(
+            left_name=str(payload.get("left", "")),
+            right_name=str(payload.get("right", "")),
+            left_keys=payload.get("left_keys"),
+            right_keys=payload.get("right_keys"),
+            case_sensitive=bool(payload.get("case_sensitive", False)),
+            trim_whitespace=bool(payload.get("trim_whitespace", True)),
+            strip_leading_zeros=bool(payload.get("strip_leading_zeros", False)),
+            numeric_tolerance=float(payload.get("numeric_tolerance", 0.0) or 0.0),
+            tolerance_mode=str(payload.get("tolerance_mode", "absolute")),
+            partition_filter=str(payload.get("partition_filter", "all")),
+            search_query=str(payload.get("search_query", "")),
+            column_filter=str(payload.get("column_filter", "")),
+            page_offset=int(payload.get("page_offset", 0) or 0),
+            page_limit=int(payload.get("page_limit", 50) or 50),
+        )
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/byo/reconcile/ai-diagnose")
+async def ai_byo_reconcile_diagnose_route(request: Request) -> Any:
+    payload = await request.json()
+    left_name = str(payload.get("left", "")).strip()
+    right_name = str(payload.get("right", "")).strip()
+    reconcile_data = payload.get("reconciliation_data")
+    try:
+        if not reconcile_data or not isinstance(reconcile_data, dict):
+            reconcile_data = reconcile_byo_datasets(left_name, right_name, page_limit=10)
+
+        summary = reconcile_data.get("summary", {})
+        col_summary = reconcile_data.get("column_summary", [])[:8]
+        anomalies = reconcile_data.get("anomalies", [])
+
+        prompt = (
+            f"Diagnose the cross-dataset reconciliation between Dataset A ('{left_name}') and Dataset B ('{right_name}').\n"
+            f"Reconciliation Summary:\n"
+            f"- Total A Rows: {summary.get('total_rows_a')}, Total B Rows: {summary.get('total_rows_b')}\n"
+            f"- Matched Keys: {summary.get('matched_keys_count')} (Match Rate A: {summary.get('match_rate_a_pct')}%, Match Rate B: {summary.get('match_rate_b_pct')}%)\n"
+            f"- Exact Match Concordance: {summary.get('exact_match_pct')}%, Discrepant Rows: {summary.get('discrepancy_pct')}%\n"
+            f"- Health Score: {summary.get('reconciliation_health_score')}/100 ({summary.get('health_grade')})\n"
+            f"- Detected Anomalies: {json.dumps(anomalies, default=str)}\n"
+            f"- Top Column Drift Rates: {json.dumps(col_summary, default=str)}\n\n"
+            f"Please provide an executive diagnostic brief explaining: 1) Key Match & Population Integrity, 2) Root Causes of Field-Level Discrepancies, 3) Critical Systematic Drifts / Anomalies, and 4) Recommended Data Remediation & Cleanse Steps."
+        )
+        api_key = groq_api_key()
+        if OpenAI and api_key:
+            messages = [
+                {"role": "system", "content": "You are DART Reconciliation AI, an expert in master data management, reconciliation, and schema drift. Provide clear, structured, actionable diagnostic reporting."},
+                {"role": "user", "content": prompt}
+            ]
+            answer, _ = groq_chat_completion(messages, temperature=0.15, max_output_tokens=750)
+        else:
+            answer = (
+                f"### Executive Reconciliation Diagnosis: {left_name} ↔ {right_name}\n\n"
+                f"**Reconciliation Health:** {summary.get('reconciliation_health_score')}/100 ({summary.get('health_grade')})\n\n"
+                f"- **Key Overlap:** {summary.get('matched_keys_count')} records matched successfully ({summary.get('match_rate_a_pct')}% of Dataset A).\n"
+                f"- **Concordance:** {summary.get('exact_match_pct')}% of matched records have identical values across all compared fields.\n"
+                f"- **Top Discrepancy Drivers:** {', '.join(c['column_a'] + ' (' + str(c['discrepancy_rate_pct']) + '% drift)' for c in col_summary[:3]) if col_summary else 'None detected'}.\n\n"
+                f"**Recommended Action:** Review systematic shifts in high-drift columns and apply tolerance or normalization rules."
+            )
+        return {"status": "ok", "diagnosis": answer}
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.get("/download/byo-reconcile-csv")
+def download_byo_reconcile_csv(
+    left: str,
+    right: str,
+    left_keys: str = "",
+    right_keys: str = "",
+    partition: str = "all",
+    case_sensitive: bool = False,
+    trim_whitespace: bool = True,
+    strip_leading_zeros: bool = False,
+    numeric_tolerance: float = 0.0,
+    tolerance_mode: str = "absolute",
+) -> Any:
+    try:
+        rec = reconcile_byo_datasets(
+            left_name=left,
+            right_name=right,
+            left_keys=left_keys,
+            right_keys=right_keys,
+            case_sensitive=case_sensitive,
+            trim_whitespace=trim_whitespace,
+            strip_leading_zeros=strip_leading_zeros,
+            numeric_tolerance=numeric_tolerance,
+            tolerance_mode=tolerance_mode,
+            partition_filter=partition,
+            page_limit=50000,
+        )
+        output = io.StringIO()
+        writer = csv.writer(output)
+        aligned = rec.get("aligned_columns", [])
+        header = ["Reconciliation Partition", "Key", "Discrepancy Count", "Discrepant Fields"]
+        for col in aligned:
+            ca, cb = col["col_a"], col["col_b"]
+            header.extend([f"{ca} (A)", f"{cb} (B)", f"{ca} (Diff/Delta)"])
+        writer.writerow(header)
+
+        for r in rec.get("rows", []):
+            row_out = [
+                r.get("_partition", ""),
+                r.get("_key_display", r.get("_key", "")),
+                r.get("_discrepancy_count", 0),
+                "; ".join(r.get("_discrepant_columns", [])),
+            ]
+            vals = r.get("_values", {})
+            for col in aligned:
+                ca = col["col_a"]
+                cdata = vals.get(ca, {})
+                va = cdata.get("val_a")
+                vb = cdata.get("val_b")
+                delta = cdata.get("delta")
+                diff_str = str(delta) if delta is not None else (cdata.get("status", "") if cdata.get("status") != "match" else "MATCH")
+                row_out.extend([va if va is not None else "", vb if vb is not None else "", diff_str])
+            writer.writerow(row_out)
+
+        content = output.getvalue().encode("utf-8-sig")
+        safe_a = re.sub(r'[^A-Za-z0-9]', '_', left)
+        safe_b = re.sub(r'[^A-Za-z0-9]', '_', right)
+        return StreamingResponse(
+            io.BytesIO(content),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=dart_reconciliation_{safe_a}_vs_{safe_b}.csv"}
+        )
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
