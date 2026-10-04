@@ -353,6 +353,23 @@ def _init_users_db() -> None:
                     updated_at TEXT
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS byo_s3_sources (
+                    dataset_name TEXT PRIMARY KEY,
+                    bucket TEXT,
+                    key TEXT,
+                    region TEXT,
+                    etag TEXT,
+                    last_modified TEXT,
+                    size_bytes INTEGER DEFAULT 0,
+                    auto_sync INTEGER DEFAULT 1,
+                    last_checked_at TEXT,
+                    last_synced_at TEXT,
+                    sync_status TEXT,
+                    created_by TEXT,
+                    updated_at TEXT
+                )
+            """)
             conn.commit()
 
             # Seed / sync from dart_users.json if SQLite table is empty or missing users
@@ -659,6 +676,265 @@ def test_aws_credentials(
         "region": session.region_name or region or "us-east-1",
         "tested_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
     }
+
+
+BYO_S3_SOURCES_FILE = BYO_DATA_DIR / ".s3_sources.json"
+
+
+def load_byo_s3_sources() -> Dict[str, Dict[str, Any]]:
+    sources: Dict[str, Dict[str, Any]] = {}
+    try:
+        with _get_users_db() as conn:
+            rows = conn.execute("SELECT * FROM byo_s3_sources").fetchall()
+            for r in rows:
+                sources[r["dataset_name"]] = {
+                    "dataset_name": r["dataset_name"],
+                    "bucket": r["bucket"] or "",
+                    "key": r["key"] or "",
+                    "region": r["region"] or "",
+                    "etag": r["etag"] or "",
+                    "last_modified": r["last_modified"] or "",
+                    "size_bytes": int(r["size_bytes"] or 0),
+                    "auto_sync": bool(r["auto_sync"]),
+                    "last_checked_at": r["last_checked_at"] or "",
+                    "last_synced_at": r["last_synced_at"] or "",
+                    "sync_status": r["sync_status"] or "In sync",
+                    "created_by": r["created_by"] or "",
+                    "updated_at": r["updated_at"] or "",
+                }
+    except Exception:
+        pass
+
+    if not sources and BYO_S3_SOURCES_FILE.exists():
+        try:
+            raw = json.loads(BYO_S3_SOURCES_FILE.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                return raw
+        except Exception:
+            pass
+    return sources
+
+
+def get_byo_s3_source(dataset_name: str) -> Optional[Dict[str, Any]]:
+    if not dataset_name:
+        return None
+    sources = load_byo_s3_sources()
+    return sources.get(dataset_name)
+
+
+def save_byo_s3_source(
+    dataset_name: str,
+    bucket: str,
+    key: str,
+    region: str = "",
+    etag: str = "",
+    last_modified: str = "",
+    size_bytes: int = 0,
+    auto_sync: bool = True,
+    last_synced_at: str = "",
+    sync_status: str = "In sync",
+    created_by: str = "",
+) -> Dict[str, Any]:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    record = {
+        "dataset_name": dataset_name,
+        "bucket": bucket,
+        "key": key,
+        "region": region,
+        "etag": etag,
+        "last_modified": last_modified,
+        "size_bytes": size_bytes,
+        "auto_sync": auto_sync,
+        "last_checked_at": now_iso,
+        "last_synced_at": last_synced_at or now_iso,
+        "sync_status": sync_status,
+        "created_by": created_by,
+        "updated_at": now_iso,
+    }
+    try:
+        with _get_users_db() as conn:
+            conn.execute("""
+                INSERT INTO byo_s3_sources (
+                    dataset_name, bucket, key, region, etag, last_modified, size_bytes,
+                    auto_sync, last_checked_at, last_synced_at, sync_status, created_by, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(dataset_name) DO UPDATE SET
+                    bucket = excluded.bucket,
+                    key = excluded.key,
+                    region = excluded.region,
+                    etag = excluded.etag,
+                    last_modified = excluded.last_modified,
+                    size_bytes = excluded.size_bytes,
+                    auto_sync = excluded.auto_sync,
+                    last_checked_at = excluded.last_checked_at,
+                    last_synced_at = excluded.last_synced_at,
+                    sync_status = excluded.sync_status,
+                    created_by = excluded.created_by,
+                    updated_at = excluded.updated_at
+            """, (
+                dataset_name, bucket, key, region, etag, last_modified, size_bytes,
+                1 if auto_sync else 0, now_iso, last_synced_at or now_iso, sync_status, created_by, now_iso
+            ))
+            conn.commit()
+    except Exception:
+        pass
+
+    try:
+        current_sources = load_byo_s3_sources()
+        current_sources[dataset_name] = record
+        BYO_S3_SOURCES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        BYO_S3_SOURCES_FILE.write_text(json.dumps(current_sources, indent=2, default=str), encoding="utf-8")
+    except Exception:
+        pass
+
+    return record
+
+
+def delete_byo_s3_source(dataset_name: str) -> None:
+    try:
+        with _get_users_db() as conn:
+            conn.execute("DELETE FROM byo_s3_sources WHERE dataset_name = ?", (dataset_name,))
+            conn.commit()
+    except Exception:
+        pass
+
+    try:
+        if BYO_S3_SOURCES_FILE.exists():
+            sources = load_byo_s3_sources()
+            if dataset_name in sources:
+                del sources[dataset_name]
+                BYO_S3_SOURCES_FILE.write_text(json.dumps(sources, indent=2, default=str), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _get_s3_client_for_user(
+    username: Optional[str] = None,
+    region: str = "",
+    access_key: str = "",
+    secret_key: str = "",
+    session_token: str = "",
+):
+    if boto3 is None:
+        raise RuntimeError("The 'boto3' package is not installed on the server. Run: pip install boto3")
+
+    user = username or STATE.get("current_user")
+    user_aws = get_user_aws_config(user) if user else {}
+
+    eff_region = (region or "").strip() or user_aws.get("region", "") or os.getenv("AWS_DEFAULT_REGION", "").strip() or os.getenv("AWS_REGION", "").strip()
+    eff_key = (access_key or "").strip() or user_aws.get("access_key_id", "") or os.getenv("AWS_ACCESS_KEY_ID", "").strip()
+    eff_secret = (secret_key or "").strip() or user_aws.get("secret_access_key", "") or os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
+    eff_token = (session_token or "").strip() or user_aws.get("session_token", "") or os.getenv("AWS_SESSION_TOKEN", "").strip()
+
+    kwargs: Dict[str, Any] = {}
+    if eff_region:
+        kwargs["region_name"] = eff_region
+    if eff_key and eff_secret:
+        kwargs["aws_access_key_id"] = eff_key
+        kwargs["aws_secret_access_key"] = eff_secret
+        if eff_token:
+            kwargs["aws_session_token"] = eff_token
+    return boto3.client("s3", **kwargs)
+
+
+def sync_byo_s3_source(dataset_name: str, force_download: bool = False, username: Optional[str] = None) -> Dict[str, Any]:
+    source = get_byo_s3_source(dataset_name)
+    if not source:
+        raise ValueError(f"Dataset '{dataset_name}' is not linked to an S3 bucket source.")
+    bucket = source.get("bucket", "")
+    key = source.get("key", "")
+    region = source.get("region", "")
+    user = username or source.get("created_by") or STATE.get("current_user")
+
+    client = _get_s3_client_for_user(username=user, region=region)
+    head_resp = client.head_object(Bucket=bucket, Key=key)
+
+    remote_etag = str(head_resp.get("ETag", "")).strip('"')
+    remote_size = int(head_resp.get("ContentLength", 0))
+    remote_mod = head_resp.get("LastModified")
+    remote_mod_str = remote_mod.isoformat() if hasattr(remote_mod, "isoformat") else str(remote_mod or "")
+
+    cached_etag = source.get("etag", "")
+    cached_size = source.get("size_bytes", 0)
+    local_path = _byo_path(dataset_name)
+    local_exists = local_path.exists()
+
+    changed = (remote_etag != cached_etag) or (remote_size != cached_size) or (not local_exists) or force_download
+
+    if changed:
+        get_resp = client.get_object(Bucket=bucket, Key=key)
+        content = get_resp["Body"].read()
+        frame = _frame_from_bytes(content, local_path.suffix.lower())
+        local_path.write_bytes(content)
+        updated_record = save_byo_s3_source(
+            dataset_name=dataset_name,
+            bucket=bucket,
+            key=key,
+            region=region,
+            etag=remote_etag,
+            last_modified=remote_mod_str,
+            size_bytes=remote_size,
+            auto_sync=source.get("auto_sync", True),
+            last_synced_at=datetime.now(timezone.utc).isoformat(),
+            sync_status="Updated from S3",
+            created_by=user or "",
+        )
+        return {
+            "changed": True,
+            "dataset_name": dataset_name,
+            "bucket": bucket,
+            "key": key,
+            "etag": remote_etag,
+            "size_bytes": remote_size,
+            "rows": len(frame),
+            "columns": len(frame.columns),
+            "status": "Downloaded updated file from S3",
+            "source": updated_record,
+        }
+    else:
+        updated_record = save_byo_s3_source(
+            dataset_name=dataset_name,
+            bucket=bucket,
+            key=key,
+            region=region,
+            etag=remote_etag,
+            last_modified=remote_mod_str,
+            size_bytes=remote_size,
+            auto_sync=source.get("auto_sync", True),
+            last_synced_at=source.get("last_synced_at", ""),
+            sync_status="In sync",
+            created_by=user or "",
+        )
+        return {
+            "changed": False,
+            "dataset_name": dataset_name,
+            "bucket": bucket,
+            "key": key,
+            "etag": remote_etag,
+            "size_bytes": remote_size,
+            "status": "In sync with S3",
+            "source": updated_record,
+        }
+
+
+def sync_all_byo_s3_sources(force_download: bool = False, username: Optional[str] = None) -> List[Dict[str, Any]]:
+    sources = load_byo_s3_sources()
+    results: List[Dict[str, Any]] = []
+    for dataset_name, source in sources.items():
+        if source.get("auto_sync", True) or force_download:
+            try:
+                res = sync_byo_s3_source(dataset_name, force_download=force_download, username=username or source.get("created_by"))
+                results.append(res)
+            except Exception as exc:
+                results.append({
+                    "changed": False,
+                    "dataset_name": dataset_name,
+                    "bucket": source.get("bucket"),
+                    "key": source.get("key"),
+                    "error": str(exc),
+                    "status": f"Sync failed: {exc}",
+                })
+    return results
 
 
 def public_user(username: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -2508,8 +2784,10 @@ def _dataset_payload_from_frame(df: pd.DataFrame, filename: str, preview_limit: 
 def _byo_library_records() -> List[Dict[str, Any]]:
     root = _ensure_byo_data_dir()
     records: List[Dict[str, Any]] = []
+    s3_sources = load_byo_s3_sources()
     for path in sorted([*root.glob("*.xlsx"), *root.glob("*.csv")], key=lambda p: p.stat().st_mtime, reverse=True):
         stat = path.stat()
+        s3_src = s3_sources.get(path.name)
         record: Dict[str, Any] = {
             "name": path.name,
             "type": path.suffix.lower().lstrip(".").upper(),
@@ -2519,6 +2797,7 @@ def _byo_library_records() -> List[Dict[str, Any]]:
             "rows": None,
             "columns": None,
             "status": "Ready",
+            "s3_source": s3_src,
         }
         try:
             df = _read_byo_dataset(path)
@@ -2840,8 +3119,31 @@ def _byo_email_scheduler_loop() -> None:
         try:
             enabled = [t for t in load_byo_email_automations() if t.get("enabled")]
             datasets = list(dict.fromkeys(str(t.get("dataset_name", "")) for t in enabled if str(t.get("dataset_name", "")).strip()))
+
+            # 1. Live S3 background polling: check all S3 monitored datasets
+            s3_sources = load_byo_s3_sources()
+            s3_updated_datasets: List[str] = []
+            for s3_dataset_name, s3_info in s3_sources.items():
+                if s3_info.get("auto_sync", True):
+                    try:
+                        sync_res = sync_byo_s3_source(s3_dataset_name, username=s3_info.get("created_by"))
+                        if sync_res.get("changed"):
+                            s3_updated_datasets.append(s3_dataset_name)
+                            _byo_email_history_event({
+                                "event": "s3_live_sync",
+                                "dataset_name": s3_dataset_name,
+                                "bucket": s3_info.get("bucket"),
+                                "key": s3_info.get("key"),
+                                "etag": sync_res.get("etag"),
+                                "status": "Downloaded updated file from S3 bucket",
+                            })
+                    except Exception as s3_err:
+                        pass
+
             if not datasets:
-                _write_byo_email_status("Running — no enabled automations", interval_seconds=BYO_EMAIL_AGENT_MIN_CHECK_SECONDS)
+                _write_byo_email_status("Running — no enabled automations", interval_seconds=BYO_EMAIL_AGENT_MIN_CHECK_SECONDS, s3_monitored=len(s3_sources))
+
+            # 2. Process all datasets for enabled automations
             for name in datasets:
                 try:
                     path = _byo_path(name)
@@ -2850,10 +3152,10 @@ def _byo_email_scheduler_loop() -> None:
                     _write_byo_email_status("Waiting — monitored DIY file missing", dataset=name, error=str(exc))
                     continue
                 previous = last_signatures.get(name)
-                if previous is None or signature != previous:
+                if previous is None or signature != previous or name in s3_updated_datasets:
                     results = run_enabled_byo_email_automations(name)
                     last_signatures[name] = signature
-                    _write_byo_email_status("DIY dataset change processed" if previous is not None else "Startup check complete", dataset=name, interval_seconds=BYO_EMAIL_AGENT_MIN_CHECK_SECONDS, results_count=len(results))
+                    _write_byo_email_status("DIY dataset change processed" if previous is not None else "Startup check complete", dataset=name, interval_seconds=BYO_EMAIL_AGENT_MIN_CHECK_SECONDS, results_count=len(results), s3_triggered=name in s3_updated_datasets)
         except Exception as exc:
             _write_byo_email_status("Scheduler error", error=str(exc))
             traceback.print_exc()
@@ -3888,12 +4190,20 @@ HTML = r'''
 .byoImportPanel textarea{width:100%;border-radius:12px;border:1px solid #e0cf8d;padding:10px 11px;font-size:.82rem;font-family:inherit;resize:vertical;margin-top:4px}
 .byoS3Fields{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px}
 .byoS3Fields input{border-radius:10px;border:1px solid #e0cf8d;padding:9px 10px;font-size:.8rem;color:#243044;background:#fff}
-.byoS3Results{margin-top:14px;border:1px solid #eedda5;border-radius:12px;padding:10px;background:#fffaf0;max-height:220px;overflow:auto}
-.byoS3ResultsHead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
-.byoS3Row{display:flex;align-items:center;gap:8px;padding:6px 4px;border-radius:8px;font-size:.8rem}
-.byoS3Row:hover{background:#fff2c9}
-.byoS3Key{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#243044}
-.byoS3Size{flex:none;font-size:.74rem}.workspaceEmpty{border-left:5px solid #c99a12}.workspaceBadge{display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:6px 10px;background:#fff4cc;border:1px solid #e1c66f;color:#725500;font-size:.78rem;font-weight:900;margin-bottom:10px}.personaLens{border-left:5px solid #c99a12!important;background:linear-gradient(135deg,#fffdf8,#fffaf0)!important}.personaLensHead{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap}.personaTags{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.personaTag{display:inline-flex;align-items:center;border:1px solid #e2d4a5;background:#fff;color:#6f5400;border-radius:999px;padding:5px 9px;font-size:.76rem;font-weight:800}.personaRecommendations{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px}.personaRec{border:1px solid #e8dfc4;background:#fff;border-radius:14px;padding:13px;text-align:left;cursor:pointer;transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease}.personaRec:hover{transform:translateY(-2px);border-color:#c99a12;box-shadow:0 8px 20px rgba(111,82,0,.08)}.personaRec b{display:block;color:#3c310f;margin-bottom:4px}.personaRec span{display:block;color:#667085;font-size:.8rem;line-height:1.4}.personaPrefNote{padding:10px 12px;border:1px solid #ead9a4;border-radius:12px;background:#fffaf0;color:#6f5b21;font-size:.82rem;margin-top:8px}@media(max-width:900px){.personaRecommendations{grid-template-columns:1fr}}
+.byoS3Results{margin-top:14px;border:1px solid #eedda5;border-radius:14px;padding:12px;background:#ffffff;box-shadow:0 4px 16px rgba(0,0,0,.04);max-height:280px;overflow-y:auto}
+.byoS3ResultsHead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #f1f5f9}
+.byoS3Row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0;margin-bottom:6px;cursor:pointer;transition:all .15s ease}
+.byoS3Row:hover{background:#fff9e6;border-color:#d6bd6e}
+.byoS3Key{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#0f172a;font-weight:700;font-size:.84rem}
+.byoS3Key small{color:#64748b;font-weight:400;font-size:.72rem}
+.byoS3Size{flex:none;font-size:.74rem;color:#475569;font-weight:700;background:#f1f5f9;padding:2px 7px;border-radius:6px;border:1px solid #e2e8f0}
+:root[data-theme="dark"] .byoS3Results{background:#15130e;border-color:#3f3824}
+:root[data-theme="dark"] .byoS3Row{background:#1e1a14;border-color:#3f3824}
+:root[data-theme="dark"] .byoS3Row:hover{background:#2a2318;border-color:#d4af37}
+:root[data-theme="dark"] .byoS3Key{color:#f8fafc}
+:root[data-theme="dark"] .byoS3Key small{color:#94a3b8}
+:root[data-theme="dark"] .byoS3Size{background:#262016;color:#cbd5e1;border-color:#3f3824}
+.workspaceEmpty{border-left:5px solid #c99a12}.workspaceBadge{display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:6px 10px;background:#fff4cc;border:1px solid #e1c66f;color:#725500;font-size:.78rem;font-weight:900;margin-bottom:10px}.personaLens{border-left:5px solid #c99a12!important;background:linear-gradient(135deg,#fffdf8,#fffaf0)!important}.personaLensHead{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap}.personaTags{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.personaTag{display:inline-flex;align-items:center;border:1px solid #e2d4a5;background:#fff;color:#6f5400;border-radius:999px;padding:5px 9px;font-size:.76rem;font-weight:800}.personaRecommendations{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px}.personaRec{border:1px solid #e8dfc4;background:#fff;border-radius:14px;padding:13px;text-align:left;cursor:pointer;transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease}.personaRec:hover{transform:translateY(-2px);border-color:#c99a12;box-shadow:0 8px 20px rgba(111,82,0,.08)}.personaRec b{display:block;color:#3c310f;margin-bottom:4px}.personaRec span{display:block;color:#667085;font-size:.8rem;line-height:1.4}.personaPrefNote{padding:10px 12px;border:1px solid #ead9a4;border-radius:12px;background:#fffaf0;color:#6f5b21;font-size:.82rem;margin-top:8px}@media(max-width:900px){.personaRecommendations{grid-template-columns:1fr}}
     .byoLibraryGrid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(320px,.75fr);gap:16px;align-items:start}.byoFileCard{border:1px solid #e7dfcb;border-radius:18px;padding:15px;background:linear-gradient(180deg,#fff,#fffdf8);display:grid;gap:10px}.byoFileCard.selectedA{border-color:#c99a12;box-shadow:inset 4px 0 0 #c99a12}.byoFileCard.selectedB{border-color:#8e7a32;box-shadow:inset 4px 0 0 #8e7a32}.byoFileTop{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.byoFileName{font-weight:950;color:#172033;overflow-wrap:anywhere}.byoMeta{display:flex;gap:8px;flex-wrap:wrap}.byoMeta span{display:inline-flex;border:1px solid #e6dcc0;background:#fffaf0;border-radius:999px;padding:5px 8px;color:#667085;font-size:.75rem;font-weight:750}.byoFileActions{display:flex;gap:8px;flex-wrap:wrap}.byoPairPicker{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:14px;align-items:end}.byoVersus{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;background:#fff4cc;border:1px solid #dfc66f;color:#725500;font-weight:950;margin-bottom:3px}.byoSelected{border:1px solid #dfc979;background:linear-gradient(135deg,#fffdf6,#fff7d8);border-radius:18px;padding:14px}.byoSelected h3{margin:0 0 4px}.byoSelected .datasetName{font-size:1.02rem;font-weight:950;color:#594300;overflow-wrap:anywhere}.compareHeroGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.compareMetric{border:1px solid #e7dfcb;background:#fff;border-radius:16px;padding:13px}.compareMetric .k{font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:#667085}.compareMetric .v{font-size:1.25rem;font-weight:950;color:#172033;margin-top:4px}.deltaGood{color:#2f7d5a!important}.deltaWarn{color:#b7791f!important}.byoAnalysisTabs{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px}.byoTab{border:1px solid #d9c989;background:#fffaf0;color:#725500;border-radius:999px;padding:8px 12px;font-weight:850;cursor:pointer}.byoTab.active{background:linear-gradient(135deg,#765700,#bd900e,#e2bd4e);color:#fff;border-color:#a77c00}.byoChatShell{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px;align-items:start}.byoChatPanel{min-height:520px}.byoChat{display:grid;gap:12px;max-height:560px;overflow:auto;padding:6px}.byoChatComposer{display:grid;grid-template-columns:1fr auto;gap:10px;margin-top:14px}.byoContextCard{position:sticky;top:86px}.aiStatus{display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:6px 9px;font-size:.76rem;font-weight:850}.aiStatus.on{background:#effaf4;color:#287657;border:1px solid #a8dcc4}.aiStatus.off{background:#fff8df;color:#8a6400;border:1px solid #ead184}.byoStep{display:flex;gap:11px;align-items:flex-start;padding:10px 0;border-top:1px solid #edf0f4}.byoStep:first-child{border-top:0}.byoStepNum{flex:none;width:27px;height:27px;border-radius:50%;display:grid;place-items:center;background:#fff3c8;color:#725500;font-weight:950}.byoEmptyPair{padding:24px;border:1px dashed #d2b85e;background:#fffdf7;border-radius:18px;text-align:center}.dangerBtn{border-color:#efb6bf!important;color:#b42335!important;background:#fff7f8!important}.byoStoragePath{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f5f2e9;border:1px solid #e3dac1;border-radius:8px;padding:3px 6px;color:#594300}.byoSplitTables{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}.byoSplitTables>div{min-width:0;max-width:100%}.byoUniqueTables{width:100%;max-width:100%;overflow:hidden}.byoUniqueTables .byoCompactTable{min-width:0;max-width:100%;overflow:hidden}.byoUniqueTables .tableWrap{width:100%;max-width:100%;overflow-x:auto}.byoUniqueTables .table{width:100%;min-width:0!important;table-layout:fixed}.byoUniqueTables .table th,.byoUniqueTables .table td{white-space:normal;overflow-wrap:anywhere;word-break:break-word}.byoDatasetHead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}.byoDatasetHead h3{margin:0}.byoFlow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.byoFlowCard{border:1px solid #e6dcc0;background:#fff;border-radius:18px;padding:15px}.byoFlowCard b{display:block;color:#594300;margin-bottom:5px}.byoFlowCard span{color:#667085;font-size:.86rem;line-height:1.45}@media(max-width:1000px){.byoLibraryGrid,.byoChatShell,.byoSplitTables{grid-template-columns:1fr}.byoContextCard{position:relative;top:auto}.byoPairPicker{grid-template-columns:1fr}.byoVersus{margin:auto}.compareHeroGrid,.byoFlow{grid-template-columns:1fr 1fr}}@media(max-width:640px){.compareHeroGrid,.byoFlow{grid-template-columns:1fr}.byoChatComposer{grid-template-columns:1fr}}
     .metricClickable{cursor:pointer;transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease}.metricClickable:hover,.metricClickable:focus{transform:translateY(-2px);border-color:#c99b16!important;box-shadow:0 16px 34px rgba(15,23,42,.14);outline:none}.metricClickable .sub:after{content:" · Click to view";font-weight:700;color:#8a6a1f}.miniCard.metricClickable{position:relative}.miniCard.metricClickable:after{content:"View data";display:block;margin-top:7px;font-size:.72rem;font-weight:850;color:#8a6a1f}.unmatchedMetric .value{font-size:clamp(.95rem,1.25vw,1.45rem);line-height:1.12;letter-spacing:-.035em;overflow-wrap:anywhere;word-break:break-word}.metricDetailModal{width:min(1240px,96vw)}.scorecardClickable{cursor:pointer;position:relative}.scorecardClickable:after{content:"Open stream details →";display:block;margin-top:11px;color:#8a6a1f;font-size:.78rem;font-weight:900}.scorecardClickable:focus{outline:3px solid rgba(201,154,18,.2);outline-offset:2px}.modalTabs{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 16px;padding-bottom:12px;border-bottom:1px solid #ece5d2}.modalTab{border:1px solid #d8c88d;background:#fffaf0;color:#725500;border-radius:999px;padding:8px 12px;font-weight:850;cursor:pointer}.modalTab.active{background:linear-gradient(135deg,#765700,#bd900e,#e2bd4e);color:#fff;border-color:#a77c00}.streamOverviewGrid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:16px}.streamStat{border:1px solid #e7dfcb;background:#fffdf8;border-radius:15px;padding:12px;min-width:0}.streamStat .k{color:#667085;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em}.streamStat .v{font-size:1.15rem;font-weight:900;color:#172033;margin-top:5px;overflow-wrap:anywhere}.modalSection{margin-top:16px}.modalSection h3{margin:0 0 9px}@media(max-width:900px){.streamOverviewGrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
     .field{display:grid;gap:7px;min-width:0}.field label{font-size:.77rem;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}input,select,textarea{background:#120d05;color:var(--text);border:1px solid rgba(212,175,55,.42);border-radius:13px;padding:12px 13px;outline:none;min-width:0;width:100%}input:focus,select:focus,textarea:focus{border-color:#f9d976;box-shadow:0 0 0 3px rgba(249,217,118,.12)}textarea{min-height:112px}.btn{border:0;border-radius:13px;background:linear-gradient(135deg,#8a6a1f,#d4af37,#f9d976);padding:11px 15px;color:#130e05;font-weight:900;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:7px;transition:transform .16s ease,box-shadow .16s ease,filter .16s ease}.btn:hover{transform:translateY(-1px);box-shadow:0 12px 28px rgba(212,175,55,.18);filter:saturate(1.08)}.btn.secondary{background:#33250d;color:#fff7d1;border:1px solid #8a6a1f}.btn.ghost{background:transparent;color:#fff7d1;border:1px solid #8a6a1f}.btn.small{padding:8px 11px;font-size:.86rem}
@@ -5789,23 +6099,36 @@ function byoImportPanel(info){
   </div>`;
 }
 function byoS3ResultsHtml(items){
-  if(!items.length)return '<div class="empty" style="margin-top:12px">No matching .xlsx/.csv files found for that bucket/prefix.</div>';
+  if(!items || !items.length)return '<div class="empty" style="margin-top:12px;background:#fff;border-color:#eedda5;color:#64748b">No matching .xlsx/.csv files found for that bucket/prefix.</div>';
   return `<div class="byoS3Results">
     <div class="byoS3ResultsHead">
-      <div><b>${items.length} file${items.length===1?'':'s'} found</b></div>
+      <div style="font-weight:800;color:#0f172a;font-size:.88rem"><b>${items.length} file${items.length===1?'':'s'} found in S3 bucket</b></div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-        <input type="text" placeholder="Filter files..." oninput="filterByoS3Rows(this.value)" style="padding:4px 8px;font-size:.76rem;border-radius:6px;width:120px;border:1px solid #d9dfe8;background:#fff">
+        <input type="text" placeholder="Filter files..." oninput="filterByoS3Rows(this.value)" style="padding:4px 8px;font-size:.76rem;border-radius:6px;width:130px;border:1px solid #d9dfe8;background:#fff;color:#0f172a">
         <button class="btn ghost small" type="button" onclick="byoToggleAllS3(true)" style="padding:4px 8px;font-size:.74rem">Select all</button>
         <button class="btn ghost small" type="button" onclick="byoToggleAllS3(false)" style="padding:4px 8px;font-size:.74rem">Clear</button>
-        <button class="btn small" type="button" onclick="importByoFromS3()" style="padding:5px 11px;font-size:.78rem">Import selected</button>
+        <button class="btn small" type="button" onclick="importByoFromS3()" style="padding:5px 12px;font-size:.78rem">Import selected</button>
       </div>
     </div>
-    <div id="byoS3RowsContainer">
-      ${items.map(x=>`<label class="byoS3Row" data-key="${esc((x.key||'').toLowerCase())}">
-        <input type="checkbox" class="byoS3Check" value="${esc(x.key)}">
-        <span class="byoS3Key" title="${esc(x.key)}"><b>${esc(x.name||x.key)}</b>${x.key!==x.name?`<small class="muted" style="margin-left:6px;font-size:.72rem">(${esc(x.key)})</small>`:''}</span>
-        <span class="byoS3Size muted">${x.size_mb} MB</span>
-      </label>`).join('')}
+    <div id="byoS3RowsContainer" style="display:flex;flex-direction:column;gap:6px">
+      ${items.map(x=>{
+        const key = String(x.key || '').trim();
+        const rawName = String(x.name || x.filename || '').trim();
+        const derivedName = rawName || (key ? key.split('/').filter(Boolean).pop() : '') || key || 'Dataset File';
+        const isXlsx = key.toLowerCase().endsWith('.xlsx') || key.toLowerCase().endsWith('.xlsm') || key.toLowerCase().endsWith('.xls');
+        const icon = isXlsx ? '📊' : '📄';
+        const hasFolder = key && key !== derivedName;
+        const sizeStr = x.size_mb != null ? x.size_mb + ' MB' : (x.size_bytes ? Math.round(x.size_bytes/1024/1024*100)/100 + ' MB' : '');
+        return `<label class="byoS3Row" data-key="${esc(key.toLowerCase())}">
+          <input type="checkbox" class="byoS3Check" value="${esc(key)}" style="width:16px;height:16px;cursor:pointer;flex-shrink:0;accent-color:#b98b09">
+          <span style="font-size:1.15rem;flex-shrink:0">${icon}</span>
+          <div class="byoS3Key" title="${esc(key)}">
+            <span style="color:#0f172a;font-weight:700;display:inline-block">${esc(derivedName)}</span>
+            ${hasFolder ? `<br><small style="color:#64748b;font-size:.72rem">s3://${esc(x.bucket||'')}/${esc(key)}</small>` : ''}
+          </div>
+          ${sizeStr ? `<span class="byoS3Size">${esc(sizeStr)}</span>` : ''}
+        </label>`;
+      }).join('')}
     </div>
   </div>`;
 }
@@ -5829,6 +6152,38 @@ function clearByoS3List(){
 function clearByoSpList(){
   state.byoSharePointItems = null;
   render();
+}
+async function syncByoS3Dataset(filename){
+  toast(`Checking S3 for updates to ${filename}...`);
+  try {
+    const r = await postJson('/api/byo/s3/sync', { filename });
+    const changed = r.sync?.changed;
+    const sent = (r.agent_results||[]).filter(x=>x.status==='Email sent').length;
+    if (changed) {
+      toast(`Updated ${filename} from S3!${sent ? ` · ${sent} email alert(s) sent` : ''}`);
+    } else {
+      toast(`${filename} is in sync with S3 (no remote changes).`);
+    }
+    await render();
+  } catch(err) {
+    toast('S3 sync error: ' + String(err.message||err).slice(0, 160));
+  }
+}
+async function syncAllByoS3(){
+  toast('Checking all S3 buckets for dataset updates...');
+  try {
+    const r = await postJson('/api/byo/s3/sync', {});
+    const count = r.changed_count || 0;
+    const sent = (r.agent_results||[]).filter(x=>x.status==='Email sent').length;
+    if (count > 0) {
+      toast(`Updated ${count} dataset(s) from S3!${sent ? ` · ${sent} email alert(s) sent` : ''}`);
+    } else {
+      toast('All S3 datasets are up to date.');
+    }
+    await render();
+  } catch(err) {
+    toast('S3 sync error: ' + String(err.message||err).slice(0, 160));
+  }
 }
 async function importByoFromUrl(){
   const box=document.getElementById('byoImportUrls');
@@ -5944,7 +6299,7 @@ async function setByoSelection(side,value){if(side==='left')state.byoLeft=value;
 async function swapByoSelection(){const a=state.byoLeft;state.byoLeft=state.byoRight;state.byoRight=a;state.byoCompare=null;state.byoChat=null;saveByoSelection();await render();}
 function byoDatasetOptions(info,selected,exclude=''){return `<option value="">Choose a saved dataset…</option>${(info.datasets||[]).filter(x=>x.status==='Ready'&&x.name!==exclude).map(x=>`<option value="${esc(x.name)}" ${x.name===selected?'selected':''}>${esc(x.name)} · ${intFmt(x.rows)} rows · ${intFmt(x.columns)} cols</option>`).join('')}`;}
 function byoPairPicker(info){return `<div class="panel"><div class="byoPairPicker"><div class="field"><label>Dataset A</label><select id="byoLeftSelect" onchange="setByoSelection('left',this.value)">${byoDatasetOptions(info,state.byoLeft,state.byoRight)}</select></div><div class="byoVersus">VS</div><div class="field"><label>Dataset B</label><select id="byoRightSelect" onchange="setByoSelection('right',this.value)">${byoDatasetOptions(info,state.byoRight,state.byoLeft)}</select></div></div>${byoPairReady()?`<div class="heroActions"><button class="btn" type="button" onclick="showPage('byo-compare')">Analyze selected pair</button><button class="btn secondary" type="button" onclick="showPage('byo-ai')">Ask AI about this pair</button><button class="btn ghost" type="button" onclick="swapByoSelection()">Swap A ↔ B</button></div>`:'<div class="callout" style="margin-top:14px"><b>Select two different saved datasets</b> to activate comparison and AI analysis.</div>'}</div>`;}
-function byoLibraryCards(info){const rows=info.datasets||[];if(!rows.length)return `<div class="empty">No saved DIY datasets yet. Upload files and they will appear here and on disk under ${esc(info.storage_path||'Data/DIY')}.</div>`;return `<div class="grid grid2">${rows.map(d=>`<div class="byoFileCard ${state.byoLeft===d.name?'selectedA':''} ${state.byoRight===d.name?'selectedB':''}"><div class="byoFileTop"><div><div class="byoFileName">${esc(d.name)}</div><div class="muted" style="font-size:.8rem;margin-top:3px">Modified ${esc(d.modified_at)}</div></div><span class="pill ${d.status==='Ready'?'Stable':'Critical'}">${esc(d.status)}</span></div><div class="byoMeta"><span>${esc(d.type)}</span><span>${intFmt(d.rows||0)} rows</span><span>${intFmt(d.columns||0)} columns</span><span>${esc(d.size_mb)} MB</span>${state.byoLeft===d.name?'<span>Dataset A ✓</span>':''}${state.byoRight===d.name?'<span>Dataset B ✓</span>':''}</div><div class="byoFileActions">${d.status==='Ready'?`<button class="btn small" type="button" onclick="setByoSelection('left','${safeArg(d.name)}')">${state.byoLeft===d.name?'Dataset A ✓':'Use as A'}</button><button class="btn secondary small" type="button" onclick="setByoSelection('right','${safeArg(d.name)}')">${state.byoRight===d.name?'Dataset B ✓':'Use as B'}</button>`:''}<a class="btn secondary small" href="/download/byo-file/${encodeURIComponent(d.name)}">Download original</a><a class="btn ghost small" href="/download/byo-csv/${encodeURIComponent(d.name)}">Export CSV</a><button class="btn ghost small dangerBtn" type="button" onclick="deleteByoFile('${safeArg(d.name)}')">Delete</button></div></div>`).join('')}</div>`;}
+function byoLibraryCards(info){const rows=info.datasets||[];if(!rows.length)return `<div class="empty">No saved DIY datasets yet. Upload files and they will appear here and on disk under ${esc(info.storage_path||'Data/DIY')}.</div>`;return `<div class="grid grid2">${rows.map(d=>`<div class="byoFileCard ${state.byoLeft===d.name?'selectedA':''} ${state.byoRight===d.name?'selectedB':''}"><div class="byoFileTop"><div><div class="byoFileName">${esc(d.name)}</div><div class="muted" style="font-size:.8rem;margin-top:3px">Modified ${esc(d.modified_at)}</div></div><span class="pill ${d.status==='Ready'?'Stable':'Critical'}">${esc(d.status)}</span></div>${d.s3_source?`<div style="font-size:.74rem;color:#725500;background:#fff9e6;border:1px solid #eedda5;border-radius:8px;padding:5px 8px;display:flex;justify-content:space-between;align-items:center"><span>🪣 <b>Live S3:</b> s3://${esc(d.s3_source.bucket)}/${esc(d.s3_source.key)}</span><button class="btn ghost small" style="padding:2px 7px;font-size:.7rem" onclick="syncByoS3Dataset('${safeArg(d.name)}')">Sync S3 🔄</button></div>`:''}<div class="byoMeta"><span>${esc(d.type)}</span><span>${intFmt(d.rows||0)} rows</span><span>${intFmt(d.columns||0)} columns</span><span>${esc(d.size_mb)} MB</span>${state.byoLeft===d.name?'<span>Dataset A ✓</span>':''}${state.byoRight===d.name?'<span>Dataset B ✓</span>':''}</div><div class="byoFileActions">${d.status==='Ready'?`<button class="btn small" type="button" onclick="setByoSelection('left','${safeArg(d.name)}')">${state.byoLeft===d.name?'Dataset A ✓':'Use as A'}</button><button class="btn secondary small" type="button" onclick="setByoSelection('right','${safeArg(d.name)}')">${state.byoRight===d.name?'Dataset B ✓':'Use as B'}</button>`:''}${d.s3_source?`<button class="btn secondary small" type="button" onclick="syncByoS3Dataset('${safeArg(d.name)}')">Sync S3 🔄</button>`:''}<a class="btn secondary small" href="/download/byo-file/${encodeURIComponent(d.name)}">Download original</a><a class="btn ghost small" href="/download/byo-csv/${encodeURIComponent(d.name)}">Export CSV</a><button class="btn ghost small dangerBtn" type="button" onclick="deleteByoFile('${safeArg(d.name)}')">Delete</button></div></div>`).join('')}</div>`;}
 async function deleteByoFile(name){if(!confirm(`Delete ${name} from Data/DIY? This removes the saved repo file.`))return;try{await del('/api/byo/files/'+encodeURIComponent(name));if(state.byoLeft===name)state.byoLeft='';if(state.byoRight===name)state.byoRight='';if(state.byoEditFile===name)state.byoEditFile='';if(state.byoEmailFile===name)state.byoEmailFile='';state.byoCompare=null;state.byoChat=null;saveByoSelection();toast('Dataset deleted');await render();}catch(err){toast('Delete failed: '+String(err.message||err).slice(0,160));}}
 function byoHomeStats(info){const datasets=info.datasets||[];const totalRows=datasets.reduce((a,x)=>a+Number(x.rows||0),0);const totalSize=datasets.reduce((a,x)=>a+Number(x.size_mb||0),0);return `<div class="grid grid4"><div class="panel metric"><div class="label">Saved datasets</div><div class="value">${intFmt(info.dataset_count||0)}</div><div class="sub">Persistent library</div></div><div class="panel metric"><div class="label">Rows available</div><div class="value">${intFmt(totalRows)}</div><div class="sub">Across saved files</div></div><div class="panel metric"><div class="label">Storage</div><div class="value" style="font-size:1.1rem">${esc(info.storage_path||'Data/DIY')}</div><div class="sub">Repo folder</div></div><div class="panel metric"><div class="label">AI analyst</div><div class="value" style="font-size:1.1rem">${info.ai_configured?'Connected':'Local mode'}</div><div class="sub">${info.ai_configured?esc(info.ai_model):'Uses same GROQ key when configured'}</div></div></div>`;}
 function compareSummaryCards(c){const s=c.summary;return `<div class="compareHeroGrid"><div class="compareMetric"><div class="k">Shared columns</div><div class="v">${intFmt(s.common_columns)}</div></div><div class="compareMetric"><div class="k">Type mismatches</div><div class="v ${s.type_mismatches?'deltaWarn':'deltaGood'}">${intFmt(s.type_mismatches)}</div></div><div class="compareMetric"><div class="k">Row difference B − A</div><div class="v">${intFmt(s.row_delta)}</div></div><div class="compareMetric"><div class="k">Completeness delta</div><div class="v ${Number(s.completeness_delta_pp)>=0?'deltaGood':'deltaWarn'}">${Number(s.completeness_delta_pp).toFixed(2)} pp</div></div></div>`;}
@@ -6007,7 +6362,18 @@ async function applyByoRawSearch(){state.byoRawSearch=document.getElementById('b
 async function clearByoRawSearch(){state.byoRawSearch='';state.byoRawOffset=0;await render();}
 async function byoRawPage(dir){state.byoRawOffset=Math.max(0,state.byoRawOffset+dir*state.byoRawLimit);await render();}
 function addByoEmailCondition(){const cols=state.byoEmailAgent?.columns||[];document.getElementById('byoConditionList')?.insertAdjacentHTML('beforeend',emailConditionRow({},cols));}
-function byoEmailAgentPage(info,workspace){state.byoEmailAgent=info;const templates=info.templates||[],tpl=(state.byoEmailEditingId?templates.find(t=>t.id===state.byoEmailEditingId):null)||info.default_template,cols=info.columns||[],status=info.status||{},smtp=info.smtp||{};const saved=templates.map(t=>`<div class="savedAutomation"><div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start"><div><b>${esc(t.name)}</b><div class="muted">${esc(t.dataset_name||'Dataset missing')} · ${esc(t.recipient_email)} · ${t.enabled?'Enabled':'Disabled'} · ${esc(t.last_status||'Not run yet')}</div></div><span class="pill ${t.enabled?'Stable':'Watch'}">${t.enabled?'Enabled':'Disabled'}</span></div><div class="automationActions"><button class="btn secondary small" onclick="editByoEmailById('${esc(t.id)}','${safeArg(t.dataset_name||'')}')">Edit</button><button class="btn secondary small" onclick="baselineByoEmail('${esc(t.id)}')">Refresh baseline</button><button class="btn secondary small" onclick="runByoEmail('${esc(t.id)}',false)">Check only</button><button class="btn small" onclick="runByoEmail('${esc(t.id)}',true)">Run + send</button><button class="btn ghost small" onclick="testByoEmail('${esc(t.id)}')">Send test</button><button class="btn ghost small" onclick="deleteByoEmailTemplate('${esc(t.id)}')">Delete</button></div></div>`).join('')||'<div class="empty">No Build Your Own alert automations yet. Choose a dataset, configure one below, and save it.</div>';const history=(info.history||[]).length?simpleTable(info.history):'<div class="empty">No Build Your Own alert history yet.</div>',dup=tpl.identity_duplicate_count||0;return `${byoSingleDatasetPicker(workspace,state.byoEmailFile,'setByoEmailFile','Dataset to monitor')}<br>${section('byo-email-status','Alert status',`<div class="hero"><span class="workspaceBadge">Build Your Own</span><h1>Email Alerts</h1><p>Monitor any uploaded DIY dataset for new or changed rows. Each automation is tied to one saved file, has its own baseline, and uses the same working SMTP delivery as the Medicare Email Agent.</p><div class="heroActions"><button class="btn" onclick="checkAllByoEmails()">Check all enabled alerts now</button><button class="btn secondary" onclick="baselineAllByoEmails()">Baseline all enabled</button><button class="btn ghost" onclick="testSmtp()">Test SMTP connection</button><button class="btn ghost" onclick="state.byoEditFile=state.byoEmailFile;sessionStorage.setItem('dart_byo_edit_file',state.byoEditFile);showPage('byo-raw')">Edit selected file</button></div></div><div class="statusGrid"><div class="statusCard"><div class="muted">Watcher</div><div class="big"><span class="statusDot ${String(status.status||'').toLowerCase().includes('error')?'bad':'good'}"></span>${esc(status.status||'Not started')}</div></div><div class="statusCard"><div class="muted">Check interval</div><div class="big">${esc(info.check_interval_seconds)}s</div></div><div class="statusCard"><div class="muted">Dataset</div><div class="big" style="font-size:1rem">${esc(info.selected_dataset||'None')}</div></div><div class="statusCard"><div class="muted">Email delivery</div><div class="big">${smtp.configured?'Ready':'Setup needed'}</div><div class="muted">${esc(smtp.host||'')} ${smtp.port?': '+esc(smtp.port):''}</div></div></div><br><div class="callout"><b>Best demo:</b> save an automation, click Refresh baseline, open the Raw Data Editor for this same file, change a monitored value, and save. The editor can run this alert immediately so you do not have to wait for the background interval.</div>`)}${section('byo-email-saved','Saved alerts',`<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div><h3>Saved Build Your Own alerts</h3><p class="muted">Each alert remembers the exact DIY file it monitors.</p></div><button class="btn secondary" onclick="newByoEmailTemplate()">New alert</button></div>${saved}</div>`)}${section('byo-email-builder','Alert builder',`<div class="panel emailBuilder"><h3>${tpl.id?'Edit alert':'Create alert'}</h3><div class="grid grid2"><div class="field"><label>Monitoring dataset</label><input value="${esc(info.selected_dataset||'')}" disabled><div class="rangeLine">Change the dataset using the picker above.</div></div><div class="field"><label>Alert name</label><input id="byoEmailName" value="${esc(tpl.name||'')}"></div><div class="field"><label>Recipient email(s)</label><input id="byoEmailRecipient" value="${esc(tpl.recipient_email||'')}" placeholder="owner@example.com; second@example.com"></div><div class="field"><label>Enabled</label><select id="byoEmailEnabled"><option value="false" ${!tpl.enabled?'selected':''}>Disabled</option><option value="true" ${tpl.enabled?'selected':''}>Enabled</option></select></div><div class="field"><label>Trigger mode</label><select id="byoEmailTrigger">${['New or changed rows','New rows only','All changes including deletions'].map(x=>`<option ${tpl.trigger_mode===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Row identity columns</label>${smartMultiSelect('byoEmailIdentity',cols,tpl.identity_columns,'Choose row identity columns')}<div class="rangeLine">Use stable fields that identify the same logical row between file versions. ${dup?`${intFmt(dup)} rows currently share duplicate identity values.`:'Current selection is suitable for row matching.'}</div></div><div class="field"><label>Monitored columns</label>${smartMultiSelect('byoEmailMonitor',cols,tpl.monitor_columns,'Choose monitored columns')}<div class="rangeLine">Changes to these fields count as detected changes.</div></div><div class="field"><label>Display columns in email</label>${smartMultiSelect('byoEmailDisplay',cols,tpl.display_columns,'Choose email display columns')}</div><div class="field"><label>Requirement mode</label><select id="byoEmailConditionMode"><option ${tpl.condition_mode==='Any change'?'selected':''}>Any change</option><option ${tpl.condition_mode!=='Any change'?'selected':''}>Only when conditions are met</option></select><label style="margin-top:10px">Condition logic</label><select id="byoEmailLogic"><option ${tpl.condition_logic!=='ANY condition'?'selected':''}>ALL conditions</option><option ${tpl.condition_logic==='ANY condition'?'selected':''}>ANY condition</option></select></div></div><br><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Conditions</h3><button type="button" class="btn secondary small" onclick="addByoEmailCondition()">Add condition</button></div><div id="byoConditionList">${(tpl.conditions||[]).map(r=>emailConditionRow(r,cols)).join('')}</div><div class="grid grid2"><div class="field"><label>Subject prefix</label><input id="byoEmailSubject" value="${esc(tpl.subject_prefix||'[DART DIY Alert]')}"></div><div class="field"><label>Greeting</label><input id="byoEmailGreeting" value="${esc(tpl.greeting||'Hello,')}"></div></div><div class="field"><label>Email introduction</label><textarea id="byoEmailIntro">${esc(tpl.email_intro||'')}</textarea></div><div class="field" style="max-width:280px"><label>CSV attachment</label><select id="byoEmailCsv"><option value="true" ${tpl.include_csv!==false?'selected':''}>Include CSV</option><option value="false" ${tpl.include_csv===false?'selected':''}>No CSV</option></select></div><br><div class="heroActions"><button class="btn" onclick="saveByoEmailTemplate()">Save alert</button><button class="btn secondary" onclick="previewByoEmailTemplate()">Preview current matches</button></div></div><div id="byoEmailPreviewHolder" style="margin-top:16px"></div>`)}${section('byo-email-history','Execution history',`<div class="panel"><h3>Recent BYO alert history</h3>${history}</div><br><div class="callout"><b>SMTP:</b> This page uses the same local-demo Gmail configuration as the Medicare Email Agent. The password is never sent to the browser.${smtp.issues?.length?`<br><br><b>Current setup items:</b> ${esc(smtp.issues.join(' '))}`:''}</div>`)}`;}
+function byoEmailAgentPage(info,workspace){
+  state.byoEmailAgent=info;
+  const templates=info.templates||[],tpl=(state.byoEmailEditingId?templates.find(t=>t.id===state.byoEmailEditingId):null)||info.default_template,cols=info.columns||[],status=info.status||{},smtp=info.smtp||{};
+  const s3Src=info.s3_source||(info.s3_sources&&info.selected_dataset?info.s3_sources[info.selected_dataset]:null);
+  const s3Count=Object.keys(info.s3_sources||{}).length;
+  const saved=templates.map(t=>{
+    const isS3=Boolean(info.s3_sources&&info.s3_sources[t.dataset_name]);
+    return `<div class="savedAutomation"><div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start"><div><b>${esc(t.name)}</b><div class="muted">${esc(t.dataset_name||'Dataset missing')} · ${esc(t.recipient_email)} · ${t.enabled?'Enabled':'Disabled'} · ${esc(t.last_status||'Not run yet')}</div></div><div style="display:flex;gap:6px;align-items:center">${isS3?'<span class="pill Stable" style="font-size:.7rem;padding:2px 7px;background:#ecfdf5;color:#065f46;border-color:#a7f3d0">🪣 Live S3 Polling</span>':''}<span class="pill ${t.enabled?'Stable':'Watch'}">${t.enabled?'Enabled':'Disabled'}</span></div></div><div class="automationActions"><button class="btn secondary small" onclick="editByoEmailById('${esc(t.id)}','${safeArg(t.dataset_name||'')}')">Edit</button><button class="btn secondary small" onclick="baselineByoEmail('${esc(t.id)}')">Refresh baseline</button><button class="btn secondary small" onclick="runByoEmail('${esc(t.id)}',false)">Check only</button><button class="btn small" onclick="runByoEmail('${esc(t.id)}',true)">Run + send</button><button class="btn ghost small" onclick="testByoEmail('${esc(t.id)}')">Send test</button><button class="btn ghost small" onclick="deleteByoEmailTemplate('${esc(t.id)}')">Delete</button></div></div>`;
+  }).join('')||'<div class="empty">No Build Your Own alert automations yet. Choose a dataset, configure one below, and save it.</div>';
+  const history=(info.history||[]).length?simpleTable(info.history):'<div class="empty">No Build Your Own alert history yet.</div>',dup=tpl.identity_duplicate_count||0;
+  return `${byoSingleDatasetPicker(workspace,state.byoEmailFile,'setByoEmailFile','Dataset to monitor')}<br>${section('byo-email-status','Alert status',`<div class="hero"><span class="workspaceBadge">Build Your Own</span><h1>Email Alerts & S3 Live Monitoring</h1><p>Monitor any uploaded DIY dataset for new or changed rows. If the dataset is imported from an Amazon S3 bucket, DART continuously polls S3 in the background and immediately triggers your email alerts whenever the remote file in S3 changes.</p><div class="heroActions"><button class="btn" onclick="checkAllByoEmails()">Check all enabled alerts now</button><button class="btn secondary" onclick="syncAllByoS3()">Sync all S3 buckets now 🔄</button><button class="btn secondary" onclick="baselineAllByoEmails()">Baseline all enabled</button><button class="btn ghost" onclick="testSmtp()">Test SMTP connection</button><button class="btn ghost" onclick="state.byoEditFile=state.byoEmailFile;sessionStorage.setItem('dart_byo_edit_file',state.byoEditFile);showPage('byo-raw')">Edit selected file</button></div></div><div class="statusGrid"><div class="statusCard"><div class="muted">Watcher & S3 Polling</div><div class="big"><span class="statusDot ${String(status.status||'').toLowerCase().includes('error')?'bad':'good'}"></span>${esc(status.status||'Running')}</div></div><div class="statusCard"><div class="muted">Check interval</div><div class="big">${esc(info.check_interval_seconds)}s</div></div><div class="statusCard"><div class="muted">Dataset ${s3Src?'(S3 Linked)':''}</div><div class="big" style="font-size:1rem">${esc(info.selected_dataset||'None')}</div></div><div class="statusCard"><div class="muted">Email delivery</div><div class="big">${smtp.configured?'Ready':'Setup needed'}</div><div class="muted">${esc(smtp.host||'')} ${smtp.port?': '+esc(smtp.port):''}</div></div></div>${s3Src?`<div class="callout" style="border-left-color:#b98b09;background:#fffdf0;margin-top:12px;color:#243044"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px"><div><b style="color:#725500">🪣 AWS S3 Live Sync Active:</b> <span>Connected to <code>s3://${esc(s3Src.bucket)}/${esc(s3Src.key)}</code></span><div class="muted" style="font-size:.76rem;margin-top:3px">Region: <b>${esc(s3Src.region||'us-east-1')}</b> · ETag: <code>${esc((s3Src.etag||'').slice(0,12))}</code> · Status: <b>${esc(s3Src.sync_status||'In sync')}</b> · Checked: <b>${esc(s3Src.last_checked_at||'Auto-polling')}</b></div></div><button class="btn secondary small" type="button" onclick="syncByoS3Dataset('${safeArg(info.selected_dataset)}')">Sync S3 file now 🔄</button></div></div>`:''}<br><div class="callout"><b>Live S3 Demo:</b> With an automation enabled and baseline refreshed, update or re-upload your Excel/CSV file in your Amazon S3 bucket. DART will automatically detect the new ETag/size, download the update, and send the email alert to your recipients. You can also click <b>Sync all S3 buckets now 🔄</b> to trigger the check immediately.</div>`)}${section('byo-email-saved','Saved alerts',`<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div><h3>Saved Build Your Own alerts</h3><p class="muted">Each alert remembers the exact DIY file it monitors and its live S3 connection.</p></div><button class="btn secondary" onclick="newByoEmailTemplate()">New alert</button></div>${saved}</div>`)}${section('byo-email-builder','Alert builder',`<div class="panel emailBuilder"><h3>${tpl.id?'Edit alert':'Create alert'}</h3><div class="grid grid2"><div class="field"><label>Monitoring dataset</label><input value="${esc(info.selected_dataset||'')}" disabled><div class="rangeLine">${s3Src?`<b style="color:#725500">🪣 S3 Live Sync active:</b> s3://${esc(s3Src.bucket)}/${esc(s3Src.key)} · Polling enabled.`:'Change the dataset using the picker above.'}</div></div><div class="field"><label>Alert name</label><input id="byoEmailName" value="${esc(tpl.name||'')}"></div><div class="field"><label>Recipient email(s)</label><input id="byoEmailRecipient" value="${esc(tpl.recipient_email||'')}" placeholder="owner@example.com; second@example.com"></div><div class="field"><label>Enabled</label><select id="byoEmailEnabled"><option value="false" ${!tpl.enabled?'selected':''}>Disabled</option><option value="true" ${tpl.enabled?'selected':''}>Enabled</option></select></div><div class="field"><label>Trigger mode</label><select id="byoEmailTrigger">${['New or changed rows','New rows only','All changes including deletions'].map(x=>`<option ${tpl.trigger_mode===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Row identity columns</label>${smartMultiSelect('byoEmailIdentity',cols,tpl.identity_columns,'Choose row identity columns')}<div class="rangeLine">Use stable fields that identify the same logical row between file versions. ${dup?`${intFmt(dup)} rows currently share duplicate identity values.`:'Current selection is suitable for row matching.'}</div></div><div class="field"><label>Monitored columns</label>${smartMultiSelect('byoEmailMonitor',cols,tpl.monitor_columns,'Choose monitored columns')}<div class="rangeLine">Changes to these fields count as detected changes.</div></div><div class="field"><label>Display columns in email</label>${smartMultiSelect('byoEmailDisplay',cols,tpl.display_columns,'Choose email display columns')}</div><div class="field"><label>Requirement mode</label><select id="byoEmailConditionMode"><option ${tpl.condition_mode==='Any change'?'selected':''}>Any change</option><option ${tpl.condition_mode!=='Any change'?'selected':''}>Only when conditions are met</option></select><label style="margin-top:10px">Condition logic</label><select id="byoEmailLogic"><option ${tpl.condition_logic!=='ANY condition'?'selected':''}>ALL conditions</option><option ${tpl.condition_logic==='ANY condition'?'selected':''}>ANY condition</option></select></div></div><br><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Conditions</h3><button type="button" class="btn secondary small" onclick="addByoEmailCondition()">Add condition</button></div><div id="byoConditionList">${(tpl.conditions||[]).map(r=>emailConditionRow(r,cols)).join('')}</div><div class="grid grid2"><div class="field"><label>Subject prefix</label><input id="byoEmailSubject" value="${esc(tpl.subject_prefix||'[DART DIY Alert]')}"></div><div class="field"><label>Greeting</label><input id="byoEmailGreeting" value="${esc(tpl.greeting||'Hello,')}"></div></div><div class="field"><label>Email introduction</label><textarea id="byoEmailIntro">${esc(tpl.email_intro||'')}</textarea></div><div class="field" style="max-width:280px"><label>CSV attachment</label><select id="byoEmailCsv"><option value="true" ${tpl.include_csv!==false?'selected':''}>Include CSV</option><option value="false" ${tpl.include_csv===false?'selected':''}>No CSV</option></select></div><br><div class="heroActions"><button class="btn" onclick="saveByoEmailTemplate()">Save alert</button><button class="btn secondary" onclick="previewByoEmailTemplate()">Preview current matches</button></div></div><div id="byoEmailPreviewHolder" style="margin-top:16px"></div>`)}${section('byo-email-history','Execution history',`<div class="panel"><h3>Recent BYO alert history</h3>${history}</div><br><div class="callout"><b>SMTP:</b> This page uses the same local-demo Gmail configuration as the Medicare Email Agent. The password is never sent to the browser.${smtp.issues?.length?`<br><br><b>Current setup items:</b> ${esc(smtp.issues.join(' '))}`:''}</div>`)}`;
+}
 async function editByoEmailById(id,dataset){state.byoEmailEditingId=id;state.byoEmailFile=dataset;sessionStorage.setItem('dart_byo_email_file',dataset||'');await render();}
 async function newByoEmailTemplate(){state.byoEmailEditingId=null;await render();}
 function collectByoEmailTemplate(){const conditions=[...document.querySelectorAll('#byoConditionList .conditionRow')].map(row=>({column:row.querySelector('.condColumn').value,operator:row.querySelector('.condOperator').value,value:row.querySelector('.condValue').value}));return {id:state.byoEmailEditingId||'',dataset_name:state.byoEmailFile||'',name:document.getElementById('byoEmailName')?.value||'',recipient_email:document.getElementById('byoEmailRecipient')?.value||'',enabled:document.getElementById('byoEmailEnabled')?.value==='true',trigger_mode:document.getElementById('byoEmailTrigger')?.value||'New or changed rows',identity_columns:selectedValues('byoEmailIdentity'),monitor_columns:selectedValues('byoEmailMonitor'),condition_mode:document.getElementById('byoEmailConditionMode')?.value||'Any change',condition_logic:document.getElementById('byoEmailLogic')?.value||'ALL conditions',conditions,display_columns:selectedValues('byoEmailDisplay'),subject_prefix:document.getElementById('byoEmailSubject')?.value||'[DART DIY Alert]',greeting:document.getElementById('byoEmailGreeting')?.value||'Hello,',email_intro:document.getElementById('byoEmailIntro')?.value||'',include_csv:document.getElementById('byoEmailCsv')?.value!=='false'};}
@@ -6838,12 +7204,19 @@ async def list_byo_s3_files(request: Request) -> Any:
                 key = str(obj["Key"])
                 if key.endswith("/"):
                     continue
-                if key.lower().endswith((".csv", ".xlsx", ".xlsm")):
+                if key.lower().endswith((".csv", ".xlsx", ".xlsm", ".xls", ".tsv", ".txt", ".json", ".parquet")):
+                    name = Path(key).name or key
+                    last_mod = obj.get("LastModified")
+                    last_mod_str = last_mod.isoformat() if hasattr(last_mod, "isoformat") else str(last_mod or "")
                     items.append({
                         "key": key,
-                        "name": Path(key).name,
+                        "name": name,
+                        "filename": name,
                         "size_bytes": int(obj["Size"]),
                         "size_mb": round(obj["Size"] / (1024 * 1024), 2),
+                        "etag": str(obj.get("ETag", "")).strip('"'),
+                        "last_modified": last_mod_str,
+                        "bucket": bucket,
                     })
                 if len(items) >= 500:
                     break
@@ -6895,8 +7268,26 @@ async def import_byo_from_s3(request: Request) -> Any:
             if safe_hint.lower().endswith(".xlsm"):
                 safe_hint = safe_hint[:-5] + ".xlsx"
             info = _save_byo_bytes(content, safe_hint)
+            saved_name = info["name"]
+            etag = str(obj.get("ETag", "")).strip('"')
+            last_mod = obj.get("LastModified")
+            last_mod_str = last_mod.isoformat() if hasattr(last_mod, "isoformat") else str(last_mod or "")
+            save_byo_s3_source(
+                dataset_name=saved_name,
+                bucket=bucket,
+                key=key,
+                region=region,
+                etag=etag,
+                last_modified=last_mod_str,
+                size_bytes=len(content),
+                auto_sync=True,
+                last_synced_at=datetime.now(timezone.utc).isoformat(),
+                sync_status="Imported from S3",
+                created_by=STATE.get("current_user") or "",
+            )
             info["source_key"] = key
             info["bucket"] = bucket
+            info["s3_linked"] = True
             saved.append(info)
         except Exception as exc:
             errors.append(f"{key}: {exc}")
@@ -6949,6 +7340,7 @@ def delete_byo_file(filename: str) -> Any:
     try:
         path = _byo_path(filename)
         path.unlink()
+        delete_byo_s3_source(filename)
         for automation in [t for t in load_byo_email_automations() if str(t.get("dataset_name")) == str(filename)]:
             delete_byo_email_automation(str(automation.get("id", "")))
         pair = STATE.get("byo_chat_pair", [])
@@ -7046,11 +7438,14 @@ def _byo_email_meta_for_dataset(filename: str) -> Dict[str, Any]:
     ids = default.get("identity_columns", [])
     default["identity_duplicate_count"] = int(df[ids].astype(str).duplicated(keep=False).sum()) if ids and not df.empty else 0
     cfg = smtp_settings()
+    s3_sources = load_byo_s3_sources()
+    selected_s3 = s3_sources.get(filename)
     return {
         "templates": enriched, "default_template": default, "columns": [str(c) for c in df.columns],
         "operators": EMAIL_OPERATORS, "status": _byo_email_status_payload(), "history": _byo_email_history(),
         "check_interval_seconds": BYO_EMAIL_AGENT_MIN_CHECK_SECONDS, "auto_run": BYO_EMAIL_AGENT_AUTO_RUN,
         "selected_dataset": filename, "datasets": datasets,
+        "s3_source": selected_s3, "s3_sources": s3_sources,
         "smtp": {"configured": smtp_is_configured(), "issues": smtp_configuration_issues(), "host": cfg["host"], "port": cfg["port"], "sender": cfg["from_email"], "transport": "SSL" if cfg["use_ssl"] else ("STARTTLS" if cfg["use_tls"] else "plain SMTP")},
     }
 
@@ -7160,6 +7555,68 @@ async def test_byo_email_template_route(template_id: str) -> Any:
         return {"status": "Test email sent", "subject": subject, "matches": len(matches)}
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/byo/s3/sync")
+async def sync_byo_s3_route(request: Request) -> Any:
+    payload = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    filename = str(payload.get("filename", "")).strip()
+    force = bool(payload.get("force", False))
+    try:
+        if filename:
+            sync_res = sync_byo_s3_source(filename, force_download=force)
+            agent_results: List[Dict[str, Any]] = []
+            if sync_res.get("changed"):
+                agent_results = [_public_automation_result(r) for r in run_enabled_byo_email_automations(filename)]
+            return {"status": "ok", "sync": sync_res, "agent_results": agent_results}
+        else:
+            sync_results = sync_all_byo_s3_sources(force_download=force)
+            changed_names = [r["dataset_name"] for r in sync_results if r.get("changed")]
+            agent_results = []
+            for name in changed_names:
+                agent_results.extend([_public_automation_result(r) for r in run_enabled_byo_email_automations(name)])
+            return {"status": "ok", "synced": sync_results, "changed_count": len(changed_names), "agent_results": agent_results}
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.get("/api/byo/s3/sources")
+def get_byo_s3_sources_route() -> Dict[str, Any]:
+    return {"status": "ok", "sources": load_byo_s3_sources()}
+
+
+@app.post("/api/byo/s3/link")
+async def link_byo_s3_source_route(request: Request) -> Any:
+    payload = await request.json()
+    dataset_name = str(payload.get("dataset_name", "")).strip()
+    bucket = str(payload.get("bucket", "")).strip()
+    key = str(payload.get("key", "")).strip()
+    region = str(payload.get("region", "")).strip()
+    auto_sync = bool(payload.get("auto_sync", True))
+    if not dataset_name or not bucket or not key:
+        return JSONResponse({"error": "Provide dataset_name, bucket, and key."}, status_code=400)
+    try:
+        record = save_byo_s3_source(
+            dataset_name=dataset_name,
+            bucket=bucket,
+            key=key,
+            region=region,
+            auto_sync=auto_sync,
+            created_by=STATE.get("current_user") or "",
+        )
+        return {"status": "ok", "source": record}
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/byo/s3/unlink")
+async def unlink_byo_s3_source_route(request: Request) -> Any:
+    payload = await request.json()
+    dataset_name = str(payload.get("dataset_name", "")).strip()
+    if not dataset_name:
+        return JSONResponse({"error": "Provide dataset_name."}, status_code=400)
+    delete_byo_s3_source(dataset_name)
+    return {"status": "ok", "unlinked": dataset_name}
 
 
 @app.post("/api/byo/compare")
