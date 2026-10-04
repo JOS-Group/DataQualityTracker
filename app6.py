@@ -88,10 +88,9 @@ BUILD_FINGERPRINT = "BYO-NAV-DROPDOWNS-8.9.1"
 APP_STARTED_AT = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 app = FastAPI(title="DART - Data Assurance Reconciliation Tracker", version=APP_VERSION)
 
-USERS_FILE = Path(__file__).resolve().parent / "dart_users.json"
-
-
 BASE_DIR = Path(__file__).resolve().parent
+USERS_FILE = BASE_DIR / "dart_users.json"
+USERS_DB_PATH = Path(os.environ.get("DART_USERS_DB", str(BASE_DIR / "data" / "dart_users.db")))
 
 
 def _resolve_local_file(filename: str) -> Path:
@@ -322,10 +321,127 @@ STATE: Dict[str, Any] = {
 }
 
 # -----------------------------------------------------------------------------
-# User/profile helpers
+# User/profile SQLite database & profile helpers
 # -----------------------------------------------------------------------------
 
+def _get_users_db() -> sqlite3.Connection:
+    USERS_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(USERS_DB_PATH))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _init_users_db() -> None:
+    try:
+        with _get_users_db() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    username TEXT PRIMARY KEY,
+                    password TEXT,
+                    display_name TEXT,
+                    email TEXT,
+                    organization TEXT,
+                    role TEXT,
+                    created_at TEXT,
+                    persona_json TEXT,
+                    aws_access_key_id TEXT DEFAULT '',
+                    aws_secret_access_key TEXT DEFAULT '',
+                    aws_region TEXT DEFAULT '',
+                    aws_bucket TEXT DEFAULT '',
+                    aws_session_token TEXT DEFAULT '',
+                    aws_account_info_json TEXT DEFAULT '',
+                    updated_at TEXT
+                )
+            """)
+            conn.commit()
+
+            # Seed / sync from dart_users.json if SQLite table is empty or missing users
+            if USERS_FILE.exists():
+                try:
+                    raw_data = json.loads(USERS_FILE.read_text(encoding="utf-8"))
+                    users_dict = raw_data.get("users", {})
+                    for uname, udata in users_dict.items():
+                        cur = conn.execute("SELECT username FROM users WHERE username = ?", (uname,))
+                        if not cur.fetchone():
+                            prof = udata.get("profile", {})
+                            persona = udata.get("persona")
+                            aws_data = udata.get("aws", {})
+                            conn.execute("""
+                                INSERT INTO users (
+                                    username, password, display_name, email, organization, role,
+                                    created_at, persona_json, aws_access_key_id, aws_secret_access_key,
+                                    aws_region, aws_bucket, aws_session_token, aws_account_info_json, updated_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                uname,
+                                udata.get("password", ""),
+                                prof.get("display_name", uname),
+                                prof.get("email", ""),
+                                prof.get("organization", ""),
+                                prof.get("role", ""),
+                                udata.get("created_at", "local prototype"),
+                                json.dumps(persona) if isinstance(persona, dict) else "",
+                                aws_data.get("access_key_id", ""),
+                                aws_data.get("secret_access_key", ""),
+                                aws_data.get("region", ""),
+                                aws_data.get("bucket", ""),
+                                aws_data.get("session_token", ""),
+                                json.dumps(aws_data.get("account_info", {})) if isinstance(aws_data.get("account_info"), dict) else "",
+                                udata.get("updated_at", datetime.now(timezone.utc).isoformat()),
+                            ))
+                    conn.commit()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+_init_users_db()
+
+
 def load_users() -> Dict[str, Any]:
+    try:
+        with _get_users_db() as conn:
+            rows = conn.execute("SELECT * FROM users").fetchall()
+            if rows:
+                users_out: Dict[str, Any] = {}
+                for r in rows:
+                    persona_obj = None
+                    if r["persona_json"]:
+                        try:
+                            persona_obj = json.loads(r["persona_json"])
+                        except Exception:
+                            persona_obj = None
+                    account_info_obj = {}
+                    if r["aws_account_info_json"]:
+                        try:
+                            account_info_obj = json.loads(r["aws_account_info_json"])
+                        except Exception:
+                            account_info_obj = {}
+                    users_out[r["username"]] = {
+                        "password": r["password"] or "",
+                        "created_at": r["created_at"] or "local prototype",
+                        "profile": {
+                            "display_name": r["display_name"] or r["username"],
+                            "email": r["email"] or "",
+                            "organization": r["organization"] or "",
+                            "role": r["role"] or "",
+                        },
+                        "persona": persona_obj,
+                        "aws": {
+                            "access_key_id": r["aws_access_key_id"] or "",
+                            "secret_access_key": r["aws_secret_access_key"] or "",
+                            "region": r["aws_region"] or "",
+                            "bucket": r["aws_bucket"] or "",
+                            "session_token": r["aws_session_token"] or "",
+                            "account_info": account_info_obj,
+                        },
+                        "updated_at": r["updated_at"] or "",
+                    }
+                return {"users": users_out}
+    except Exception:
+        pass
+
     if not USERS_FILE.exists():
         return {"users": {}}
     try:
@@ -335,7 +451,214 @@ def load_users() -> Dict[str, Any]:
 
 
 def save_users(data: Dict[str, Any]) -> None:
-    USERS_FILE.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    try:
+        with _get_users_db() as conn:
+            for uname, udata in (data.get("users", {})).items():
+                prof = udata.get("profile", {})
+                persona = udata.get("persona")
+                aws_data = udata.get("aws", {})
+                conn.execute("""
+                    INSERT INTO users (
+                        username, password, display_name, email, organization, role,
+                        created_at, persona_json, aws_access_key_id, aws_secret_access_key,
+                        aws_region, aws_bucket, aws_session_token, aws_account_info_json, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(username) DO UPDATE SET
+                        password = excluded.password,
+                        display_name = excluded.display_name,
+                        email = excluded.email,
+                        organization = excluded.organization,
+                        role = excluded.role,
+                        persona_json = excluded.persona_json,
+                        aws_access_key_id = excluded.aws_access_key_id,
+                        aws_secret_access_key = excluded.aws_secret_access_key,
+                        aws_region = excluded.aws_region,
+                        aws_bucket = excluded.aws_bucket,
+                        aws_session_token = excluded.aws_session_token,
+                        aws_account_info_json = excluded.aws_account_info_json,
+                        updated_at = excluded.updated_at
+                """, (
+                    uname,
+                    udata.get("password", ""),
+                    prof.get("display_name", uname),
+                    prof.get("email", ""),
+                    prof.get("organization", ""),
+                    prof.get("role", ""),
+                    udata.get("created_at", "local prototype"),
+                    json.dumps(persona) if isinstance(persona, dict) else "",
+                    aws_data.get("access_key_id", ""),
+                    aws_data.get("secret_access_key", ""),
+                    aws_data.get("region", ""),
+                    aws_data.get("bucket", ""),
+                    aws_data.get("session_token", ""),
+                    json.dumps(aws_data.get("account_info", {})) if isinstance(aws_data.get("account_info"), dict) else "",
+                    datetime.now(timezone.utc).isoformat(),
+                ))
+            conn.commit()
+    except Exception:
+        pass
+
+    try:
+        USERS_FILE.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def get_user_aws_config(username: Optional[str]) -> Dict[str, Any]:
+    env_key = os.getenv("AWS_ACCESS_KEY_ID", "").strip()
+    env_secret = os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
+    env_region = os.getenv("AWS_DEFAULT_REGION", "").strip() or os.getenv("AWS_REGION", "").strip()
+    env_bucket = os.getenv("AWS_S3_BUCKET", "").strip() or os.getenv("S3_BUCKET", "").strip() or os.getenv("AWS_BUCKET", "").strip()
+    env_token = os.getenv("AWS_SESSION_TOKEN", "").strip()
+
+    if not username:
+        has_env = bool(env_key and env_secret)
+        return {
+            "access_key_id": env_key,
+            "secret_access_key": env_secret,
+            "region": env_region or "us-east-1",
+            "bucket": env_bucket,
+            "session_token": env_token,
+            "is_saved_in_db": False,
+            "has_credentials": has_env,
+            "source": "server_env" if has_env else "none",
+            "account_info": {},
+            "db_key": "",
+            "db_region": "",
+            "db_bucket": "",
+        }
+
+    user = load_users().get("users", {}).get(username, {})
+    aws = user.get("aws", {})
+    db_key = str(aws.get("access_key_id", "") or "").strip()
+    db_secret = str(aws.get("secret_access_key", "") or "").strip()
+    db_region = str(aws.get("region", "") or "").strip()
+    db_bucket = str(aws.get("bucket", "") or "").strip()
+    db_token = str(aws.get("session_token", "") or "").strip()
+    db_info = aws.get("account_info", {}) if isinstance(aws.get("account_info"), dict) else {}
+
+    is_in_db = bool(db_key and db_secret)
+    effective_key = db_key or env_key
+    effective_secret = db_secret or env_secret
+    effective_region = db_region or env_region or "us-east-1"
+    effective_bucket = db_bucket or env_bucket
+    effective_token = db_token or env_token
+
+    has_creds = bool(effective_key and effective_secret)
+    source = "user_db" if is_in_db else ("server_env" if (env_key and env_secret) else "none")
+
+    return {
+        "access_key_id": effective_key,
+        "secret_access_key": effective_secret,
+        "region": effective_region,
+        "bucket": effective_bucket,
+        "session_token": effective_token,
+        "is_saved_in_db": is_in_db,
+        "has_credentials": has_creds,
+        "source": source,
+        "account_info": db_info,
+        "db_key": db_key,
+        "db_region": db_region,
+        "db_bucket": db_bucket,
+    }
+
+
+def save_user_aws_config(
+    username: str,
+    access_key: Optional[str] = None,
+    secret_key: Optional[str] = None,
+    region: Optional[str] = None,
+    bucket: Optional[str] = None,
+    session_token: Optional[str] = None,
+    account_info: Optional[Dict[str, Any]] = None,
+) -> None:
+    data = load_users()
+    user = data.setdefault("users", {}).setdefault(username, {"password": "", "profile": {}})
+    aws = user.setdefault("aws", {})
+    if access_key is not None:
+        aws["access_key_id"] = str(access_key).strip()
+    if secret_key is not None and str(secret_key).strip():
+        aws["secret_access_key"] = str(secret_key).strip()
+    if region is not None:
+        aws["region"] = str(region).strip()
+    if bucket is not None:
+        aws["bucket"] = str(bucket).strip()
+    if session_token is not None:
+        aws["session_token"] = str(session_token).strip()
+    if account_info is not None:
+        aws["account_info"] = account_info
+    save_users(data)
+
+
+def clear_user_aws_config(username: str) -> None:
+    data = load_users()
+    user = data.setdefault("users", {}).setdefault(username, {"password": "", "profile": {}})
+    user["aws"] = {
+        "access_key_id": "",
+        "secret_access_key": "",
+        "region": "",
+        "bucket": "",
+        "session_token": "",
+        "account_info": {},
+    }
+    save_users(data)
+
+
+def test_aws_credentials(
+    region: str = "",
+    access_key: str = "",
+    secret_key: str = "",
+    session_token: str = "",
+) -> Dict[str, Any]:
+    if boto3 is None:
+        raise RuntimeError("The 'boto3' package is not installed on the server.")
+    kwargs: Dict[str, Any] = {}
+    region = (region or "").strip()
+    if region:
+        kwargs["region_name"] = region
+    if access_key and secret_key:
+        kwargs["aws_access_key_id"] = access_key
+        kwargs["aws_secret_access_key"] = secret_key
+        if session_token:
+            kwargs["aws_session_token"] = session_token
+
+    session = boto3.Session(**kwargs)
+
+    account_id = ""
+    arn = ""
+    user_id = ""
+    sts_error = ""
+    try:
+        sts = session.client("sts")
+        identity = sts.get_caller_identity()
+        account_id = identity.get("Account", "")
+        arn = identity.get("Arn", "")
+        user_id = identity.get("UserId", "")
+    except Exception as exc:
+        sts_error = str(exc)
+
+    buckets: List[str] = []
+    bucket_error = ""
+    try:
+        s3 = session.client("s3")
+        res = s3.list_buckets()
+        buckets = [b["Name"] for b in res.get("Buckets", []) if "Name" in b]
+    except Exception as exc:
+        bucket_error = str(exc)
+
+    if not account_id and not buckets and (sts_error or bucket_error):
+        err = sts_error or bucket_error
+        raise RuntimeError(f"AWS connection test failed: {err}")
+
+    return {
+        "account_id": account_id,
+        "arn": arn,
+        "user_id": user_id,
+        "buckets": buckets,
+        "bucket_count": len(buckets),
+        "region": session.region_name or region or "us-east-1",
+        "tested_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }
 
 
 def public_user(username: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -346,6 +669,7 @@ def public_user(username: Optional[str]) -> Optional[Dict[str, Any]]:
         return None
     profile = user.get("profile", {})
     persona = user.get("persona") if isinstance(user.get("persona"), dict) else None
+    aws_cfg = get_user_aws_config(username)
     return {
         "username": username,
         "display_name": profile.get("display_name", username),
@@ -353,8 +677,19 @@ def public_user(username: Optional[str]) -> Optional[Dict[str, Any]]:
         "organization": profile.get("organization", ""),
         "role": profile.get("role", ""),
         "created_at": user.get("created_at", "local prototype"),
-        "storage_file": USERS_FILE.name,
+        "storage_file": "dart_users.db",
         "has_persona": bool(persona),
+        "aws_config": {
+            "access_key_id": aws_cfg.get("access_key_id", ""),
+            "has_secret_key": bool(aws_cfg.get("secret_access_key", "")),
+            "region": aws_cfg.get("region", ""),
+            "bucket": aws_cfg.get("bucket", ""),
+            "has_session_token": bool(aws_cfg.get("session_token", "")),
+            "is_saved_in_db": bool(aws_cfg.get("is_saved_in_db")),
+            "has_credentials": bool(aws_cfg.get("has_credentials")),
+            "source": aws_cfg.get("source", "none"),
+            "account_info": aws_cfg.get("account_info", {}),
+        },
     }
 
 
@@ -1988,14 +2323,18 @@ def _validate_public_import_url(url: str) -> str:
 def _s3_client(region: str = "", access_key: str = "", secret_key: str = "", session_token: str = ""):
     if boto3 is None:
         raise RuntimeError("The 'boto3' package is not installed on the server. Run: pip install boto3")
+
+    current_user = STATE.get("current_user")
+    user_aws = get_user_aws_config(current_user) if current_user else {}
+
+    region = (region or "").strip() or user_aws.get("region", "") or os.getenv("AWS_DEFAULT_REGION", "").strip() or os.getenv("AWS_REGION", "").strip()
+    access_key = (access_key or "").strip() or user_aws.get("access_key_id", "") or os.getenv("AWS_ACCESS_KEY_ID", "").strip()
+    secret_key = (secret_key or "").strip() or user_aws.get("secret_access_key", "") or os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
+    session_token = (session_token or "").strip() or user_aws.get("session_token", "") or os.getenv("AWS_SESSION_TOKEN", "").strip()
+
     kwargs: Dict[str, Any] = {}
-    region = (region or "").strip() or os.getenv("AWS_DEFAULT_REGION", "").strip() or os.getenv("AWS_REGION", "").strip()
     if region:
         kwargs["region_name"] = region
-
-    access_key = (access_key or "").strip() or os.getenv("AWS_ACCESS_KEY_ID", "").strip()
-    secret_key = (secret_key or "").strip() or os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
-    session_token = (session_token or "").strip() or os.getenv("AWS_SESSION_TOKEN", "").strip()
 
     if access_key and secret_key:
         kwargs["aws_access_key_id"] = access_key
@@ -2193,19 +2532,19 @@ def _byo_library_records() -> List[Dict[str, Any]]:
 
 def byo_payload() -> Dict[str, Any]:
     datasets = _byo_library_records()
-    aws_key = os.getenv("AWS_ACCESS_KEY_ID", "").strip()
-    aws_secret = os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
-    aws_region = os.getenv("AWS_DEFAULT_REGION", "").strip() or os.getenv("AWS_REGION", "").strip()
-    aws_bucket = os.getenv("AWS_S3_BUCKET", "").strip() or os.getenv("S3_BUCKET", "").strip() or os.getenv("AWS_BUCKET", "").strip()
+    current_user = STATE.get("current_user")
+    user_aws = get_user_aws_config(current_user) if current_user else {}
     return {
         "datasets": datasets,
         "dataset_count": len(datasets),
         "storage_path": str(Path("Data") / "DIY"),
         "ai_configured": bool(OpenAI and groq_api_key()),
         "ai_model": groq_model(),
-        "aws_iam_configured": bool(aws_key and aws_secret),
-        "aws_region": aws_region,
-        "aws_bucket": aws_bucket,
+        "aws_iam_configured": bool(user_aws.get("has_credentials")),
+        "aws_source": user_aws.get("source", "none"),
+        "aws_region": user_aws.get("region", "us-east-1"),
+        "aws_bucket": user_aws.get("bucket", ""),
+        "aws_account_info": user_aws.get("account_info", {}),
         "chat": STATE.get("byo_chat", []),
         # Compatibility fields for older front-end references.
         "loaded": False, "source": "", "uploaded_at": "", "rows": 0, "columns": 0,
@@ -4243,6 +4582,68 @@ async function saveSettings(e){
   const payload={program:document.getElementById('setProgram').value,role:document.getElementById('setRole').value,audience:document.getElementById('setAudience').value,depth:document.getElementById('setDepth').value,focus:document.getElementById('setFocus').value.split(',').map(x=>x.trim()).filter(Boolean),geography:['National'],first_question:document.getElementById('setQuestion').value,preferred_workspace:document.getElementById('setPreferredWorkspace').value,landing_page:document.getElementById('setLandingPage').value};
   await postJson('/api/persona',payload);toast('Persona and startup preferences saved');state.meta=await api('/api/meta');await render();
 }
+async function saveAwsSettings(){
+  const access_key_id = (document.getElementById('setAwsAccessKey')?.value||'').trim();
+  const secret_access_key = (document.getElementById('setAwsSecretKey')?.value||'').trim();
+  const region = (document.getElementById('setAwsRegion')?.value||'').trim();
+  const bucket = (document.getElementById('setAwsBucket')?.value||'').trim();
+  const session_token = (document.getElementById('setAwsSessionToken')?.value||'').trim();
+  try {
+    const r = await postJson('/api/settings/aws', { access_key_id, secret_access_key, region, bucket, session_token });
+    toast('AWS credentials saved to user database');
+    state.meta = await api('/api/meta');
+    await render();
+  } catch(err) {
+    console.error(err);
+    toast('Could not save AWS settings: ' + String(err.message||err).slice(0, 160));
+  }
+}
+async function testAwsSettings(){
+  const access_key_id = (document.getElementById('setAwsAccessKey')?.value||'').trim();
+  const secret_access_key = (document.getElementById('setAwsSecretKey')?.value||'').trim();
+  const region = (document.getElementById('setAwsRegion')?.value||'').trim();
+  const bucket = (document.getElementById('setAwsBucket')?.value||'').trim();
+  const session_token = (document.getElementById('setAwsSessionToken')?.value||'').trim();
+  toast('Testing AWS connection and discovering buckets...');
+  try {
+    const r = await postJson('/api/settings/aws/test', { access_key_id, secret_access_key, region, bucket, session_token });
+    toast(`Connected to AWS Account ${r.account_id||''}! Found ${r.bucket_count||0} bucket(s).`);
+    state.meta = await api('/api/meta');
+    await render();
+  } catch(err) {
+    console.error(err);
+    toast('AWS test failed: ' + String(err.message||err).slice(0, 180));
+  }
+}
+async function clearAwsSettings(){
+  if(!confirm('Clear saved AWS credentials from your user database account?')) return;
+  try {
+    await postJson('/api/settings/aws/clear', {});
+    toast('AWS credentials cleared from database');
+    state.meta = await api('/api/meta');
+    await render();
+  } catch(err) {
+    toast('Clear failed: ' + String(err.message||err));
+  }
+}
+async function useBucketAsDefault(bucketName){
+  try {
+    await postJson('/api/settings/aws', { bucket: bucketName });
+    toast(`Default bucket set to ${bucketName}`);
+    state.meta = await api('/api/meta');
+    await render();
+  } catch(err) {
+    toast('Failed to set default bucket: ' + String(err.message||err));
+  }
+}
+function openS3InByo(bucketName){
+  state.workspace = 'byo';
+  sessionStorage.setItem('dart_workspace', 'byo');
+  state.page = 'byo-lab';
+  state.byoS3Context = state.byoS3Context || {};
+  state.byoS3Context.bucket = bucketName;
+  render();
+}
 async function showPage(id){state.page=id;setNav();await render();}
 function filterLabel(key){const arr=state.filters[key];if(arr===null||arr===undefined)return 'All values';if(!arr.length)return 'No values';return arr.length===1?arr[0]:`${arr.length} selected`;}
 function openFilterModal(key,title,items){modalState={key,title,items:[...items],selected:[...(state.filters[key]||items)]};modalTitle.textContent=title;modalSub.textContent='Search and select values. Leave everything selected to include all values.';modalSearch.value='';filterModal.style.display='flex';renderModalOptions();}
@@ -5300,6 +5701,7 @@ function byoImportPanel(info){
   const s3Ctx=state.byoS3Context||{};
   const sp=state.byoSharePointItems;
   const spCtx=state.byoSharePointContext||{};
+  const isUserAws = info.aws_source === 'user_db';
   const hasEnvAws = Boolean(info.aws_iam_configured);
   const defaultBucket = s3Ctx.bucket || info.aws_bucket || '';
   const defaultRegion = s3Ctx.region || info.aws_region || '';
@@ -5314,20 +5716,27 @@ function byoImportPanel(info){
     <div class="panel byoImportPanel">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
         <span class="workspaceBadge">Amazon S3</span>
-        ${hasEnvAws ? `<span class="pill Stable" title="AWS IAM credentials detected from Render environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)">AWS IAM Connected (${esc(info.aws_region||'env')}) ✓</span>` : `<span class="pill" style="background:#f1f5f9;color:#64748b" title="No IAM env vars detected. Enter credentials directly or configure Render env vars.">Manual Credentials / Env</span>`}
+        ${isUserAws ?
+          `<span class="pill Stable" title="AWS credentials loaded from your user profile database">User AWS Connected (${esc(info.aws_region||'default')}) ✓</span>` :
+          (hasEnvAws ?
+            `<span class="pill Stable" title="AWS IAM credentials detected from Render environment variables">Server AWS Connected (${esc(info.aws_region||'env')}) ✓</span>` :
+            `<span class="pill" style="background:#f1f5f9;color:#64748b" title="No saved AWS credentials. Enter credentials below or configure them in Settings.">Manual Credentials / Env</span>`
+          )
+        }
       </div>
       <h3>Import from an S3 bucket</h3>
-      <p class="muted">${hasEnvAws ? 'Your AWS IAM credentials from Render environment variables are automatically connected. Enter your bucket name or path to list and import files.' : 'List and select Excel (.xlsx) or CSV files stored in an Amazon S3 bucket. You can enter an S3 bucket name (or full <code>s3://bucket/folder/</code> path), optional prefix, AWS credentials, and region.'}</p>
+      <p class="muted">${isUserAws ? 'Your AWS IAM credentials from your user account database are automatically connected. Enter your bucket name or path to list and import files.' : (hasEnvAws ? 'Your AWS IAM credentials from Render environment variables are automatically connected. Enter your bucket name or path to list and import files.' : 'List and select Excel (.xlsx) or CSV files stored in an Amazon S3 bucket. You can enter an S3 bucket name (or full <code>s3://bucket/folder/</code> path), optional prefix, AWS credentials, and region.')}</p>
       <div class="byoS3Fields">
         <input id="byoS3Bucket" type="text" placeholder="Bucket name or s3://bucket/path" value="${esc(defaultBucket)}">
         <input id="byoS3Prefix" type="text" placeholder="Prefix / folder (optional)" value="${esc(s3Ctx.prefix||'')}">
-        <input id="byoS3Region" type="text" placeholder="Region (e.g. us-east-1)" value="${esc(defaultRegion)}">
-        <input id="byoS3AccessKey" type="text" placeholder="${hasEnvAws ? 'Access key ID (connected from env)' : 'Access key ID (optional)'}" value="${esc(s3Ctx.access_key||'')}">
-        <input id="byoS3SecretKey" type="password" placeholder="${hasEnvAws ? 'Secret key (connected from env)' : 'Secret access key (optional)'}" value="${esc(s3Ctx.secret_key||'')}">
+        <input id="byoS3Region" type="text" placeholder="Region (optional, e.g. us-east-1)" value="${esc(defaultRegion)}">
+        <input id="byoS3AccessKey" type="text" placeholder="Access key ID (optional)" value="${esc(s3Ctx.access_key||'')}">
+        <input id="byoS3SecretKey" type="password" placeholder="Secret access key (optional)" value="${esc(s3Ctx.secret_key||'')}">
         <input id="byoS3SessionToken" type="password" placeholder="Session token (optional)" value="${esc(s3Ctx.session_token||'')}">
       </div>
-      <div class="heroActions" style="justify-content:flex-start;margin-top:12px;gap:8px">
+      <div class="heroActions" style="justify-content:flex-start;margin-top:12px;gap:8px;flex-wrap:wrap">
         <button class="btn secondary" type="button" onclick="listByoS3Files()">List bucket files</button>
+        <button class="btn ghost small" type="button" onclick="showPage('settings')">Manage AWS in Settings ⚙</button>
         ${s3?`<button class="btn ghost small" type="button" onclick="clearByoS3List()">Clear list</button>`:''}
       </div>
       ${s3?byoS3ResultsHtml(s3):''}
@@ -5353,8 +5762,9 @@ function byoImportPanel(info){
 }</code></pre>
           <p style="margin:4px 0"><b>3. Authentication options:</b></p>
           <ul style="margin:4px 0 6px 18px;padding:0">
-            <li><b>Render Environment Variables (Recommended):</b> <code>AWS_ACCESS_KEY_ID</code>, <code>AWS_SECRET_ACCESS_KEY</code>, and <code>AWS_DEFAULT_REGION</code> configured in Render dashboard are used automatically.</li>
-            <li><b>Direct Form:</b> Enter your AWS Access Key ID & Secret Key in the boxes above if you wish to override server environment credentials.</li>
+            <li><b>User Database Credentials (Recommended):</b> Save your AWS IAM credentials once in <b>Settings</b> &rarr; <b>AWS Account & S3 Buckets</b> so they persist in the SQLite database and auto-connect on every session.</li>
+            <li><b>Render Environment Variables:</b> <code>AWS_ACCESS_KEY_ID</code>, <code>AWS_SECRET_ACCESS_KEY</code>, and <code>AWS_DEFAULT_REGION</code> configured in the Render dashboard serve as automatic server fallbacks.</li>
+            <li><b>Direct Form:</b> Enter credentials directly in the boxes above to override saved or environment credentials for a single import.</li>
             <li><b>Temporary / SSO Credentials:</b> If using AWS SSO or AssumeRole, paste the temporary Session Token into the Session Token field.</li>
           </ul>
         </div>
@@ -5626,7 +6036,7 @@ async function renderByo(meta,info){
   if(state.page==='byo-home'){
     html=`<div class="hero"><span class="workspaceBadge">Build Your Own</span><h1>Dataset Intelligence Workspace</h1><p>Upload reusable data files, compare datasets, inspect quality, edit the underlying saved data, configure file-specific email alerts, and ask an AI analyst questions grounded in your selected files.</p><div class="heroActions"><button class="btn" onclick="showPage('byo-library')">Open Dataset Library</button><button class="btn secondary" onclick="showPage('byo-raw')">Open Raw Data Editor</button><button class="btn secondary" onclick="showPage('byo-email')">Open Email Alerts</button><button class="btn ghost" onclick="showPage('byo-ai')">Open AI Analyst</button></div></div>${byoHomeStats(info)}<br>${personaLensPanel(meta)}<br><div class="byoFlow"><div class="byoFlowCard"><b>1 · Save datasets</b><span>Upload Excel or CSV files once. Originals are stored in Data/DIY and persist between server restarts.</span></div><div class="byoFlowCard"><b>2 · Inspect, edit, or compare</b><span>Open any single file in Raw Data Editor or choose a pair for comparison and quality analysis.</span></div><div class="byoFlowCard"><b>3 · Alert + analyze</b><span>Baseline a file-specific Email Alert, edit a monitored cell for the demo, then let DART detect and email the change immediately.</span></div></div><br>${(info.datasets||[]).length?byoPairPicker(info):noFiles}`;
   }else if(state.page==='byo-lab'){
-    html=`<div class="hero"><span class="workspaceBadge">Build Your Own</span><h1>Upload Data</h1><p>Add reusable datasets to the persistent DIY library. Multiple files can be uploaded at once and duplicate filenames are saved safely with a numeric suffix.</p></div>${byoUploadPanel(info)}<br>${byoImportPanel()}<br><div class="panel"><h3>Saved location</h3><p>Files are written to <span class="byoStoragePath">${esc(info.storage_path||'Data/DIY')}</span> relative to this Python app. Once uploaded, the same file can be opened in Raw Data Editor and selected in Email Alerts.</p></div>`;
+    html=`<div class="hero"><span class="workspaceBadge">Build Your Own</span><h1>Upload Data</h1><p>Add reusable datasets to the persistent DIY library. Multiple files can be uploaded at once and duplicate filenames are saved safely with a numeric suffix.</p></div>${byoUploadPanel(info)}<br>${byoImportPanel(info)}<br><div class="panel"><h3>Saved location</h3><p>Files are written to <span class="byoStoragePath">${esc(info.storage_path||'Data/DIY')}</span> relative to this Python app. Once uploaded, the same file can be opened in Raw Data Editor and selected in Email Alerts.</p></div>`;
   }else if(state.page==='byo-library'){
     html=`<div class="hero"><span class="workspaceBadge">Persistent library</span><h1>Dataset Library</h1><p>Choose, download, export, or delete the files saved in your repo. Every ready file is also available to the BYO Raw Data Editor and Email Alerts pages.</p><div class="heroActions"><button class="btn" onclick="showPage('byo-lab')">Upload more files</button><button class="btn secondary" onclick="showPage('byo-raw')">Edit a file</button><button class="btn ghost" onclick="showPage('byo-email')">Configure alerts</button></div></div><div class="byoLibraryGrid"><div class="panel"><h3>${intFmt(info.dataset_count||0)} saved datasets</h3>${byoLibraryCards(info)}</div><div>${byoPairPicker(info)}</div></div>`;
   }else if(state.page==='byo-compare'){
@@ -5683,7 +6093,110 @@ if(state.page==='emailagent'){html+=emailAgentPage(emailInfo);}
 if(state.page==='data'){let body=`${section('data-source','Source files',`<div class="hero"><h1>Data Management</h1><p>DART loads the real reconciliation workbook automatically and enriches it with the CMS mapping workbook. Use the dedicated Raw Data Editor for controlled writeback and the Email Agent for workbook-change automation.</p><div class="heroActions"><button class="btn" onclick="showPage('raweditor')">Open Raw Data Editor</button><button class="btn secondary" onclick="showPage('emailagent')">Open Email Agent</button><button class="btn ghost" onclick="restoreDemo()">Reload Excel files</button><a class="btn ghost" href="/download/current.csv">Download current view</a></div></div><div class="grid grid2"><div class="panel"><h3>Current source</h3><p>${esc(meta.source)}</p><p class="muted">Rows: ${intFmt(meta.rows)} · Columns: ${intFmt(meta.columns)}</p></div><div class="panel"><h3>Detected structure</h3>${simpleTable(meta.profile)}</div></div>`)}${section('data-preview','Preview',`<div class="panel"><h3>Standardized preview</h3>${table(data.rows)}</div>`)}`;html+=sectionShell([['data-source','Source files'],['data-preview','Preview']],body);}
 if(state.page==='profile'){html+=profilePage(meta);}if(state.page==='settings'){html+=settingsPage(meta);}const appEl=document.getElementById('app');appEl.classList.remove('page-enter');appEl.innerHTML=html;runInjectedScripts(appEl);decorateMetricHelp(appEl);refreshThemeVisuals(appEl);requestAnimationFrame(()=>appEl.classList.add('page-enter'));ensureAssistantBubble();}
 function profilePage(meta){const u=meta.auth_user||{};return `<div class="hero"><h1>Profile</h1><p>Manage your local DART prototype profile. Credentials are stored in <code>${esc(u.storage_file||'dart_users.json')}</code> for easy local testing only.</p><div class="heroActions"><button class="btn secondary" onclick="logoutUser()">Logout</button></div></div><form class="panel" id="profileForm"><div class="grid grid2"><div class="field"><label>Username</label><input value="${esc(u.username||'')}" disabled></div><div class="field"><label>Display name</label><input id="profileName" value="${esc(u.display_name||'')}"></div><div class="field"><label>Email</label><input id="profileEmail" value="${esc(u.email||'')}"></div><div class="field"><label>Organization</label><input id="profileOrg" value="${esc(u.organization||'')}"></div><div class="field"><label>Role</label><input id="profileRole" value="${esc(u.role||'')}"></div><div class="field"><label>New password</label><input id="profilePass" type="password" placeholder="Leave blank to keep current password"></div></div><br><button class="btn" type="submit">Save profile</button></form><br><div class="panel"><h3>Prototype storage note</h3><p class="muted">This prototype profile system stores credentials locally in plain text. It is useful for local demos, but should be replaced with proper authentication before use with sensitive data.</p></div>`;}
-function settingsPage(meta){const p=meta.persona||{};const focus=(p.focus||[]).join(', ');return `<div class="hero"><span class="workspaceBadge">Persona & startup</span><h1>Workspace Settings</h1><p>Update the persona lens and choose where DART should take you immediately after future logins. These settings are saved to your local user profile.</p></div>${personaLensPanel(meta)}<br><form class="panel" id="settingsForm"><div class="grid grid2"><div class="field"><label>Program</label><select id="setProgram">${['Medicare','Medicaid','Both','Other / General'].map(x=>`<option ${p.program===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Primary role</label><select id="setRole">${['Executive / Leadership','Data / Analytics','Program / Policy','Operations','Quality / Compliance','IT / Engineering','Research','Other'].map(x=>`<option ${p.role===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Focus areas</label><input id="setFocus" value="${esc(focus)}"></div><div class="field"><label>Audience</label><select id="setAudience">${['Leadership','Myself','Analysts','Program teams','Technical teams','External stakeholders'].map(x=>`<option ${p.audience===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Detail level</label><select id="setDepth">${['Executive','Balanced','Technical'].map(x=>`<option ${p.depth===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Briefing question</label><input id="setQuestion" value="${esc(p.first_question||'')}"></div><div class="field"><label>Preferred workspace</label><select id="setPreferredWorkspace">${[['medicare','Medicare'],['medicaid','Medicaid'],['byo','Build Your Own']].map(([v,l])=>`<option value="${v}" ${p.preferred_workspace===v?'selected':''}>${l}</option>`).join('')}</select></div><div class="field"><label>Start page</label><select id="setLandingPage">${personaLandingOptions(p.landing_page||'auto')}</select><div class="personaPrefNote">If the selected page does not belong to the preferred workspace, DART safely falls back to that workspace home.</div></div></div><br><button class="btn" type="submit">Save settings</button> <button class="btn secondary" type="button" onclick="state.workspace='${esc(p.preferred_workspace||'medicare')}';sessionStorage.setItem('dart_workspace',state.workspace);showPage('${esc(p.landing_page||'home')}')">Go to my start page</button></form>`;}
+function settingsPage(meta){
+  const p=meta.persona||{};
+  const focus=(p.focus||[]).join(', ');
+  const u=meta.auth_user||{};
+  const aws=u.aws_config||{};
+  const acct=aws.account_info||{};
+  const buckets=Array.isArray(acct.buckets)?acct.buckets:[];
+  const isUserAws=Boolean(aws.is_saved_in_db);
+  const hasEnvAws=aws.source==='server_env';
+  const hasCreds=Boolean(aws.has_credentials);
+
+  return `<div class="hero"><span class="workspaceBadge">Persona & startup</span><h1>Workspace Settings</h1><p>Update the persona lens and choose where DART should take you immediately after future logins. These settings are saved to your local user profile.</p></div>${personaLensPanel(meta)}<br><form class="panel" id="settingsForm"><div class="grid grid2"><div class="field"><label>Program</label><select id="setProgram">${['Medicare','Medicaid','Both','Other / General'].map(x=>`<option ${p.program===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Primary role</label><select id="setRole">${['Executive / Leadership','Data / Analytics','Program / Policy','Operations','Quality / Compliance','IT / Engineering','Research','Other'].map(x=>`<option ${p.role===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Focus areas</label><input id="setFocus" value="${esc(focus)}"></div><div class="field"><label>Audience</label><select id="setAudience">${['Leadership','Myself','Analysts','Program teams','Technical teams','External stakeholders'].map(x=>`<option ${p.audience===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Detail level</label><select id="setDepth">${['Executive','Balanced','Technical'].map(x=>`<option ${p.depth===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Briefing question</label><input id="setQuestion" value="${esc(p.first_question||'')}"></div><div class="field"><label>Preferred workspace</label><select id="setPreferredWorkspace">${[['medicare','Medicare'],['medicaid','Medicaid'],['byo','Build Your Own']].map(([v,l])=>`<option value="${v}" ${p.preferred_workspace===v?'selected':''}>${l}</option>`).join('')}</select></div><div class="field"><label>Start page</label><select id="setLandingPage">${personaLandingOptions(p.landing_page||'auto')}</select><div class="personaPrefNote">If the selected page does not belong to the preferred workspace, DART safely falls back to that workspace home.</div></div></div><br><button class="btn" type="submit">Save settings</button> <button class="btn secondary" type="button" onclick="state.workspace='${esc(p.preferred_workspace||'medicare')}';sessionStorage.setItem('dart_workspace',state.workspace);showPage('${esc(p.landing_page||'home')}')">Go to my start page</button></form>
+
+<br>
+<div class="hero"><span class="workspaceBadge">Database storage</span><h1>AWS Account & S3 Buckets</h1><p>Connect your personal AWS IAM account so you can pull data from your S3 buckets. Your credentials and discovered buckets are saved per-user in your DART SQLite database and automatically connected whenever you import datasets.</p></div>
+<div class="grid grid2">
+  <div class="panel">
+    <h3>Configure AWS IAM Credentials</h3>
+    <p class="muted">Enter your AWS IAM credentials. All fields except bucket name are optional.</p>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px">
+      <div class="field">
+        <label>AWS Access Key ID (optional)</label>
+        <input id="setAwsAccessKey" type="text" placeholder="Access key ID (optional, e.g. AKIA...)" value="${esc(aws.access_key_id||'')}">
+      </div>
+      <div class="field">
+        <label>AWS Secret Access Key (optional)</label>
+        <input id="setAwsSecretKey" type="password" placeholder="${aws.has_secret_key ? '•••••••• (Stored in DB - leave blank to keep)' : 'Secret access key (optional)'}">
+      </div>
+      <div class="field">
+        <label>Default Region (optional)</label>
+        <input id="setAwsRegion" type="text" placeholder="Region (optional, e.g. us-east-1)" value="${esc(aws.region||'')}">
+      </div>
+      <div class="field">
+        <label>Default S3 Bucket (optional)</label>
+        <input id="setAwsBucket" type="text" placeholder="Default bucket name (e.g. my-reconciliation-bucket)" value="${esc(aws.bucket||'')}">
+      </div>
+      <div class="field">
+        <label>Session Token (optional)</label>
+        <input id="setAwsSessionToken" type="password" placeholder="${aws.has_session_token ? '•••••••• (Stored in DB)' : 'Session token (optional)'}">
+      </div>
+    </div>
+    <div class="heroActions" style="justify-content:flex-start;margin-top:16px;gap:8px;flex-wrap:wrap">
+      <button class="btn" type="button" onclick="saveAwsSettings()">Save AWS credentials to DB</button>
+      <button class="btn secondary" type="button" onclick="testAwsSettings()">Test connection & list buckets</button>
+      ${isUserAws ? `<button class="btn ghost small" type="button" onclick="clearAwsSettings()">Disconnect / Clear keys</button>` : ''}
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>Connected AWS Account</h3>
+    <div style="margin-bottom:12px">
+      ${isUserAws ?
+        `<span class="pill Stable" style="font-size:.85rem;padding:4px 10px">✓ Connected: User Database Credentials (Active)</span>` :
+        (hasEnvAws ?
+          `<span class="pill Stable" style="font-size:.85rem;padding:4px 10px">✓ Connected: Server Environment Fallback</span>` :
+          `<span class="pill" style="background:#f1f5f9;color:#64748b;font-size:.85rem;padding:4px 10px">No AWS Credentials Saved</span>`
+        )
+      }
+    </div>
+
+    ${acct.account_id || acct.arn ? `
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:14px;font-size:.83rem;line-height:1.65">
+        <div><b>Account ID:</b> <code>${esc(acct.account_id||'Unknown')}</code></div>
+        <div><b>Identity ARN:</b> <code>${esc(acct.arn||'N/A')}</code></div>
+        <div><b>Effective Region:</b> <code>${esc(aws.region||'us-east-1')}</code></div>
+        ${aws.bucket ? `<div><b>Default Bucket:</b> <code>${esc(aws.bucket)}</code></div>` : ''}
+        ${acct.tested_at ? `<div class="muted" style="font-size:.76rem;margin-top:4px">Last verified: ${esc(acct.tested_at)}</div>` : ''}
+      </div>
+    ` : `
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:14px;font-size:.83rem;color:#475569">
+        <div><b>Effective Region:</b> <code>${esc(aws.region||'us-east-1')}</code></div>
+        ${aws.bucket ? `<div><b>Default Bucket:</b> <code>${esc(aws.bucket)}</code></div>` : ''}
+        <p class="muted" style="margin:6px 0 0">Click <b>Test connection & list buckets</b> to authenticate against AWS STS / S3 and discover all accessible buckets.</p>
+      </div>
+    `}
+
+    <h4 style="margin:12px 0 8px;display:flex;align-items:center;justify-content:space-between">
+      <span>Accessible S3 Buckets (${buckets.length})</span>
+      ${buckets.length ? `<span class="muted" style="font-size:.76rem">Discovered from IAM account</span>` : ''}
+    </h4>
+    ${buckets.length ? `
+      <div style="max-height:220px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#fff">
+        ${buckets.map(b => `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:.82rem">
+            <span style="display:flex;align-items:center;gap:6px;overflow:hidden;text-overflow:ellipsis">
+              <span style="color:#d97706">🪣</span>
+              <b>${esc(b)}</b>
+              ${b === aws.bucket ? `<span class="pill Stable" style="font-size:.68rem;padding:1px 5px">Default</span>` : ''}
+            </span>
+            <div style="display:flex;gap:4px;flex-shrink:0">
+              <button class="btn secondary small" type="button" style="padding:2px 8px;font-size:.72rem" onclick="useBucketAsDefault('${esc(b)}')">Set Default</button>
+              <button class="btn ghost small" type="button" style="padding:2px 8px;font-size:.72rem" onclick="openS3InByo('${esc(b)}')">Browse S3</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    ` : `
+      <div class="empty" style="padding:16px;background:#f8fafc;border-radius:8px;border:1px dashed #cbd5e1;font-size:.82rem">
+        ${hasCreds ? 'No buckets discovered yet or your IAM user lacks <code>s3:ListAllMyBuckets</code>. Enter your bucket name manually on the left.' : 'Connect your AWS IAM account to discover and list your S3 buckets automatically.'}
+      </div>
+    `}
+  </div>
+</div>`;
+}
 
 function rawText(v){return v===null||v===undefined?'':String(v);}
 function selectedValues(id){const el=document.getElementById(id);return el?[...el.selectedOptions].map(o=>o.value):[];}
@@ -5912,6 +6425,119 @@ async def update_profile(request: Request) -> Any:
     if new_password:
         user["password"] = new_password
     save_users(data)
+    return {"status": "ok"}
+
+
+@app.get("/api/settings/aws")
+def get_aws_settings() -> Dict[str, Any]:
+    username = STATE.get("current_user")
+    cfg = get_user_aws_config(username)
+    secret_masked = "••••••••" if cfg.get("secret_access_key") else ""
+    token_masked = "••••••••" if cfg.get("session_token") else ""
+    return {
+        "username": username or "",
+        "access_key_id": cfg.get("access_key_id", ""),
+        "has_secret_key": bool(cfg.get("secret_access_key")),
+        "secret_access_key_masked": secret_masked,
+        "region": cfg.get("region", "us-east-1"),
+        "bucket": cfg.get("bucket", ""),
+        "has_session_token": bool(cfg.get("session_token")),
+        "session_token_masked": token_masked,
+        "is_saved_in_db": bool(cfg.get("is_saved_in_db")),
+        "has_credentials": bool(cfg.get("has_credentials")),
+        "source": cfg.get("source", "none"),
+        "account_info": cfg.get("account_info", {}),
+    }
+
+
+@app.post("/api/settings/aws")
+async def save_aws_settings_endpoint(request: Request) -> Any:
+    username = STATE.get("current_user")
+    if not username:
+        return JSONResponse({"error": "Not logged in."}, status_code=401)
+    payload = await request.json()
+    access_key = payload.get("access_key_id")
+    secret_key = payload.get("secret_access_key")
+    region = payload.get("region")
+    bucket = payload.get("bucket")
+    session_token = payload.get("session_token")
+
+    user_aws = get_user_aws_config(username)
+    effective_secret = str(secret_key).strip() if secret_key is not None else ""
+    if not effective_secret and user_aws.get("is_saved_in_db") and user_aws.get("secret_access_key"):
+        effective_secret = user_aws.get("secret_access_key", "")
+
+    effective_token = str(session_token).strip() if session_token is not None else ""
+    if not effective_token and user_aws.get("is_saved_in_db") and user_aws.get("session_token"):
+        effective_token = user_aws.get("session_token", "")
+
+    effective_key = str(access_key).strip() if access_key is not None else user_aws.get("access_key_id", "")
+    effective_region = str(region).strip() if region is not None else user_aws.get("region", "us-east-1")
+    effective_bucket = str(bucket).strip() if bucket is not None else user_aws.get("bucket", "")
+
+    account_info = user_aws.get("account_info", {})
+    if effective_key and effective_secret and boto3 is not None:
+        try:
+            account_info = test_aws_credentials(
+                region=effective_region,
+                access_key=effective_key,
+                secret_key=effective_secret,
+                session_token=effective_token,
+            )
+        except Exception:
+            pass
+
+    save_user_aws_config(
+        username=username,
+        access_key=effective_key,
+        secret_key=effective_secret,
+        region=effective_region,
+        bucket=effective_bucket,
+        session_token=effective_token,
+        account_info=account_info,
+    )
+    return {"status": "ok", "account_info": account_info}
+
+
+@app.post("/api/settings/aws/test")
+async def test_aws_settings_endpoint(request: Request) -> Any:
+    username = STATE.get("current_user")
+    payload = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    access_key = str(payload.get("access_key_id", "")).strip()
+    secret_key = str(payload.get("secret_access_key", "")).strip()
+    region = str(payload.get("region", "")).strip()
+    session_token = str(payload.get("session_token", "")).strip()
+
+    user_aws = get_user_aws_config(username) if username else {}
+    if not access_key:
+        access_key = user_aws.get("access_key_id", "")
+    if not secret_key:
+        secret_key = user_aws.get("secret_access_key", "")
+    if not region:
+        region = user_aws.get("region", "us-east-1")
+    if not session_token:
+        session_token = user_aws.get("session_token", "")
+
+    try:
+        result = test_aws_credentials(
+            region=region,
+            access_key=access_key,
+            secret_key=secret_key,
+            session_token=session_token,
+        )
+        if username and result:
+            save_user_aws_config(username, account_info=result)
+        return {"status": "ok", **result}
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=400)
+
+
+@app.post("/api/settings/aws/clear")
+async def clear_aws_settings_endpoint() -> Any:
+    username = STATE.get("current_user")
+    if not username:
+        return JSONResponse({"error": "Not logged in."}, status_code=401)
+    clear_user_aws_config(username)
     return {"status": "ok"}
 
 
@@ -6197,10 +6823,12 @@ async def list_byo_s3_files(request: Request) -> Any:
         bucket = raw_bucket
 
     if not bucket:
-        bucket = os.getenv("AWS_S3_BUCKET", "").strip() or os.getenv("S3_BUCKET", "").strip() or os.getenv("AWS_BUCKET", "").strip()
+        current_user = STATE.get("current_user")
+        user_aws = get_user_aws_config(current_user) if current_user else {}
+        bucket = user_aws.get("bucket", "") or os.getenv("AWS_S3_BUCKET", "").strip() or os.getenv("S3_BUCKET", "").strip() or os.getenv("AWS_BUCKET", "").strip()
 
     if not bucket:
-        return JSONResponse({"error": "Provide an S3 bucket name (or set AWS_S3_BUCKET environment variable)."}, status_code=400)
+        return JSONResponse({"error": "Provide an S3 bucket name (or set default bucket in Settings / AWS_S3_BUCKET)."}, status_code=400)
     try:
         client = _s3_client(region, access_key, secret_key, session_token)
         paginator = client.get_paginator("list_objects_v2")
@@ -6245,10 +6873,12 @@ async def import_byo_from_s3(request: Request) -> Any:
         bucket = raw_bucket
 
     if not bucket:
-        bucket = os.getenv("AWS_S3_BUCKET", "").strip() or os.getenv("S3_BUCKET", "").strip() or os.getenv("AWS_BUCKET", "").strip()
+        current_user = STATE.get("current_user")
+        user_aws = get_user_aws_config(current_user) if current_user else {}
+        bucket = user_aws.get("bucket", "") or os.getenv("AWS_S3_BUCKET", "").strip() or os.getenv("S3_BUCKET", "").strip() or os.getenv("AWS_BUCKET", "").strip()
 
     if not bucket or not keys:
-        return JSONResponse({"error": "Provide a bucket and at least one file to import (or set AWS_S3_BUCKET environment variable)."}, status_code=400)
+        return JSONResponse({"error": "Provide a bucket and at least one file to import (or set default bucket in Settings / AWS_S3_BUCKET)."}, status_code=400)
     try:
         client = _s3_client(region, access_key, secret_key, session_token)
     except Exception as exc:
