@@ -5355,6 +5355,21 @@ function openSharePointInByo(link){
 }
 function setSettingsTab(tabName){
   state.settingsTab = tabName;
+  if(state.page==='settings'){
+    if(state.meta){
+      renderSharedPage(state.meta);
+    }else{
+      render();
+    }
+  }else{
+    state.page='settings';
+    render();
+  }
+}
+function showSettingsTab(tabName){
+  state.settingsTab = tabName;
+  state.page = 'settings';
+  setNav();
   render();
 }
 async function showPage(id){state.page=id;setNav();await render();}
@@ -6418,6 +6433,11 @@ function byoImportPanel(info){
   const hasEnvAws = Boolean(info.aws_iam_configured);
   const defaultBucket = s3Ctx.bucket || info.aws_bucket || '';
   const defaultRegion = s3Ctx.region || info.aws_region || '';
+  const isUserMs = Boolean(info.microsoft_source === 'user_db' || (info.microsoft_configured && info.microsoft_source !== 'server_env'));
+  const hasEnvMs = Boolean(info.microsoft_source === 'server_env');
+  const defaultSpTenant = spCtx.tenant_id || info.microsoft_tenant_id || '';
+  const defaultSpClient = spCtx.client_id || info.microsoft_client_id || '';
+  const defaultSpShare = spCtx.share_url || info.microsoft_share_url || '';
   return `<div class="grid grid2">
     <div class="panel byoImportPanel">
       <span class="workspaceBadge">Online folder / URL</span>
@@ -6449,7 +6469,7 @@ function byoImportPanel(info){
       </div>
       <div class="heroActions" style="justify-content:flex-start;margin-top:12px;gap:8px;flex-wrap:wrap">
         <button class="btn secondary" type="button" onclick="listByoS3Files()">List bucket files</button>
-        <button class="btn ghost small" type="button" onclick="showPage('settings')">Manage AWS in Settings ⚙</button>
+        <button class="btn ghost small" type="button" onclick="showSettingsTab('aws')">Manage AWS in Settings ⚙</button>
         ${s3?`<button class="btn ghost small" type="button" onclick="clearByoS3List()">Clear list</button>`:''}
       </div>
       ${s3?byoS3ResultsHtml(s3):''}
@@ -6484,17 +6504,27 @@ function byoImportPanel(info){
       </details>
     </div>
     <div class="panel byoImportPanel" style="grid-column:1/-1">
-      <span class="workspaceBadge">SharePoint / OneDrive (private)</span>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <span class="workspaceBadge">SharePoint / OneDrive (private)</span>
+        ${isUserMs ?
+          `<span class="pill Stable" title="Microsoft 365 credentials loaded from your user profile database">User Microsoft Connected ✓</span>` :
+          (hasEnvMs ?
+            `<span class="pill Stable" title="Azure AD credentials detected from Render environment variables">Server Microsoft Connected ✓</span>` :
+            `<span class="pill" style="background:#f1f5f9;color:#64748b" title="No saved Microsoft credentials. Enter credentials below or configure them in Settings.">Manual Credentials / Link</span>`
+          )
+        }
+      </div>
       <h3>Import from a private SharePoint or OneDrive folder</h3>
       <p class="muted">Paste a SharePoint or OneDrive (work/school account) sharing link to a folder or file. This needs an Azure AD app registration with the <b>Sites.Read.All</b> (or Files.Read.All) application permission, admin-consented in your tenant — DART signs in app-only, so no user login or cookie is required. Personal <b>outlook.com</b> OneDrive accounts aren't supported by this flow.</p>
       <div class="byoS3Fields">
-        <input id="byoSpTenant" type="text" placeholder="Azure AD tenant ID" value="${esc(spCtx.tenant_id||'')}">
-        <input id="byoSpClientId" type="text" placeholder="App (client) ID" value="${esc(spCtx.client_id||'')}">
-        <input id="byoSpClientSecret" type="password" placeholder="Client secret" value="${esc(spCtx.client_secret||'')}">
-        <input id="byoSpShareUrl" type="text" placeholder="SharePoint/OneDrive share link" style="grid-column:1/-1" value="${esc(spCtx.share_url||'')}">
+        <input id="byoSpTenant" type="text" placeholder="Azure AD tenant ID" value="${esc(defaultSpTenant)}">
+        <input id="byoSpClientId" type="text" placeholder="App (client) ID" value="${esc(defaultSpClient)}">
+        <input id="byoSpClientSecret" type="password" placeholder="${info.microsoft_configured ? '•••••••• (Stored in DB - leave blank to keep)' : 'Client secret'}">
+        <input id="byoSpShareUrl" type="text" placeholder="SharePoint/OneDrive share link" style="grid-column:1/-1" value="${esc(defaultSpShare)}">
       </div>
-      <div class="heroActions" style="justify-content:flex-start;margin-top:12px">
+      <div class="heroActions" style="justify-content:flex-start;margin-top:12px;gap:8px;flex-wrap:wrap">
         <button class="btn secondary" type="button" onclick="listByoSharePointFiles()">List folder files</button>
+        <button class="btn ghost small" type="button" onclick="showSettingsTab('microsoft')">Manage SharePoint in Settings ⚙</button>
         ${sp?`<button class="btn ghost small" type="button" onclick="clearByoSpList()">Clear list</button>`:''}
       </div>
       ${sp?byoSharePointResultsHtml(sp):''}
@@ -6866,6 +6896,8 @@ function settingsPage(meta){
   const p=meta.persona||{};
   const focus=(p.focus||[]).join(', ');
   const u=meta.auth_user||{};
+
+  // AWS Configuration
   const aws=u.aws_config||{};
   const acct=aws.account_info||{};
   const buckets=Array.isArray(acct.buckets)?acct.buckets:[];
@@ -6873,98 +6905,288 @@ function settingsPage(meta){
   const hasEnvAws=aws.source==='server_env';
   const hasCreds=Boolean(aws.has_credentials);
 
-  return `<div class="hero"><span class="workspaceBadge">Persona & startup</span><h1>Workspace Settings</h1><p>Update the persona lens and choose where DART should take you immediately after future logins. These settings are saved to your local user profile.</p></div>${personaLensPanel(meta)}<br><form class="panel" id="settingsForm"><div class="grid grid2"><div class="field"><label>Program</label><select id="setProgram">${['Medicare','Medicaid','Both','Other / General'].map(x=>`<option ${p.program===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Primary role</label><select id="setRole">${['Executive / Leadership','Data / Analytics','Program / Policy','Operations','Quality / Compliance','IT / Engineering','Research','Other'].map(x=>`<option ${p.role===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Focus areas</label><input id="setFocus" value="${esc(focus)}"></div><div class="field"><label>Audience</label><select id="setAudience">${['Leadership','Myself','Analysts','Program teams','Technical teams','External stakeholders'].map(x=>`<option ${p.audience===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Detail level</label><select id="setDepth">${['Executive','Balanced','Technical'].map(x=>`<option ${p.depth===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Briefing question</label><input id="setQuestion" value="${esc(p.first_question||'')}"></div><div class="field"><label>Preferred workspace</label><select id="setPreferredWorkspace">${[['medicare','Medicare'],['medicaid','Medicaid'],['byo','Build Your Own']].map(([v,l])=>`<option value="${v}" ${p.preferred_workspace===v?'selected':''}>${l}</option>`).join('')}</select></div><div class="field"><label>Start page</label><select id="setLandingPage">${personaLandingOptions(p.landing_page||'auto')}</select><div class="personaPrefNote">If the selected page does not belong to the preferred workspace, DART safely falls back to that workspace home.</div></div></div><br><button class="btn" type="submit">Save settings</button> <button class="btn secondary" type="button" onclick="state.workspace='${esc(p.preferred_workspace||'medicare')}';sessionStorage.setItem('dart_workspace',state.workspace);showPage('${esc(p.landing_page||'home')}')">Go to my start page</button></form>
+  // Microsoft 365 / SharePoint Configuration
+  const ms=u.microsoft_config||{};
+  const msAcct=ms.account_info||{};
+  const msFiles=Array.isArray(msAcct.files)?msAcct.files:[];
+  const isUserMs=Boolean(ms.is_saved_in_db);
+  const hasEnvMs=ms.source==='server_env';
+  const hasMsCreds=Boolean(ms.has_credentials);
 
-<br>
-<div class="hero"><span class="workspaceBadge">Database storage</span><h1>AWS Account & S3 Buckets</h1><p>Connect your personal AWS IAM account so you can pull data from your S3 buckets. Your credentials and discovered buckets are saved per-user in your DART SQLite database and automatically connected whenever you import datasets.</p></div>
-<div class="grid grid2">
-  <div class="panel">
-    <h3>Configure AWS IAM Credentials</h3>
-    <p class="muted">Enter your AWS IAM credentials. All fields except bucket name are optional.</p>
-    <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px">
-      <div class="field">
-        <label>AWS Access Key ID (optional)</label>
-        <input id="setAwsAccessKey" type="text" placeholder="Access key ID (optional, e.g. AKIA...)" value="${esc(aws.access_key_id||'')}">
-      </div>
-      <div class="field">
-        <label>AWS Secret Access Key (optional)</label>
-        <input id="setAwsSecretKey" type="password" placeholder="${aws.has_secret_key ? '•••••••• (Stored in DB - leave blank to keep)' : 'Secret access key (optional)'}">
-      </div>
-      <div class="field">
-        <label>Default Region (optional)</label>
-        <input id="setAwsRegion" type="text" placeholder="Region (optional, e.g. us-east-1)" value="${esc(aws.region||'')}">
-      </div>
-      <div class="field">
-        <label>Default S3 Bucket (optional)</label>
-        <input id="setAwsBucket" type="text" placeholder="Default bucket name (e.g. my-reconciliation-bucket)" value="${esc(aws.bucket||'')}">
-      </div>
-      <div class="field">
-        <label>Session Token (optional)</label>
-        <input id="setAwsSessionToken" type="password" placeholder="${aws.has_session_token ? '•••••••• (Stored in DB)' : 'Session token (optional)'}">
-      </div>
+  const activeTab=state.settingsTab||'persona';
+
+  let html=`
+    <div class="hero">
+      <span class="workspaceBadge">Configuration & Connections</span>
+      <h1>Settings</h1>
+      <p>Manage your persona preferences, AWS S3 storage connections, and Microsoft 365 SharePoint / OneDrive integrations.</p>
     </div>
-    <div class="heroActions" style="justify-content:flex-start;margin-top:16px;gap:8px;flex-wrap:wrap">
-      <button class="btn" type="button" onclick="saveAwsSettings()">Save AWS credentials to DB</button>
-      <button class="btn secondary" type="button" onclick="testAwsSettings()">Test connection & list buckets</button>
-      ${isUserAws ? `<button class="btn ghost small" type="button" onclick="clearAwsSettings()">Disconnect / Clear keys</button>` : ''}
+    <div class="modalTabs" style="display:flex;gap:8px;margin:16px 0 20px;border-bottom:1px solid #e2e8f0;padding-bottom:12px;flex-wrap:wrap">
+      <button class="btn ${activeTab==='persona'?'':'secondary'}" type="button" onclick="setSettingsTab('persona')" style="font-size:.86rem;padding:7px 14px">👤 Persona & Workspace</button>
+      <button class="btn ${activeTab==='aws'?'':'secondary'}" type="button" onclick="setSettingsTab('aws')" style="font-size:.86rem;padding:7px 14px">☁️ AWS S3 Connections</button>
+      <button class="btn ${activeTab==='microsoft'?'':'secondary'}" type="button" onclick="setSettingsTab('microsoft')" style="font-size:.86rem;padding:7px 14px">🏢 SharePoint & OneDrive</button>
+      <button class="btn ${activeTab==='all'?'':'secondary'}" type="button" onclick="setSettingsTab('all')" style="font-size:.86rem;padding:7px 14px">📋 All Settings</button>
     </div>
-  </div>
+  `;
 
-  <div class="panel">
-    <h3>Connected AWS Account</h3>
-    <div style="margin-bottom:12px">
-      ${isUserAws ?
-        `<span class="pill Stable" style="font-size:.85rem;padding:4px 10px">✓ Connected: User Database Credentials (Active)</span>` :
-        (hasEnvAws ?
-          `<span class="pill Stable" style="font-size:.85rem;padding:4px 10px">✓ Connected: Server Environment Fallback</span>` :
-          `<span class="pill" style="background:#f1f5f9;color:#64748b;font-size:.85rem;padding:4px 10px">No AWS Credentials Saved</span>`
-        )
-      }
-    </div>
-
-    ${acct.account_id || acct.arn ? `
-      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:14px;font-size:.83rem;line-height:1.65">
-        <div><b>Account ID:</b> <code>${esc(acct.account_id||'Unknown')}</code></div>
-        <div><b>Identity ARN:</b> <code>${esc(acct.arn||'N/A')}</code></div>
-        <div><b>Effective Region:</b> <code>${esc(aws.region||'us-east-1')}</code></div>
-        ${aws.bucket ? `<div><b>Default Bucket:</b> <code>${esc(aws.bucket)}</code></div>` : ''}
-        ${acct.tested_at ? `<div class="muted" style="font-size:.76rem;margin-top:4px">Last verified: ${esc(acct.tested_at)}</div>` : ''}
+  if(activeTab==='persona'||activeTab==='all'){
+    html+=`
+      <div class="settingsSection" id="settings-persona">
+        ${personaLensPanel(meta)}
+        <br>
+        <form class="panel" id="settingsForm" onsubmit="saveSettings(event)">
+          <h3>Persona & Startup Preferences</h3>
+          <p class="muted">Update the persona lens and choose where DART should take you immediately after future logins. These settings are saved to your local user profile.</p>
+          <div class="grid grid2" style="margin-top:14px">
+            <div class="field"><label>Program</label><select id="setProgram">${['Medicare','Medicaid','Both','Other / General'].map(x=>`<option ${p.program===x?'selected':''}>${x}</option>`).join('')}</select></div>
+            <div class="field"><label>Primary role</label><select id="setRole">${['Executive / Leadership','Data / Analytics','Program / Policy','Operations','Quality / Compliance','IT / Engineering','Research','Other'].map(x=>`<option ${p.role===x?'selected':''}>${x}</option>`).join('')}</select></div>
+            <div class="field"><label>Focus areas</label><input id="setFocus" value="${esc(focus)}"></div>
+            <div class="field"><label>Audience</label><select id="setAudience">${['Leadership','Myself','Analysts','Program teams','Technical teams','External stakeholders'].map(x=>`<option ${p.audience===x?'selected':''}>${x}</option>`).join('')}</select></div>
+            <div class="field"><label>Detail level</label><select id="setDepth">${['Executive','Balanced','Technical'].map(x=>`<option ${p.depth===x?'selected':''}>${x}</option>`).join('')}</select></div>
+            <div class="field"><label>Briefing question</label><input id="setQuestion" value="${esc(p.first_question||'')}"></div>
+            <div class="field"><label>Preferred workspace</label><select id="setPreferredWorkspace">${[['medicare','Medicare'],['medicaid','Medicaid'],['byo','Build Your Own']].map(([v,l])=>`<option value="${v}" ${p.preferred_workspace===v?'selected':''}>${l}</option>`).join('')}</select></div>
+            <div class="field"><label>Start page</label><select id="setLandingPage">${personaLandingOptions(p.landing_page||'auto')}</select><div class="personaPrefNote">If the selected page does not belong to the preferred workspace, DART safely falls back to that workspace home.</div></div>
+          </div>
+          <br>
+          <div class="heroActions" style="justify-content:flex-start">
+            <button class="btn" type="submit">Save settings</button>
+            <button class="btn secondary" type="button" onclick="state.workspace='${esc(p.preferred_workspace||'medicare')}';sessionStorage.setItem('dart_workspace',state.workspace);showPage('${esc(p.landing_page||'home')}')">Go to my start page</button>
+          </div>
+        </form>
       </div>
-    ` : `
-      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:14px;font-size:.83rem;color:#475569">
-        <div><b>Effective Region:</b> <code>${esc(aws.region||'us-east-1')}</code></div>
-        ${aws.bucket ? `<div><b>Default Bucket:</b> <code>${esc(aws.bucket)}</code></div>` : ''}
-        <p class="muted" style="margin:6px 0 0">Click <b>Test connection & list buckets</b> to authenticate against AWS STS / S3 and discover all accessible buckets.</p>
-      </div>
-    `}
+    `;
+  }
 
-    <h4 style="margin:12px 0 8px;display:flex;align-items:center;justify-content:space-between">
-      <span>Accessible S3 Buckets (${buckets.length})</span>
-      ${buckets.length ? `<span class="muted" style="font-size:.76rem">Discovered from IAM account</span>` : ''}
-    </h4>
-    ${buckets.length ? `
-      <div style="max-height:220px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#fff">
-        ${buckets.map(b => `
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:.82rem">
-            <span style="display:flex;align-items:center;gap:6px;overflow:hidden;text-overflow:ellipsis">
-              <span style="color:#d97706">🪣</span>
-              <b>${esc(b)}</b>
-              ${b === aws.bucket ? `<span class="pill Stable" style="font-size:.68rem;padding:1px 5px">Default</span>` : ''}
-            </span>
-            <div style="display:flex;gap:4px;flex-shrink:0">
-              <button class="btn secondary small" type="button" style="padding:2px 8px;font-size:.72rem" onclick="useBucketAsDefault('${esc(b)}')">Set Default</button>
-              <button class="btn ghost small" type="button" style="padding:2px 8px;font-size:.72rem" onclick="openS3InByo('${esc(b)}')">Browse S3</button>
+  if(activeTab==='aws'||activeTab==='all'){
+    html+=`
+      ${activeTab==='all'?'<br>':''}
+      <div class="settingsSection" id="settings-aws">
+        <div class="hero" style="margin-bottom:14px">
+          <span class="workspaceBadge">Database storage</span>
+          <h1>AWS Account & S3 Buckets</h1>
+          <p>Connect your personal AWS IAM account so you can pull data from your S3 buckets. Your credentials and discovered buckets are saved per-user in your DART SQLite database and automatically connected whenever you import datasets.</p>
+        </div>
+        <div class="grid grid2">
+          <div class="panel">
+            <h3>Configure AWS IAM Credentials</h3>
+            <p class="muted">Enter your AWS IAM credentials. All fields except bucket name are optional.</p>
+            <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px">
+              <div class="field">
+                <label>AWS Access Key ID (optional)</label>
+                <input id="setAwsAccessKey" type="text" placeholder="Access key ID (optional, e.g. AKIA...)" value="${esc(aws.access_key_id||'')}">
+              </div>
+              <div class="field">
+                <label>AWS Secret Access Key (optional)</label>
+                <input id="setAwsSecretKey" type="password" placeholder="${aws.has_secret_key ? '•••••••• (Stored in DB - leave blank to keep)' : 'Secret access key (optional)'}">
+              </div>
+              <div class="field">
+                <label>Default Region (optional)</label>
+                <input id="setAwsRegion" type="text" placeholder="Region (optional, e.g. us-east-1)" value="${esc(aws.region||'')}">
+              </div>
+              <div class="field">
+                <label>Default S3 Bucket (optional)</label>
+                <input id="setAwsBucket" type="text" placeholder="Default bucket name (e.g. my-reconciliation-bucket)" value="${esc(aws.bucket||'')}">
+              </div>
+              <div class="field">
+                <label>Session Token (optional)</label>
+                <input id="setAwsSessionToken" type="password" placeholder="${aws.has_session_token ? '•••••••• (Stored in DB)' : 'Session token (optional)'}">
+              </div>
+            </div>
+            <div class="heroActions" style="justify-content:flex-start;margin-top:16px;gap:8px;flex-wrap:wrap">
+              <button class="btn" type="button" onclick="saveAwsSettings()">Save AWS credentials to DB</button>
+              <button class="btn secondary" type="button" onclick="testAwsSettings()">Test connection & list buckets</button>
+              ${isUserAws ? `<button class="btn ghost small" type="button" onclick="clearAwsSettings()">Disconnect / Clear keys</button>` : ''}
             </div>
           </div>
-        `).join('')}
+
+          <div class="panel">
+            <h3>Connected AWS Account</h3>
+            <div style="margin-bottom:12px">
+              ${isUserAws ?
+                `<span class="pill Stable" style="font-size:.85rem;padding:4px 10px">✓ Connected: User Database Credentials (Active)</span>` :
+                (hasEnvAws ?
+                  `<span class="pill Stable" style="font-size:.85rem;padding:4px 10px">✓ Connected: Server Environment Fallback</span>` :
+                  `<span class="pill" style="background:#f1f5f9;color:#64748b;font-size:.85rem;padding:4px 10px">No AWS Credentials Saved</span>`
+                )
+              }
+            </div>
+
+            ${acct.account_id || acct.arn ? `
+              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:14px;font-size:.83rem;line-height:1.65">
+                <div><b>Account ID:</b> <code>${esc(acct.account_id||'Unknown')}</code></div>
+                <div><b>Identity ARN:</b> <code>${esc(acct.arn||'N/A')}</code></div>
+                <div><b>Effective Region:</b> <code>${esc(aws.region||'us-east-1')}</code></div>
+                ${aws.bucket ? `<div><b>Default Bucket:</b> <code>${esc(aws.bucket)}</code></div>` : ''}
+                ${acct.tested_at ? `<div class="muted" style="font-size:.76rem;margin-top:4px">Last verified: ${esc(acct.tested_at)}</div>` : ''}
+              </div>
+            ` : `
+              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:14px;font-size:.83rem;color:#475569">
+                <div><b>Effective Region:</b> <code>${esc(aws.region||'us-east-1')}</code></div>
+                ${aws.bucket ? `<div><b>Default Bucket:</b> <code>${esc(aws.bucket)}</code></div>` : ''}
+                <p class="muted" style="margin:6px 0 0">Click <b>Test connection & list buckets</b> to authenticate against AWS STS / S3 and discover all accessible buckets.</p>
+              </div>
+            `}
+
+            <h4 style="margin:12px 0 8px;display:flex;align-items:center;justify-content:space-between">
+              <span>Accessible S3 Buckets (${buckets.length})</span>
+              ${buckets.length ? `<span class="muted" style="font-size:.76rem">Discovered from IAM account</span>` : ''}
+            </h4>
+            ${buckets.length ? `
+              <div style="max-height:220px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#fff">
+                ${buckets.map(b => `
+                  <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:.82rem">
+                    <span style="display:flex;align-items:center;gap:6px;overflow:hidden;text-overflow:ellipsis">
+                      <span style="color:#d97706">🪣</span>
+                      <b>${esc(b)}</b>
+                      ${b === aws.bucket ? `<span class="pill Stable" style="font-size:.68rem;padding:1px 5px">Default</span>` : ''}
+                    </span>
+                    <div style="display:flex;gap:4px;flex-shrink:0">
+                      <button class="btn secondary small" type="button" style="padding:2px 8px;font-size:.72rem" onclick="useBucketAsDefault('${esc(b)}')">Set Default</button>
+                      <button class="btn ghost small" type="button" style="padding:2px 8px;font-size:.72rem" onclick="openS3InByo('${esc(b)}')">Browse S3</button>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            ` : `
+              <div class="empty" style="padding:16px;background:#f8fafc;border-radius:8px;border:1px dashed #cbd5e1;font-size:.82rem">
+                ${hasCreds ? 'No buckets discovered yet or your IAM user lacks <code>s3:ListAllMyBuckets</code>. Enter your bucket name manually on the left.' : 'Connect your AWS IAM account to discover and list your S3 buckets automatically.'}
+              </div>
+            `}
+          </div>
+        </div>
       </div>
-    ` : `
-      <div class="empty" style="padding:16px;background:#f8fafc;border-radius:8px;border:1px dashed #cbd5e1;font-size:.82rem">
-        ${hasCreds ? 'No buckets discovered yet or your IAM user lacks <code>s3:ListAllMyBuckets</code>. Enter your bucket name manually on the left.' : 'Connect your AWS IAM account to discover and list your S3 buckets automatically.'}
+    `;
+  }
+
+  if(activeTab==='microsoft'||activeTab==='all'){
+    html+=`
+      ${activeTab==='all'?'<br>':''}
+      <div class="settingsSection" id="settings-microsoft">
+        <div class="hero" style="margin-bottom:14px">
+          <span class="workspaceBadge">Cloud Storage · Microsoft 365</span>
+          <h1>SharePoint & OneDrive Connection Settings</h1>
+          <p>Connect your Microsoft 365 Entra (Azure AD) application registration or direct sharing links to seamlessly browse and import workbooks from SharePoint document libraries and OneDrive. Stored securely in your per-user SQLite database.</p>
+        </div>
+        <div class="grid grid2">
+          <div class="panel">
+            <h3>Configure Microsoft 365 / Azure AD Credentials</h3>
+            <p class="muted">Enter your Microsoft Entra App registration credentials and SharePoint site details. All settings are stored per user in the database.</p>
+            <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px">
+              <div class="field">
+                <label>Azure AD / Entra Tenant ID (optional)</label>
+                <input id="setMsTenantId" type="text" placeholder="Directory (tenant) ID (e.g. 00000000-0000-... or contoso.onmicrosoft.com)" value="${esc(ms.tenant_id||'')}">
+              </div>
+              <div class="field">
+                <label>Azure Application (Client) ID (optional)</label>
+                <input id="setMsClientId" type="text" placeholder="Application (client) ID (e.g. 11111111-1111-...)" value="${esc(ms.client_id||'')}">
+              </div>
+              <div class="field">
+                <label>Azure Client Secret (optional)</label>
+                <input id="setMsClientSecret" type="password" placeholder="${ms.has_client_secret ? '•••••••• (Stored in DB - leave blank to keep)' : 'Client secret (Value)'}">
+              </div>
+              <div class="field">
+                <label>SharePoint Site URL (optional)</label>
+                <input id="setMsSiteUrl" type="text" placeholder="https://contoso.sharepoint.com/sites/YourSite" value="${esc(ms.site_url||'')}">
+              </div>
+              <div class="field">
+                <label>Document Library / Drive Name (optional)</label>
+                <input id="setMsDriveName" type="text" placeholder="Drive name (e.g. Documents, Shared Documents)" value="${esc(ms.drive_name||'')}">
+              </div>
+              <div class="field">
+                <label>Folder Path (optional)</label>
+                <input id="setMsFolderPath" type="text" placeholder="Folder path (e.g. /Reconciliation/2026 or General)" value="${esc(ms.folder_path||'')}">
+              </div>
+              <div class="field">
+                <label>Direct SharePoint / OneDrive Share URL (optional)</label>
+                <input id="setMsShareUrl" type="text" placeholder="Direct file/folder sharing link (e.g. https://contoso.sharepoint.com/:x:/s/...)" value="${esc(ms.share_url||'')}">
+              </div>
+            </div>
+            <div class="heroActions" style="justify-content:flex-start;margin-top:16px;gap:8px;flex-wrap:wrap">
+              <button class="btn" type="button" onclick="saveMicrosoftSettings()">Save Microsoft credentials to DB</button>
+              <button class="btn secondary" type="button" onclick="testMicrosoftSettings()">Test connection & list files</button>
+              ${isUserMs ? `<button class="btn ghost small" type="button" onclick="clearMicrosoftSettings()">Disconnect / Clear keys</button>` : ''}
+            </div>
+          </div>
+
+          <div class="panel">
+            <h3>Connected Microsoft 365 Account</h3>
+            <div style="margin-bottom:12px">
+              ${isUserMs ?
+                `<span class="pill Stable" style="font-size:.85rem;padding:4px 10px">✓ Connected: User Database Credentials (Active)</span>` :
+                (hasEnvMs ?
+                  `<span class="pill Stable" style="font-size:.85rem;padding:4px 10px">✓ Connected: Server Environment Fallback</span>` :
+                  `<span class="pill" style="background:#f1f5f9;color:#64748b;font-size:.85rem;padding:4px 10px">No Microsoft Credentials Saved</span>`
+                )
+              }
+            </div>
+
+            ${msAcct.tenant_name || msAcct.tenant_id || ms.tenant_id ? `
+              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:14px;font-size:.83rem;line-height:1.65">
+                <div><b>Tenant / Organization:</b> <code>${esc(msAcct.tenant_name || ms.tenant_id || 'Microsoft 365')}</code></div>
+                ${ms.client_id ? `<div><b>Client ID:</b> <code>${esc(ms.client_id)}</code></div>` : ''}
+                ${ms.site_url ? `<div><b>SharePoint Site:</b> <code>${esc(ms.site_url)}</code></div>` : ''}
+                ${ms.drive_name ? `<div><b>Drive / Library:</b> <code>${esc(ms.drive_name)}</code></div>` : ''}
+                ${ms.folder_path ? `<div><b>Folder:</b> <code>${esc(ms.folder_path)}</code></div>` : ''}
+                ${ms.share_url ? `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>Default Share Link:</b> <code>${esc(ms.share_url)}</code></div>` : ''}
+                ${msAcct.tested_at ? `<div class="muted" style="font-size:.76rem;margin-top:4px">Last verified: ${esc(msAcct.tested_at)}</div>` : ''}
+              </div>
+            ` : `
+              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:14px;font-size:.83rem;color:#475569">
+                ${ms.site_url ? `<div><b>SharePoint Site:</b> <code>${esc(ms.site_url)}</code></div>` : ''}
+                ${ms.share_url ? `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>Default Share Link:</b> <code>${esc(ms.share_url)}</code></div>` : ''}
+                <p class="muted" style="margin:6px 0 0">Click <b>Test connection & list files</b> to authenticate against Microsoft Graph and discover accessible files and document libraries.</p>
+              </div>
+            `}
+
+            <h4 style="margin:12px 0 8px;display:flex;align-items:center;justify-content:space-between">
+              <span>Accessible SharePoint / OneDrive Files (${msFiles.length})</span>
+              ${msFiles.length ? `<span class="muted" style="font-size:.76rem">Discovered via Microsoft Graph</span>` : ''}
+            </h4>
+            ${msFiles.length ? `
+              <div style="max-height:220px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#fff">
+                ${msFiles.map(f => {
+                  const rawName = String(f.name || f.filename || 'File').trim();
+                  const isXlsx = rawName.toLowerCase().endsWith('.xlsx') || rawName.toLowerCase().endsWith('.xlsm') || rawName.toLowerCase().endsWith('.xls');
+                  const icon = isXlsx ? '📊' : '📄';
+                  const sizeStr = f.size_mb != null ? f.size_mb + ' MB' : (f.size_bytes ? Math.round(f.size_bytes/1024/1024*100)/100 + ' MB' : '');
+                  const link = f.download_url || f.web_url || ms.share_url || '';
+                  return `
+                    <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:.82rem">
+                      <span style="display:flex;align-items:center;gap:6px;overflow:hidden;text-overflow:ellipsis">
+                        <span>${icon}</span>
+                        <b>${esc(rawName)}</b>
+                        ${sizeStr ? `<span class="muted" style="font-size:.72rem">(${esc(sizeStr)})</span>` : ''}
+                      </span>
+                      <div style="display:flex;gap:4px;flex-shrink:0">
+                        ${link ? `<button class="btn secondary small" type="button" style="padding:2px 8px;font-size:.72rem" onclick="useSharePointLinkAsDefault('${esc(link)}')">Set Default</button>` : ''}
+                        <button class="btn ghost small" type="button" style="padding:2px 8px;font-size:.72rem" onclick="openSharePointInByo('${esc(link)}')">Browse in BYO</button>
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            ` : `
+              <div class="empty" style="padding:16px;background:#f8fafc;border-radius:8px;border:1px dashed #cbd5e1;font-size:.82rem">
+                ${hasMsCreds ? 'No files listed yet. Click <b>Test connection & list files</b> or configure your SharePoint Site URL / Folder Path.' : 'Connect your Microsoft 365 Entra app registration or enter a sharing link to discover and import SharePoint & OneDrive files automatically.'}
+              </div>
+            `}
+
+            <details class="byoHelpBox" style="margin-top:14px;border:1px solid #eedda5;border-radius:12px;padding:12px;background:#fffdf8;font-size:.82rem;color:#475569">
+              <summary style="cursor:pointer;font-weight:800;color:#725500"><b>Microsoft 365 & SharePoint Setup Guide</b></summary>
+              <div style="margin-top:10px;line-height:1.55">
+                <p style="margin:4px 0"><b>1. Register App in Azure Portal / Microsoft Entra ID:</b> Go to Azure Portal &rarr; <b>Microsoft Entra ID</b> &rarr; <b>App registrations</b> &rarr; <b>New registration</b>.</p>
+                <p style="margin:4px 0"><b>2. Add Application Permissions:</b> Under <b>API permissions</b> &rarr; <b>Add a permission</b> &rarr; <b>Microsoft Graph</b> &rarr; <b>Application permissions</b>, add <code>Sites.Read.All</code> and/or <code>Files.Read.All</code>, then click <b>Grant admin consent</b>.</p>
+                <p style="margin:4px 0"><b>3. Create Client Secret:</b> Under <b>Certificates & secrets</b> &rarr; <b>New client secret</b>, generate a secret and copy its <b>Value</b>.</p>
+                <p style="margin:4px 0"><b>4. Enter Details:</b> Copy the <b>Application (client) ID</b>, <b>Directory (tenant) ID</b>, and <b>Client Secret</b> into the form on the left, then click <b>Save Microsoft credentials to DB</b>.</p>
+              </div>
+            </details>
+          </div>
+        </div>
       </div>
-    `}
-  </div>
-</div>`;
+    `;
+  }
+
+  return html;
 }
 
 function rawText(v){return v===null||v===undefined?'':String(v);}
