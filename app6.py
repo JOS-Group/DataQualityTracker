@@ -350,6 +350,14 @@ def _init_users_db() -> None:
                     aws_bucket TEXT DEFAULT '',
                     aws_session_token TEXT DEFAULT '',
                     aws_account_info_json TEXT DEFAULT '',
+                    ms_tenant_id TEXT DEFAULT '',
+                    ms_client_id TEXT DEFAULT '',
+                    ms_client_secret TEXT DEFAULT '',
+                    ms_site_url TEXT DEFAULT '',
+                    ms_drive_name TEXT DEFAULT '',
+                    ms_folder_path TEXT DEFAULT '',
+                    ms_share_url TEXT DEFAULT '',
+                    ms_account_info_json TEXT DEFAULT '',
                     updated_at TEXT
                 )
             """)
@@ -372,6 +380,27 @@ def _init_users_db() -> None:
             """)
             conn.commit()
 
+            # Dynamic column migration for existing user databases
+            cur = conn.cursor()
+            cur.execute("PRAGMA table_info(users)")
+            existing_cols = {row[1] for row in cur.fetchall()}
+            for col_name, col_type in [
+                ("ms_tenant_id", "TEXT DEFAULT ''"),
+                ("ms_client_id", "TEXT DEFAULT ''"),
+                ("ms_client_secret", "TEXT DEFAULT ''"),
+                ("ms_site_url", "TEXT DEFAULT ''"),
+                ("ms_drive_name", "TEXT DEFAULT ''"),
+                ("ms_folder_path", "TEXT DEFAULT ''"),
+                ("ms_share_url", "TEXT DEFAULT ''"),
+                ("ms_account_info_json", "TEXT DEFAULT ''"),
+            ]:
+                if col_name not in existing_cols:
+                    try:
+                        conn.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
+                    except Exception:
+                        pass
+            conn.commit()
+
             # Seed / sync from dart_users.json if SQLite table is empty or missing users
             if USERS_FILE.exists():
                 try:
@@ -383,12 +412,16 @@ def _init_users_db() -> None:
                             prof = udata.get("profile", {})
                             persona = udata.get("persona")
                             aws_data = udata.get("aws", {})
+                            ms_data = udata.get("microsoft", {})
                             conn.execute("""
                                 INSERT INTO users (
                                     username, password, display_name, email, organization, role,
                                     created_at, persona_json, aws_access_key_id, aws_secret_access_key,
-                                    aws_region, aws_bucket, aws_session_token, aws_account_info_json, updated_at
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    aws_region, aws_bucket, aws_session_token, aws_account_info_json,
+                                    ms_tenant_id, ms_client_id, ms_client_secret, ms_site_url,
+                                    ms_drive_name, ms_folder_path, ms_share_url, ms_account_info_json,
+                                    updated_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """, (
                                 uname,
                                 udata.get("password", ""),
@@ -404,6 +437,14 @@ def _init_users_db() -> None:
                                 aws_data.get("bucket", ""),
                                 aws_data.get("session_token", ""),
                                 json.dumps(aws_data.get("account_info", {})) if isinstance(aws_data.get("account_info"), dict) else "",
+                                ms_data.get("tenant_id", ""),
+                                ms_data.get("client_id", ""),
+                                ms_data.get("client_secret", ""),
+                                ms_data.get("site_url", ""),
+                                ms_data.get("drive_name", ""),
+                                ms_data.get("folder_path", ""),
+                                ms_data.get("share_url", ""),
+                                json.dumps(ms_data.get("account_info", {})) if isinstance(ms_data.get("account_info"), dict) else "",
                                 udata.get("updated_at", datetime.now(timezone.utc).isoformat()),
                             ))
                     conn.commit()
@@ -435,6 +476,12 @@ def load_users() -> Dict[str, Any]:
                             account_info_obj = json.loads(r["aws_account_info_json"])
                         except Exception:
                             account_info_obj = {}
+                    ms_account_info_obj = {}
+                    try:
+                        if "ms_account_info_json" in r.keys() and r["ms_account_info_json"]:
+                            ms_account_info_obj = json.loads(r["ms_account_info_json"])
+                    except Exception:
+                        ms_account_info_obj = {}
                     users_out[r["username"]] = {
                         "password": r["password"] or "",
                         "created_at": r["created_at"] or "local prototype",
@@ -452,6 +499,16 @@ def load_users() -> Dict[str, Any]:
                             "bucket": r["aws_bucket"] or "",
                             "session_token": r["aws_session_token"] or "",
                             "account_info": account_info_obj,
+                        },
+                        "microsoft": {
+                            "tenant_id": (r["ms_tenant_id"] if "ms_tenant_id" in r.keys() else "") or "",
+                            "client_id": (r["ms_client_id"] if "ms_client_id" in r.keys() else "") or "",
+                            "client_secret": (r["ms_client_secret"] if "ms_client_secret" in r.keys() else "") or "",
+                            "site_url": (r["ms_site_url"] if "ms_site_url" in r.keys() else "") or "",
+                            "drive_name": (r["ms_drive_name"] if "ms_drive_name" in r.keys() else "") or "",
+                            "folder_path": (r["ms_folder_path"] if "ms_folder_path" in r.keys() else "") or "",
+                            "share_url": (r["ms_share_url"] if "ms_share_url" in r.keys() else "") or "",
+                            "account_info": ms_account_info_obj,
                         },
                         "updated_at": r["updated_at"] or "",
                     }
@@ -474,12 +531,16 @@ def save_users(data: Dict[str, Any]) -> None:
                 prof = udata.get("profile", {})
                 persona = udata.get("persona")
                 aws_data = udata.get("aws", {})
+                ms_data = udata.get("microsoft", {})
                 conn.execute("""
                     INSERT INTO users (
                         username, password, display_name, email, organization, role,
                         created_at, persona_json, aws_access_key_id, aws_secret_access_key,
-                        aws_region, aws_bucket, aws_session_token, aws_account_info_json, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        aws_region, aws_bucket, aws_session_token, aws_account_info_json,
+                        ms_tenant_id, ms_client_id, ms_client_secret, ms_site_url,
+                        ms_drive_name, ms_folder_path, ms_share_url, ms_account_info_json,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(username) DO UPDATE SET
                         password = excluded.password,
                         display_name = excluded.display_name,
@@ -493,6 +554,14 @@ def save_users(data: Dict[str, Any]) -> None:
                         aws_bucket = excluded.aws_bucket,
                         aws_session_token = excluded.aws_session_token,
                         aws_account_info_json = excluded.aws_account_info_json,
+                        ms_tenant_id = excluded.ms_tenant_id,
+                        ms_client_id = excluded.ms_client_id,
+                        ms_client_secret = excluded.ms_client_secret,
+                        ms_site_url = excluded.ms_site_url,
+                        ms_drive_name = excluded.ms_drive_name,
+                        ms_folder_path = excluded.ms_folder_path,
+                        ms_share_url = excluded.ms_share_url,
+                        ms_account_info_json = excluded.ms_account_info_json,
                         updated_at = excluded.updated_at
                 """, (
                     uname,
@@ -509,6 +578,14 @@ def save_users(data: Dict[str, Any]) -> None:
                     aws_data.get("bucket", ""),
                     aws_data.get("session_token", ""),
                     json.dumps(aws_data.get("account_info", {})) if isinstance(aws_data.get("account_info"), dict) else "",
+                    ms_data.get("tenant_id", ""),
+                    ms_data.get("client_id", ""),
+                    ms_data.get("client_secret", ""),
+                    ms_data.get("site_url", ""),
+                    ms_data.get("drive_name", ""),
+                    ms_data.get("folder_path", ""),
+                    ms_data.get("share_url", ""),
+                    json.dumps(ms_data.get("account_info", {})) if isinstance(ms_data.get("account_info"), dict) else "",
                     datetime.now(timezone.utc).isoformat(),
                 ))
             conn.commit()
@@ -619,6 +696,238 @@ def clear_user_aws_config(username: str) -> None:
         "account_info": {},
     }
     save_users(data)
+
+
+def get_user_microsoft_config(username: Optional[str]) -> Dict[str, Any]:
+    env_tenant = os.getenv("AZURE_TENANT_ID", "").strip() or os.getenv("MS_TENANT_ID", "").strip()
+    env_client = os.getenv("AZURE_CLIENT_ID", "").strip() or os.getenv("MS_CLIENT_ID", "").strip()
+    env_secret = os.getenv("AZURE_CLIENT_SECRET", "").strip() or os.getenv("MS_CLIENT_SECRET", "").strip()
+    env_site = os.getenv("SHAREPOINT_SITE_URL", "").strip()
+    env_share = os.getenv("SHAREPOINT_SHARE_URL", "").strip()
+    env_drive = os.getenv("SHAREPOINT_DRIVE_NAME", "").strip()
+    env_folder = os.getenv("SHAREPOINT_FOLDER_PATH", "").strip()
+
+    if not username:
+        has_env = bool((env_tenant and env_client and env_secret) or env_share)
+        return {
+            "tenant_id": env_tenant,
+            "client_id": env_client,
+            "client_secret": env_secret,
+            "site_url": env_site,
+            "share_url": env_share,
+            "drive_name": env_drive,
+            "folder_path": env_folder,
+            "is_saved_in_db": False,
+            "has_credentials": has_env,
+            "source": "server_env" if has_env else "none",
+            "account_info": {},
+            "db_tenant": "",
+            "db_client": "",
+            "db_site": "",
+            "db_share": "",
+        }
+
+    user = load_users().get("users", {}).get(username, {})
+    ms = user.get("microsoft", {})
+    db_tenant = str(ms.get("tenant_id", "") or "").strip()
+    db_client = str(ms.get("client_id", "") or "").strip()
+    db_secret = str(ms.get("client_secret", "") or "").strip()
+    db_site = str(ms.get("site_url", "") or "").strip()
+    db_share = str(ms.get("share_url", "") or "").strip()
+    db_drive = str(ms.get("drive_name", "") or "").strip()
+    db_folder = str(ms.get("folder_path", "") or "").strip()
+    db_info = ms.get("account_info", {}) if isinstance(ms.get("account_info"), dict) else {}
+
+    is_in_db = bool((db_tenant and db_client and db_secret) or db_share or db_site)
+    effective_tenant = db_tenant or env_tenant
+    effective_client = db_client or env_client
+    effective_secret = db_secret or env_secret
+    effective_site = db_site or env_site
+    effective_share = db_share or env_share
+    effective_drive = db_drive or env_drive
+    effective_folder = db_folder or env_folder
+
+    has_creds = bool((effective_tenant and effective_client and effective_secret) or effective_share)
+    source = "user_db" if is_in_db else ("server_env" if (env_tenant and env_client and env_secret) else "none")
+
+    return {
+        "tenant_id": effective_tenant,
+        "client_id": effective_client,
+        "client_secret": effective_secret,
+        "site_url": effective_site,
+        "share_url": effective_share,
+        "drive_name": effective_drive,
+        "folder_path": effective_folder,
+        "is_saved_in_db": is_in_db,
+        "has_credentials": has_creds,
+        "source": source,
+        "account_info": db_info,
+        "db_tenant": db_tenant,
+        "db_client": db_client,
+        "db_site": db_site,
+        "db_share": db_share,
+    }
+
+
+def save_user_microsoft_config(
+    username: str,
+    tenant_id: Optional[str] = None,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+    site_url: Optional[str] = None,
+    share_url: Optional[str] = None,
+    drive_name: Optional[str] = None,
+    folder_path: Optional[str] = None,
+    account_info: Optional[Dict[str, Any]] = None,
+) -> None:
+    data = load_users()
+    user = data.setdefault("users", {}).setdefault(username, {"password": "", "profile": {}})
+    ms = user.setdefault("microsoft", {})
+    if tenant_id is not None:
+        ms["tenant_id"] = str(tenant_id).strip()
+    if client_id is not None:
+        ms["client_id"] = str(client_id).strip()
+    if client_secret is not None and str(client_secret).strip():
+        ms["client_secret"] = str(client_secret).strip()
+    if site_url is not None:
+        ms["site_url"] = str(site_url).strip()
+    if share_url is not None:
+        ms["share_url"] = str(share_url).strip()
+    if drive_name is not None:
+        ms["drive_name"] = str(drive_name).strip()
+    if folder_path is not None:
+        ms["folder_path"] = str(folder_path).strip()
+    if account_info is not None:
+        ms["account_info"] = account_info
+    save_users(data)
+
+
+def clear_user_microsoft_config(username: str) -> None:
+    data = load_users()
+    if username in data.get("users", {}):
+        data["users"][username]["microsoft"] = {
+            "tenant_id": "",
+            "client_id": "",
+            "client_secret": "",
+            "site_url": "",
+            "drive_name": "",
+            "folder_path": "",
+            "share_url": "",
+            "account_info": {},
+        }
+        save_users(data)
+
+
+def test_microsoft_credentials(
+    tenant_id: str = "",
+    client_id: str = "",
+    client_secret: str = "",
+    site_url: str = "",
+    share_url: str = "",
+    drive_name: str = "",
+    folder_path: str = "",
+) -> Dict[str, Any]:
+    if requests is None:
+        raise RuntimeError("The 'requests' package is not installed on the server.")
+
+    tenant_id = (tenant_id or "").strip()
+    client_id = (client_id or "").strip()
+    client_secret = (client_secret or "").strip()
+    site_url = (site_url or "").strip()
+    share_url = (share_url or "").strip()
+    drive_name = (drive_name or "").strip()
+    folder_path = (folder_path or "").strip()
+
+    if not (tenant_id and client_id and client_secret):
+        if not share_url:
+            raise ValueError("Provide Microsoft Entra Tenant ID, Client ID, and Client Secret (or a direct SharePoint/OneDrive sharing link).")
+
+    token = ""
+    discovered_files: List[Dict[str, Any]] = []
+    drives: List[str] = []
+    tenant_info: Dict[str, Any] = {}
+
+    if tenant_id and client_id and client_secret:
+        token = _graph_access_token(tenant_id, client_id, client_secret)
+        try:
+            org_resp = requests.get("https://graph.microsoft.com/v1.0/organization", headers={"Authorization": f"Bearer {token}"}, timeout=15)
+            if org_resp.ok:
+                org_val = org_resp.json().get("value", [{}])
+                if org_val:
+                    tenant_info = {
+                        "id": org_val[0].get("id", tenant_id),
+                        "display_name": org_val[0].get("displayName", "Microsoft 365 Tenant"),
+                        "verified_domains": [d.get("name") for d in org_val[0].get("verifiedDomains", []) if d.get("isDefault")]
+                    }
+        except Exception:
+            pass
+
+    if share_url and token:
+        try:
+            discovered_files = _graph_share_files(token, share_url)
+        except Exception:
+            if not site_url and not tenant_info:
+                raise
+
+    if site_url and token and not discovered_files:
+        try:
+            parsed = urlparse(site_url)
+            hostname = parsed.netloc or parsed.path.split("/")[0]
+            site_rel = parsed.path if parsed.netloc else ("/" + "/".join(parsed.path.split("/")[1:]))
+            if not site_rel.startswith("/"):
+                site_rel = "/" + site_rel
+
+            site_endpoint = f"https://graph.microsoft.com/v1.0/sites/{hostname}:{site_rel}"
+            site_resp = requests.get(site_endpoint, headers={"Authorization": f"Bearer {token}"}, timeout=15)
+            if site_resp.ok:
+                site_data = site_resp.json()
+                site_id = site_data.get("id", "")
+                drives_resp = requests.get(f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives", headers={"Authorization": f"Bearer {token}"}, timeout=15)
+                if drives_resp.ok:
+                    drives_data = drives_resp.json().get("value", [])
+                    drives = [d.get("name", "") for d in drives_data if d.get("name")]
+                    target_drive = drives_data[0] if drives_data else None
+                    if drive_name:
+                        matching = [d for d in drives_data if d.get("name", "").lower() == drive_name.lower()]
+                        if matching:
+                            target_drive = matching[0]
+                    if target_drive:
+                        drive_id = target_drive.get("id")
+                        items_url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root/children"
+                        if folder_path and folder_path.strip("/"):
+                            clean_folder = folder_path.strip("/")
+                            items_url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{clean_folder}:/children"
+                        items_resp = requests.get(items_url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
+                        if items_resp.ok:
+                            for item in items_resp.json().get("value", []):
+                                name = str(item.get("name", ""))
+                                if "folder" not in item and name.lower().endswith((".csv", ".xlsx", ".xlsm")):
+                                    download_url = item.get("@microsoft.graph.downloadUrl", "")
+                                    size = int(item.get("size", 0) or 0)
+                                    discovered_files.append({
+                                        "name": name,
+                                        "size_bytes": size,
+                                        "size_mb": round(size / (1024 * 1024), 2),
+                                        "download_url": download_url,
+                                        "web_url": item.get("webUrl", ""),
+                                        "last_modified": item.get("lastModifiedDateTime", ""),
+                                    })
+        except Exception:
+            pass
+
+    return {
+        "tenant_id": tenant_id,
+        "tenant_name": tenant_info.get("display_name", "Microsoft 365 Tenant"),
+        "client_id": client_id,
+        "site_url": site_url,
+        "share_url": share_url,
+        "drive_name": drive_name,
+        "folder_path": folder_path,
+        "drives": drives,
+        "files": discovered_files,
+        "file_count": len(discovered_files),
+        "tested_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }
 
 
 def test_aws_credentials(
@@ -946,6 +1255,7 @@ def public_user(username: Optional[str]) -> Optional[Dict[str, Any]]:
     profile = user.get("profile", {})
     persona = user.get("persona") if isinstance(user.get("persona"), dict) else None
     aws_cfg = get_user_aws_config(username)
+    ms_cfg = get_user_microsoft_config(username)
     return {
         "username": username,
         "display_name": profile.get("display_name", username),
@@ -965,6 +1275,19 @@ def public_user(username: Optional[str]) -> Optional[Dict[str, Any]]:
             "has_credentials": bool(aws_cfg.get("has_credentials")),
             "source": aws_cfg.get("source", "none"),
             "account_info": aws_cfg.get("account_info", {}),
+        },
+        "microsoft_config": {
+            "tenant_id": ms_cfg.get("tenant_id", ""),
+            "client_id": ms_cfg.get("client_id", ""),
+            "has_client_secret": bool(ms_cfg.get("client_secret", "")),
+            "site_url": ms_cfg.get("site_url", ""),
+            "drive_name": ms_cfg.get("drive_name", ""),
+            "folder_path": ms_cfg.get("folder_path", ""),
+            "share_url": ms_cfg.get("share_url", ""),
+            "is_saved_in_db": bool(ms_cfg.get("is_saved_in_db")),
+            "has_credentials": bool(ms_cfg.get("has_credentials")),
+            "source": ms_cfg.get("source", "none"),
+            "account_info": ms_cfg.get("account_info", {}),
         },
     }
 
@@ -2813,6 +3136,7 @@ def byo_payload() -> Dict[str, Any]:
     datasets = _byo_library_records()
     current_user = STATE.get("current_user")
     user_aws = get_user_aws_config(current_user) if current_user else {}
+    user_ms = get_user_microsoft_config(current_user) if current_user else {}
     return {
         "datasets": datasets,
         "dataset_count": len(datasets),
@@ -2824,6 +3148,15 @@ def byo_payload() -> Dict[str, Any]:
         "aws_region": user_aws.get("region", "us-east-1"),
         "aws_bucket": user_aws.get("bucket", ""),
         "aws_account_info": user_aws.get("account_info", {}),
+        "microsoft_configured": bool(user_ms.get("has_credentials")),
+        "microsoft_source": user_ms.get("source", "none"),
+        "microsoft_tenant_id": user_ms.get("tenant_id", ""),
+        "microsoft_client_id": user_ms.get("client_id", ""),
+        "microsoft_site_url": user_ms.get("site_url", ""),
+        "microsoft_share_url": user_ms.get("share_url", ""),
+        "microsoft_drive_name": user_ms.get("drive_name", ""),
+        "microsoft_folder_path": user_ms.get("folder_path", ""),
+        "microsoft_account_info": user_ms.get("account_info", {}),
         "chat": STATE.get("byo_chat", []),
         # Compatibility fields for older front-end references.
         "loaded": False, "source": "", "uploaded_at": "", "rows": 0, "columns": 0,
@@ -4954,6 +5287,76 @@ function openS3InByo(bucketName){
   state.byoS3Context.bucket = bucketName;
   render();
 }
+async function saveMicrosoftSettings(){
+  const tenant_id = (document.getElementById('setMsTenantId')?.value||'').trim();
+  const client_id = (document.getElementById('setMsClientId')?.value||'').trim();
+  const client_secret = (document.getElementById('setMsClientSecret')?.value||'').trim();
+  const site_url = (document.getElementById('setMsSiteUrl')?.value||'').trim();
+  const drive_name = (document.getElementById('setMsDriveName')?.value||'').trim();
+  const folder_path = (document.getElementById('setMsFolderPath')?.value||'').trim();
+  const share_url = (document.getElementById('setMsShareUrl')?.value||'').trim();
+  try {
+    const r = await postJson('/api/settings/microsoft', { tenant_id, client_id, client_secret, site_url, drive_name, folder_path, share_url });
+    toast('Microsoft 365 & SharePoint credentials saved to user database');
+    state.meta = await api('/api/meta');
+    await render();
+  } catch(err) {
+    console.error(err);
+    toast('Could not save Microsoft settings: ' + String(err.message||err).slice(0, 160));
+  }
+}
+async function testMicrosoftSettings(){
+  const tenant_id = (document.getElementById('setMsTenantId')?.value||'').trim();
+  const client_id = (document.getElementById('setMsClientId')?.value||'').trim();
+  const client_secret = (document.getElementById('setMsClientSecret')?.value||'').trim();
+  const site_url = (document.getElementById('setMsSiteUrl')?.value||'').trim();
+  const drive_name = (document.getElementById('setMsDriveName')?.value||'').trim();
+  const folder_path = (document.getElementById('setMsFolderPath')?.value||'').trim();
+  const share_url = (document.getElementById('setMsShareUrl')?.value||'').trim();
+  toast('Testing Microsoft Graph & SharePoint connection...');
+  try {
+    const r = await postJson('/api/settings/microsoft/test', { tenant_id, client_id, client_secret, site_url, drive_name, folder_path, share_url });
+    toast(`Connected to ${r.tenant_name||'Microsoft 365'}! Found ${r.file_count||0} files.`);
+    state.meta = await api('/api/meta');
+    await render();
+  } catch(err) {
+    console.error(err);
+    toast('Microsoft test failed: ' + String(err.message||err).slice(0, 180));
+  }
+}
+async function clearMicrosoftSettings(){
+  if(!confirm('Clear saved Microsoft 365 & SharePoint credentials from your user database account?')) return;
+  try {
+    await postJson('/api/settings/microsoft/clear', {});
+    toast('Microsoft credentials cleared from database');
+    state.meta = await api('/api/meta');
+    await render();
+  } catch(err) {
+    toast('Clear failed: ' + String(err.message||err));
+  }
+}
+async function useSharePointLinkAsDefault(link){
+  try {
+    await postJson('/api/settings/microsoft', { share_url: link });
+    toast('Default SharePoint share link updated');
+    state.meta = await api('/api/meta');
+    await render();
+  } catch(err) {
+    toast('Failed to set default link: ' + String(err.message||err));
+  }
+}
+function openSharePointInByo(link){
+  state.workspace = 'byo';
+  sessionStorage.setItem('dart_workspace', 'byo');
+  state.page = 'byo-lab';
+  state.byoSharePointContext = state.byoSharePointContext || {};
+  state.byoSharePointContext.share_url = link;
+  render();
+}
+function setSettingsTab(tabName){
+  state.settingsTab = tabName;
+  render();
+}
 async function showPage(id){state.page=id;setNav();await render();}
 function filterLabel(key){const arr=state.filters[key];if(arr===null||arr===undefined)return 'All values';if(!arr.length)return 'No values';return arr.length===1?arr[0]:`${arr.length} selected`;}
 function openFilterModal(key,title,items){modalState={key,title,items:[...items],selected:[...(state.filters[key]||items)]};modalTitle.textContent=title;modalSub.textContent='Search and select values. Leave everything selected to include all values.';modalSearch.value='';filterModal.style.display='flex';renderModalOptions();}
@@ -6907,6 +7310,137 @@ async def clear_aws_settings_endpoint() -> Any:
     return {"status": "ok"}
 
 
+@app.get("/api/settings/microsoft")
+def get_microsoft_settings() -> Dict[str, Any]:
+    username = STATE.get("current_user")
+    cfg = get_user_microsoft_config(username)
+    secret_masked = "••••••••" if cfg.get("client_secret") else ""
+    return {
+        "username": username or "",
+        "tenant_id": cfg.get("tenant_id", ""),
+        "client_id": cfg.get("client_id", ""),
+        "has_client_secret": bool(cfg.get("client_secret")),
+        "client_secret_masked": secret_masked,
+        "site_url": cfg.get("site_url", ""),
+        "drive_name": cfg.get("drive_name", ""),
+        "folder_path": cfg.get("folder_path", ""),
+        "share_url": cfg.get("share_url", ""),
+        "is_saved_in_db": bool(cfg.get("is_saved_in_db")),
+        "has_credentials": bool(cfg.get("has_credentials")),
+        "source": cfg.get("source", "none"),
+        "account_info": cfg.get("account_info", {}),
+    }
+
+
+@app.post("/api/settings/microsoft")
+async def save_microsoft_settings_endpoint(request: Request) -> Any:
+    username = STATE.get("current_user")
+    if not username:
+        return JSONResponse({"error": "Not logged in."}, status_code=401)
+    payload = await request.json()
+    tenant_id = payload.get("tenant_id")
+    client_id = payload.get("client_id")
+    client_secret = payload.get("client_secret")
+    site_url = payload.get("site_url")
+    share_url = payload.get("share_url")
+    drive_name = payload.get("drive_name")
+    folder_path = payload.get("folder_path")
+
+    user_ms = get_user_microsoft_config(username)
+    effective_secret = str(client_secret).strip() if client_secret is not None else ""
+    if not effective_secret and user_ms.get("is_saved_in_db") and user_ms.get("client_secret"):
+        effective_secret = user_ms.get("client_secret", "")
+
+    effective_tenant = str(tenant_id).strip() if tenant_id is not None else user_ms.get("tenant_id", "")
+    effective_client = str(client_id).strip() if client_id is not None else user_ms.get("client_id", "")
+    effective_site = str(site_url).strip() if site_url is not None else user_ms.get("site_url", "")
+    effective_share = str(share_url).strip() if share_url is not None else user_ms.get("share_url", "")
+    effective_drive = str(drive_name).strip() if drive_name is not None else user_ms.get("drive_name", "")
+    effective_folder = str(folder_path).strip() if folder_path is not None else user_ms.get("folder_path", "")
+
+    account_info = user_ms.get("account_info", {})
+    if ((effective_tenant and effective_client and effective_secret) or effective_share) and requests is not None:
+        try:
+            account_info = test_microsoft_credentials(
+                tenant_id=effective_tenant,
+                client_id=effective_client,
+                client_secret=effective_secret,
+                site_url=effective_site,
+                share_url=effective_share,
+                drive_name=effective_drive,
+                folder_path=effective_folder,
+            )
+        except Exception:
+            pass
+
+    save_user_microsoft_config(
+        username=username,
+        tenant_id=effective_tenant,
+        client_id=effective_client,
+        client_secret=effective_secret,
+        site_url=effective_site,
+        share_url=effective_share,
+        drive_name=effective_drive,
+        folder_path=effective_folder,
+        account_info=account_info,
+    )
+    return {"status": "ok", "account_info": account_info}
+
+
+@app.post("/api/settings/microsoft/test")
+async def test_microsoft_settings_endpoint(request: Request) -> Any:
+    username = STATE.get("current_user")
+    payload = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    tenant_id = str(payload.get("tenant_id", "")).strip()
+    client_id = str(payload.get("client_id", "")).strip()
+    client_secret = str(payload.get("client_secret", "")).strip()
+    site_url = str(payload.get("site_url", "")).strip()
+    share_url = str(payload.get("share_url", "")).strip()
+    drive_name = str(payload.get("drive_name", "")).strip()
+    folder_path = str(payload.get("folder_path", "")).strip()
+
+    user_ms = get_user_microsoft_config(username) if username else {}
+    if not tenant_id:
+        tenant_id = user_ms.get("tenant_id", "")
+    if not client_id:
+        client_id = user_ms.get("client_id", "")
+    if not client_secret:
+        client_secret = user_ms.get("client_secret", "")
+    if not site_url:
+        site_url = user_ms.get("site_url", "")
+    if not share_url:
+        share_url = user_ms.get("share_url", "")
+    if not drive_name:
+        drive_name = user_ms.get("drive_name", "")
+    if not folder_path:
+        folder_path = user_ms.get("folder_path", "")
+
+    try:
+        result = test_microsoft_credentials(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret,
+            site_url=site_url,
+            share_url=share_url,
+            drive_name=drive_name,
+            folder_path=folder_path,
+        )
+        if username and result:
+            save_user_microsoft_config(username, account_info=result)
+        return {"status": "ok", **result}
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=400)
+
+
+@app.post("/api/settings/microsoft/clear")
+async def clear_microsoft_settings_endpoint() -> Any:
+    username = STATE.get("current_user")
+    if not username:
+        return JSONResponse({"error": "Not logged in."}, status_code=401)
+    clear_user_microsoft_config(username)
+    return {"status": "ok"}
+
+
 @app.get("/api/meta")
 def meta() -> Dict[str, Any]:
     ensure_data()
@@ -7298,11 +7832,35 @@ async def import_byo_from_s3(request: Request) -> Any:
 
 @app.post("/api/byo/import/sharepoint/list")
 async def list_byo_sharepoint_files(request: Request) -> Any:
-    body = await request.json()
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    username = STATE.get("current_user")
+    user_ms = get_user_microsoft_config(username) if username else {}
+
+    tenant_id = str(body.get("tenant_id") or "").strip() or user_ms.get("tenant_id", "") or os.getenv("AZURE_TENANT_ID", "").strip() or os.getenv("MS_TENANT_ID", "").strip()
+    client_id = str(body.get("client_id") or "").strip() or user_ms.get("client_id", "") or os.getenv("AZURE_CLIENT_ID", "").strip() or os.getenv("MS_CLIENT_ID", "").strip()
+    client_secret = str(body.get("client_secret") or "").strip() or user_ms.get("client_secret", "") or os.getenv("AZURE_CLIENT_SECRET", "").strip() or os.getenv("MS_CLIENT_SECRET", "").strip()
+    share_url = str(body.get("share_url") or "").strip() or user_ms.get("share_url", "") or os.getenv("SHAREPOINT_SHARE_URL", "").strip()
+    site_url = str(body.get("site_url") or "").strip() or user_ms.get("site_url", "") or os.getenv("SHAREPOINT_SITE_URL", "").strip()
+    drive_name = str(body.get("drive_name") or "").strip() or user_ms.get("drive_name", "")
+    folder_path = str(body.get("folder_path") or "").strip() or user_ms.get("folder_path", "")
+
     try:
-        token = _graph_access_token(body.get("tenant_id", ""), body.get("client_id", ""), body.get("client_secret", ""))
-        items = _graph_share_files(token, str(body.get("share_url", "") or ""))
-        return {"items": items}
+        test_res = test_microsoft_credentials(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret,
+            site_url=site_url,
+            share_url=share_url,
+            drive_name=drive_name,
+            folder_path=folder_path,
+        )
+        return {
+            "items": test_res.get("files", []),
+            "drives": test_res.get("drives", []),
+            "tenant_name": test_res.get("tenant_name", ""),
+            "site_url": site_url,
+            "share_url": share_url,
+        }
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 

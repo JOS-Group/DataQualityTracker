@@ -1,7 +1,15 @@
 {
-  "status": "Startup check complete",
-  "updated_at": "2026-09-22T20:55:18+00:00",
-  "dataset": "Sample_Claims_Intake.xlsx",
-  "interval_seconds": 60,
-  "results_count": 1
+  "status": "Checked",
+  "updated_at": "2026-10-04T15:22:39+00:00",
+  "enabled_automations": 1,
+  "dataset": "live_s3_test.csv",
+  "results": [
+    {
+      "automation": "Live S3 Claims Alert",
+      "dataset": "live_s3_test.csv",
+      "status": "Email failed: Email delivery is not ready. Configure HARDCODED_SMTP_CONFIG or DART_SMTP_* environment variables. SMTP username is set but the SMTP password is blank.",
+      "detected_changes": 1,
+      "matching_changes": 1
+    }
+  ]
 }
