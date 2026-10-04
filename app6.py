@@ -89,25 +89,46 @@ APP_STARTED_AT = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 app = FastAPI(title="DART - Data Assurance Reconciliation Tracker", version=APP_VERSION)
 
 BASE_DIR = Path(__file__).resolve().parent
+
+def _resolve_data_dir() -> Path:
+    """Find or create data directory safely across Windows and Linux (Render) environments."""
+    env_dir = os.environ.get("DART_DATA_DIR", "").strip()
+    if env_dir:
+        p = Path(env_dir).expanduser().resolve()
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    for candidate in [BASE_DIR / "data", BASE_DIR / "Data"]:
+        if candidate.exists():
+            return candidate
+    p = BASE_DIR / "data"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+DATA_DIR = _resolve_data_dir()
 USERS_FILE = BASE_DIR / "dart_users.json"
-USERS_DB_PATH = Path(os.environ.get("DART_USERS_DB", str(BASE_DIR / "data" / "dart_users.db")))
+USERS_DB_PATH = Path(os.environ.get("DART_USERS_DB", str(DATA_DIR / "dart_users.db")))
 
 
 def _resolve_local_file(filename: str) -> Path:
-    """Support either repo-root workbooks or a Data/ subfolder without changing code."""
+    """Support either repo-root workbooks or a data/ subfolder without changing code."""
     env_name = "DART_" + re.sub(r"[^A-Za-z0-9]", "_", filename).upper()
     configured = os.environ.get(env_name, "").strip()
     if configured:
         return Path(configured).expanduser().resolve()
-    candidates = [BASE_DIR / filename, BASE_DIR / "Data" / filename]
+    candidates = [
+        BASE_DIR / filename,
+        DATA_DIR / filename,
+        BASE_DIR / "data" / filename,
+        BASE_DIR / "Data" / filename,
+    ]
     return next((p for p in candidates if p.exists()), candidates[0])
 
 
 MAIN_PATH = _resolve_local_file("All Streams June 2026.xlsx")
 MAIN_SHEET = os.environ.get("DART_MAIN_SHEET", "Sheet1")
 MAPPING_PATH = _resolve_local_file("CMS Version NCH to NCH STTM 12_13_2024.xlsx")
-WORKBOOK_BACKUP_DIR = Path(os.environ.get("DART_BACKUP_DIR", str(BASE_DIR / "Data" / "demo_backups")))
-BYO_DATA_DIR = Path(os.environ.get("DART_BYO_DATA_DIR", str(BASE_DIR / "Data" / "DIY")))
+WORKBOOK_BACKUP_DIR = Path(os.environ.get("DART_BACKUP_DIR", str(DATA_DIR / "demo_backups")))
+BYO_DATA_DIR = Path(os.environ.get("DART_BYO_DATA_DIR", str(DATA_DIR / "DIY")))
 BYO_MAX_FILE_BYTES = 25 * 1024 * 1024
 
 # Shared Groq configuration for both DART Copilot and Build Your Own AI Analyst.
@@ -268,7 +289,7 @@ HARDCODED_SMTP_CONFIG = {
     "use_ssl": True,
 }
 
-EMAIL_AGENT_DIR = Path(os.environ.get("EMAIL_AGENT_DIR", str(BASE_DIR / "Data" / "email_agent")))
+EMAIL_AGENT_DIR = Path(os.environ.get("EMAIL_AGENT_DIR", str(DATA_DIR / "email_agent")))
 EMAIL_TEMPLATE_PATH = EMAIL_AGENT_DIR / "automation_templates.json"
 EMAIL_SNAPSHOT_DIR = EMAIL_AGENT_DIR / "snapshots"
 EMAIL_AGENT_STATUS_PATH = EMAIL_AGENT_DIR / "agent_status.json"
@@ -283,11 +304,11 @@ _EMAIL_AGENT_THREAD = None
 _EMAIL_AGENT_THREAD_LOCK = threading.Lock()
 
 # Build Your Own alerting is intentionally isolated from Medicare automations.
-BYO_EMAIL_AGENT_DIR = Path(os.environ.get("DART_BYO_EMAIL_AGENT_DIR", str(BASE_DIR / "Data" / "byo_email_agent")))
+BYO_EMAIL_AGENT_DIR = Path(os.environ.get("DART_BYO_EMAIL_AGENT_DIR", str(DATA_DIR / "byo_email_agent")))
 BYO_EMAIL_TEMPLATE_PATH = BYO_EMAIL_AGENT_DIR / "automation_templates.json"
 BYO_EMAIL_STATUS_PATH = BYO_EMAIL_AGENT_DIR / "agent_status.json"
 BYO_EMAIL_HISTORY_PATH = BYO_EMAIL_AGENT_DIR / "execution_history.jsonl"
-BYO_WORKBOOK_BACKUP_DIR = Path(os.environ.get("DART_BYO_BACKUP_DIR", str(BASE_DIR / "Data" / "byo_backups")))
+BYO_WORKBOOK_BACKUP_DIR = Path(os.environ.get("DART_BYO_BACKUP_DIR", str(DATA_DIR / "byo_backups")))
 BYO_EMAIL_AGENT_AUTO_RUN = os.environ.get("DART_BYO_EMAIL_AUTO_RUN", "true").strip().lower() in {"1", "true", "yes", "y", "on"}
 BYO_EMAIL_AGENT_MIN_CHECK_SECONDS = max(15, int(os.environ.get("DART_BYO_EMAIL_MIN_CHECK_SECONDS", str(EMAIL_AGENT_MIN_CHECK_SECONDS))))
 _BYO_EMAIL_AGENT_THREAD = None
@@ -378,6 +399,40 @@ def _init_users_db() -> None:
                     updated_at TEXT
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS byo_datasets (
+                    filename TEXT PRIMARY KEY,
+                    owner TEXT DEFAULT '',
+                    size_bytes INTEGER DEFAULT 0,
+                    rows_count INTEGER DEFAULT 0,
+                    cols_count INTEGER DEFAULT 0,
+                    file_bytes BLOB,
+                    content_type TEXT DEFAULT '',
+                    uploaded_at TEXT,
+                    updated_at TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS byo_email_automations (
+                    id TEXT PRIMARY KEY,
+                    name TEXT,
+                    dataset_name TEXT,
+                    owner TEXT DEFAULT '',
+                    config_json TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS email_automations (
+                    id TEXT PRIMARY KEY,
+                    name TEXT,
+                    owner TEXT DEFAULT '',
+                    config_json TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                )
+            """)
             conn.commit()
 
             # Dynamic column migration for existing user databases
@@ -450,6 +505,229 @@ def _init_users_db() -> None:
                     conn.commit()
                 except Exception:
                     pass
+    except Exception:
+        pass
+
+
+def save_byo_dataset_to_db(
+    filename: str,
+    file_bytes: bytes,
+    owner: str = "",
+    rows: int = 0,
+    cols: int = 0,
+    content_type: str = "",
+) -> None:
+    if not filename or not file_bytes:
+        return
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        with _get_users_db() as conn:
+            conn.execute("""
+                INSERT INTO byo_datasets (
+                    filename, owner, size_bytes, rows_count, cols_count,
+                    file_bytes, content_type, uploaded_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(filename) DO UPDATE SET
+                    owner = CASE WHEN excluded.owner != '' THEN excluded.owner ELSE byo_datasets.owner END,
+                    size_bytes = excluded.size_bytes,
+                    rows_count = excluded.rows_count,
+                    cols_count = excluded.cols_count,
+                    file_bytes = excluded.file_bytes,
+                    content_type = excluded.content_type,
+                    updated_at = excluded.updated_at
+            """, (
+                filename,
+                owner or "",
+                len(file_bytes),
+                rows,
+                cols,
+                file_bytes,
+                content_type or ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if filename.endswith(".xlsx") else "text/csv"),
+                now_iso,
+                now_iso,
+            ))
+            conn.commit()
+    except Exception:
+        pass
+
+
+def delete_byo_dataset_from_db(filename: str) -> None:
+    if not filename:
+        return
+    try:
+        with _get_users_db() as conn:
+            conn.execute("DELETE FROM byo_datasets WHERE filename = ?", (filename,))
+            conn.commit()
+    except Exception:
+        pass
+
+
+def get_byo_dataset_db_record(filename: str) -> Optional[Dict[str, Any]]:
+    try:
+        with _get_users_db() as conn:
+            row = conn.execute("SELECT filename, owner, size_bytes, rows_count, cols_count, content_type, uploaded_at, updated_at FROM byo_datasets WHERE filename = ?", (filename,)).fetchone()
+            if row:
+                return dict(row)
+    except Exception:
+        pass
+    return None
+
+
+def get_all_byo_datasets_db() -> Dict[str, Dict[str, Any]]:
+    datasets: Dict[str, Dict[str, Any]] = {}
+    try:
+        with _get_users_db() as conn:
+            rows = conn.execute("SELECT filename, owner, size_bytes, rows_count, cols_count, content_type, uploaded_at, updated_at FROM byo_datasets").fetchall()
+            for r in rows:
+                datasets[r["filename"]] = dict(r)
+    except Exception:
+        pass
+    return datasets
+
+
+def sync_byo_datasets_db_and_disk() -> None:
+    """Ensure datasets on disk and SQLite are fully bidirectionally synchronized."""
+    try:
+        BYO_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        # 1. Restore any datasets stored in SQLite that are missing on disk
+        with _get_users_db() as conn:
+            rows = conn.execute("SELECT filename, file_bytes FROM byo_datasets WHERE file_bytes IS NOT NULL").fetchall()
+            for r in rows:
+                fname = r["filename"]
+                fbytes = r["file_bytes"]
+                if fname and fbytes:
+                    target = BYO_DATA_DIR / fname
+                    if not target.exists() or target.stat().st_size == 0:
+                        target.write_bytes(fbytes)
+
+        # 2. Seed any existing datasets on disk into SQLite if not already recorded
+        for path in sorted([*BYO_DATA_DIR.glob("*.xlsx"), *BYO_DATA_DIR.glob("*.csv")]):
+            if path.name.startswith("."):
+                continue
+            rec = get_byo_dataset_db_record(path.name)
+            if not rec or not rec.get("size_bytes"):
+                try:
+                    fbytes = path.read_bytes()
+                    frame = _read_byo_dataset(path)
+                    save_byo_dataset_to_db(
+                        filename=path.name,
+                        file_bytes=fbytes,
+                        owner="system",
+                        rows=int(len(frame)),
+                        cols=int(len(frame.columns)),
+                    )
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def sync_email_automations_db_and_disk() -> None:
+    """Ensure email automations in JSON files and SQLite are fully synchronized."""
+    try:
+        EMAIL_AGENT_DIR.mkdir(parents=True, exist_ok=True)
+        EMAIL_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        BYO_EMAIL_AGENT_DIR.mkdir(parents=True, exist_ok=True)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with _get_users_db() as conn:
+            # Sync Medicare automations
+            db_med_rows = conn.execute("SELECT * FROM email_automations").fetchall()
+            db_med_map: Dict[str, Any] = {}
+            for r in db_med_rows:
+                try:
+                    cfg = json.loads(r["config_json"])
+                    if r["owner"] and not cfg.get("owner"):
+                        cfg["owner"] = r["owner"]
+                    db_med_map[r["id"]] = cfg
+                except Exception:
+                    pass
+
+            file_med: List[Dict[str, Any]] = []
+            if EMAIL_TEMPLATE_PATH.exists():
+                try:
+                    raw = json.loads(EMAIL_TEMPLATE_PATH.read_text(encoding="utf-8"))
+                    if isinstance(raw, list):
+                        file_med = raw
+                except Exception:
+                    pass
+
+            # Merge: file items populate DB
+            for item in file_med:
+                item_id = str(item.get("id") or "")
+                if item_id:
+                    db_med_map[item_id] = item
+                    conn.execute("""
+                        INSERT INTO email_automations (id, name, owner, config_json, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(id) DO UPDATE SET
+                            name = excluded.name,
+                            owner = CASE WHEN excluded.owner != '' THEN excluded.owner ELSE email_automations.owner END,
+                            config_json = excluded.config_json,
+                            updated_at = excluded.updated_at
+                    """, (
+                        item_id,
+                        item.get("name", "Automation"),
+                        item.get("owner", ""),
+                        json.dumps(item, ensure_ascii=False, default=str),
+                        item.get("created_at", now_iso),
+                        item.get("updated_at", now_iso),
+                    ))
+            conn.commit()
+
+            # Write complete merged list to disk
+            all_med = list(db_med_map.values())
+            if all_med:
+                _atomic_write_text(EMAIL_TEMPLATE_PATH, json.dumps(all_med, indent=2, ensure_ascii=False, default=str))
+
+            # Sync BYO automations
+            db_byo_rows = conn.execute("SELECT * FROM byo_email_automations").fetchall()
+            db_byo_map: Dict[str, Any] = {}
+            for r in db_byo_rows:
+                try:
+                    cfg = json.loads(r["config_json"])
+                    if r["owner"] and not cfg.get("owner"):
+                        cfg["owner"] = r["owner"]
+                    db_byo_map[r["id"]] = cfg
+                except Exception:
+                    pass
+
+            file_byo: List[Dict[str, Any]] = []
+            if BYO_EMAIL_TEMPLATE_PATH.exists():
+                try:
+                    raw = json.loads(BYO_EMAIL_TEMPLATE_PATH.read_text(encoding="utf-8"))
+                    if isinstance(raw, list):
+                        file_byo = raw
+                except Exception:
+                    pass
+
+            for item in file_byo:
+                item_id = str(item.get("id") or "")
+                if item_id:
+                    db_byo_map[item_id] = item
+                    conn.execute("""
+                        INSERT INTO byo_email_automations (id, name, dataset_name, owner, config_json, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(id) DO UPDATE SET
+                            name = excluded.name,
+                            dataset_name = excluded.dataset_name,
+                            owner = CASE WHEN excluded.owner != '' THEN excluded.owner ELSE byo_email_automations.owner END,
+                            config_json = excluded.config_json,
+                            updated_at = excluded.updated_at
+                    """, (
+                        item_id,
+                        item.get("name", "Alert"),
+                        item.get("dataset_name", ""),
+                        item.get("owner", ""),
+                        json.dumps(item, ensure_ascii=False, default=str),
+                        item.get("created_at", now_iso),
+                        item.get("updated_at", now_iso),
+                    ))
+            conn.commit()
+
+            all_byo = list(db_byo_map.values())
+            if all_byo:
+                _atomic_write_text(BYO_EMAIL_TEMPLATE_PATH, json.dumps(all_byo, indent=2, ensure_ascii=False, default=str))
+
     except Exception:
         pass
 
@@ -2184,6 +2462,7 @@ def _email_agent_process_lock():
 
 def load_email_automations() -> List[Dict[str, Any]]:
     _ensure_email_agent_dirs()
+    sync_email_automations_db_and_disk()
     if not EMAIL_TEMPLATE_PATH.exists():
         return []
     try:
@@ -2196,12 +2475,46 @@ def load_email_automations() -> List[Dict[str, Any]]:
 def save_email_automations(templates: List[Dict[str, Any]]) -> None:
     _ensure_email_agent_dirs()
     _atomic_write_text(EMAIL_TEMPLATE_PATH, json.dumps(templates, indent=2, ensure_ascii=False, default=str))
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        with _get_users_db() as conn:
+            existing_ids = [str(t.get("id")) for t in templates if t.get("id")]
+            if existing_ids:
+                placeholders = ",".join("?" for _ in existing_ids)
+                conn.execute(f"DELETE FROM email_automations WHERE id NOT IN ({placeholders})", existing_ids)
+            else:
+                conn.execute("DELETE FROM email_automations")
+            for t in templates:
+                item_id = str(t.get("id") or "")
+                if item_id:
+                    owner = t.get("owner") or STATE.get("current_user") or ""
+                    t["owner"] = owner
+                    conn.execute("""
+                        INSERT INTO email_automations (id, name, owner, config_json, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(id) DO UPDATE SET
+                            name = excluded.name,
+                            owner = CASE WHEN excluded.owner != '' THEN excluded.owner ELSE email_automations.owner END,
+                            config_json = excluded.config_json,
+                            updated_at = excluded.updated_at
+                    """, (
+                        item_id,
+                        t.get("name", "Automation"),
+                        owner,
+                        json.dumps(t, ensure_ascii=False, default=str),
+                        t.get("created_at", now_iso),
+                        t.get("updated_at", now_iso),
+                    ))
+            conn.commit()
+    except Exception:
+        pass
 
 
 def upsert_email_automation(template: Dict[str, Any]) -> Dict[str, Any]:
     templates = load_email_automations()
     template = dict(template)
     template["id"] = _safe_template_id(template.get("id") or uuid.uuid4().hex[:12])
+    template["owner"] = template.get("owner") or STATE.get("current_user") or ""
     template["updated_at"] = _utc_now_iso()
     if not template.get("created_at"):
         template["created_at"] = template["updated_at"]
@@ -2216,7 +2529,13 @@ def upsert_email_automation(template: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def delete_email_automation(template_id: str) -> None:
-    save_email_automations([t for t in load_email_automations() if t.get("id") != template_id])
+    save_email_automations([t for t in load_email_automations() if str(t.get("id")) != str(template_id)])
+    try:
+        with _get_users_db() as conn:
+            conn.execute("DELETE FROM email_automations WHERE id = ?", (template_id,))
+            conn.commit()
+    except Exception:
+        pass
     _snapshot_path(template_id).unlink(missing_ok=True)
 
 
@@ -2887,14 +3206,22 @@ def _frame_from_bytes(content: bytes, suffix: str) -> pd.DataFrame:
     return frame
 
 
-def _save_byo_bytes(content: bytes, name_hint: str) -> Dict[str, Any]:
+def _save_byo_bytes(content: bytes, name_hint: str, owner: str = "") -> Dict[str, Any]:
     if len(content) > BYO_MAX_FILE_BYTES:
         raise ValueError("File exceeds the 25 MB DIY file limit.")
     safe_name = _safe_byo_filename(name_hint)
     frame = _frame_from_bytes(content, Path(safe_name).suffix.lower())
     target = _unique_byo_target(safe_name)
     target.write_bytes(content)
-    return {"name": target.name, "rows": int(len(frame)), "columns": int(len(frame.columns))}
+    eff_owner = owner or STATE.get("current_user") or ""
+    save_byo_dataset_to_db(
+        filename=target.name,
+        file_bytes=content,
+        owner=eff_owner,
+        rows=int(len(frame)),
+        cols=int(len(frame.columns)),
+    )
+    return {"name": target.name, "rows": int(len(frame)), "columns": int(len(frame.columns)), "owner": eff_owner}
 
 
 def _validate_public_import_url(url: str) -> str:
@@ -3105,29 +3432,37 @@ def _dataset_payload_from_frame(df: pd.DataFrame, filename: str, preview_limit: 
 
 
 def _byo_library_records() -> List[Dict[str, Any]]:
+    sync_byo_datasets_db_and_disk()
     root = _ensure_byo_data_dir()
     records: List[Dict[str, Any]] = []
     s3_sources = load_byo_s3_sources()
+    db_datasets = get_all_byo_datasets_db()
     for path in sorted([*root.glob("*.xlsx"), *root.glob("*.csv")], key=lambda p: p.stat().st_mtime, reverse=True):
+        if path.name.startswith("."):
+            continue
         stat = path.stat()
         s3_src = s3_sources.get(path.name)
+        db_rec = db_datasets.get(path.name, {})
+        owner = db_rec.get("owner") or (s3_src.get("created_by") if s3_src else "") or "system"
         record: Dict[str, Any] = {
             "name": path.name,
             "type": path.suffix.lower().lstrip(".").upper(),
             "size_bytes": int(stat.st_size),
             "size_mb": round(stat.st_size / (1024 * 1024), 2),
             "modified_at": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
-            "rows": None,
-            "columns": None,
+            "rows": db_rec.get("rows_count") if db_rec.get("rows_count") else None,
+            "columns": db_rec.get("cols_count") if db_rec.get("cols_count") else None,
+            "owner": owner,
             "status": "Ready",
             "s3_source": s3_src,
         }
-        try:
-            df = _read_byo_dataset(path)
-            record["rows"] = int(len(df))
-            record["columns"] = int(len(df.columns))
-        except Exception as exc:
-            record["status"] = f"Read error: {exc}"
+        if record["rows"] is None:
+            try:
+                df = _read_byo_dataset(path)
+                record["rows"] = int(len(df))
+                record["columns"] = int(len(df.columns))
+            except Exception as exc:
+                record["status"] = f"Read error: {exc}"
         records.append(record)
     return records
 
@@ -3140,7 +3475,7 @@ def byo_payload() -> Dict[str, Any]:
     return {
         "datasets": datasets,
         "dataset_count": len(datasets),
-        "storage_path": str(Path("Data") / "DIY"),
+        "storage_path": str(Path("data") / "DIY"),
         "ai_configured": bool(OpenAI and groq_api_key()),
         "ai_model": groq_model(),
         "aws_iam_configured": bool(user_aws.get("has_credentials")),
@@ -3226,6 +3561,17 @@ def _restore_byo_backup(filename: str, backup_path: Path | str) -> str:
     temp = source.with_name(f".{source.stem}.dart_restore_{uuid.uuid4().hex[:8]}{source.suffix}")
     shutil.copy2(backup, temp)
     os.replace(temp, source)
+    try:
+        fbytes = source.read_bytes()
+        frame = _read_byo_dataset(source)
+        save_byo_dataset_to_db(
+            filename=source.name,
+            file_bytes=fbytes,
+            rows=int(len(frame)),
+            cols=int(len(frame.columns)),
+        )
+    except Exception:
+        pass
     return str(source.resolve())
 
 
@@ -3290,6 +3636,16 @@ def _write_byo_changes(filename: str, changes: List[Dict[str, Any]], expected_si
                 frame.at[change["source_row"] - 2, column_map[change["column"]]] = change["after"]
             frame.to_csv(temp, index=False, encoding="utf-8-sig")
         os.replace(temp, source)
+        try:
+            fbytes = source.read_bytes()
+            save_byo_dataset_to_db(
+                filename=source.name,
+                file_bytes=fbytes,
+                rows=len(raw_now),
+                cols=len(raw_now.columns),
+            )
+        except Exception:
+            pass
     except PermissionError as exc:
         temp.unlink(missing_ok=True)
         raise PermissionError("Windows could not replace the selected DIY file. Close it in Excel and try again.") from exc
@@ -3305,6 +3661,7 @@ def _ensure_byo_email_dirs() -> None:
 
 def load_byo_email_automations() -> List[Dict[str, Any]]:
     _ensure_byo_email_dirs()
+    sync_email_automations_db_and_disk()
     if not BYO_EMAIL_TEMPLATE_PATH.exists():
         return []
     try:
@@ -3317,6 +3674,41 @@ def load_byo_email_automations() -> List[Dict[str, Any]]:
 def save_byo_email_automations(templates: List[Dict[str, Any]]) -> None:
     _ensure_byo_email_dirs()
     _atomic_write_text(BYO_EMAIL_TEMPLATE_PATH, json.dumps(templates, indent=2, ensure_ascii=False, default=str))
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        with _get_users_db() as conn:
+            existing_ids = [str(t.get("id")) for t in templates if t.get("id")]
+            if existing_ids:
+                placeholders = ",".join("?" for _ in existing_ids)
+                conn.execute(f"DELETE FROM byo_email_automations WHERE id NOT IN ({placeholders})", existing_ids)
+            else:
+                conn.execute("DELETE FROM byo_email_automations")
+            for t in templates:
+                item_id = str(t.get("id") or "")
+                if item_id:
+                    owner = t.get("owner") or STATE.get("current_user") or ""
+                    t["owner"] = owner
+                    conn.execute("""
+                        INSERT INTO byo_email_automations (id, name, dataset_name, owner, config_json, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(id) DO UPDATE SET
+                            name = excluded.name,
+                            dataset_name = excluded.dataset_name,
+                            owner = CASE WHEN excluded.owner != '' THEN excluded.owner ELSE byo_email_automations.owner END,
+                            config_json = excluded.config_json,
+                            updated_at = excluded.updated_at
+                    """, (
+                        item_id,
+                        t.get("name", "Alert"),
+                        t.get("dataset_name", ""),
+                        owner,
+                        json.dumps(t, ensure_ascii=False, default=str),
+                        t.get("created_at", now_iso),
+                        t.get("updated_at", now_iso),
+                    ))
+            conn.commit()
+    except Exception:
+        pass
 
 
 def _byo_email_history_event(event: Dict[str, Any]) -> None:
@@ -3363,6 +3755,7 @@ def upsert_byo_email_automation(template: Dict[str, Any]) -> Dict[str, Any]:
     if not item["id"].startswith("byo_"):
         item["id"] = "byo_" + item["id"]
     item["workspace"] = "byo"
+    item["owner"] = item.get("owner") or STATE.get("current_user") or ""
     item["updated_at"] = _utc_now_iso()
     if not item.get("created_at"):
         item["created_at"] = item["updated_at"]
@@ -3380,6 +3773,12 @@ def upsert_byo_email_automation(template: Dict[str, Any]) -> Dict[str, Any]:
 
 def delete_byo_email_automation(template_id: str) -> None:
     save_byo_email_automations([t for t in load_byo_email_automations() if str(t.get("id")) != str(template_id)])
+    try:
+        with _get_users_db() as conn:
+            conn.execute("DELETE FROM byo_email_automations WHERE id = ?", (template_id,))
+            conn.commit()
+    except Exception:
+        pass
     _snapshot_path(template_id).unlink(missing_ok=True)
 
 
@@ -3919,7 +4318,7 @@ def _byo_local_answer(left_name: str, right_name: str, comparison: Dict[str, Any
 # -----------------------------------------------------------------------------
 # Medicaid State Intelligence workspace (ported from the standalone Flask app)
 # -----------------------------------------------------------------------------
-MEDICAID_DB_PATH = Path(os.environ.get("DART_MEDICAID_DB", str(BASE_DIR / "Data" / "medicaid_issues.db")))
+MEDICAID_DB_PATH = Path(os.environ.get("DART_MEDICAID_DB", str(DATA_DIR / "medicaid_issues.db")))
 MEDICAID_ALL_STATES = [
     'Alabama','Alaska','Arizona','Arkansas','California','Colorado','Connecticut','Delaware',
     'Florida','Georgia','Hawaii','Idaho','Illinois','Indiana','Iowa','Kansas','Kentucky',
@@ -7866,6 +8265,7 @@ def get_byo_dataset(filename: str) -> Any:
 async def upload_byo(files: List[UploadFile] = File(...)) -> Any:
     saved: List[Dict[str, Any]] = []
     errors: List[str] = []
+    current_user = STATE.get("current_user") or ""
     for file in files:
         filename = str(file.filename or "dataset").strip() or "dataset"
         try:
@@ -7886,12 +8286,19 @@ async def upload_byo(files: List[UploadFile] = File(...)) -> Any:
                 raise ValueError("The uploaded file did not contain a readable table.")
             target = _unique_byo_target(safe_name)
             target.write_bytes(content)
-            saved.append({"name": target.name, "rows": int(len(frame)), "columns": int(len(frame.columns))})
+            save_byo_dataset_to_db(
+                filename=target.name,
+                file_bytes=content,
+                owner=current_user,
+                rows=int(len(frame)),
+                cols=int(len(frame.columns)),
+            )
+            saved.append({"name": target.name, "rows": int(len(frame)), "columns": int(len(frame.columns)), "owner": current_user})
         except Exception as exc:
             errors.append(f"{filename}: {exc}")
     if not saved:
         return JSONResponse({"error": "; ".join(errors) or "No files were saved."}, status_code=400)
-    return {"status": "ok", "saved": saved, "errors": errors, "storage_path": str(Path("Data") / "DIY")}
+    return {"status": "ok", "saved": saved, "errors": errors, "storage_path": str(Path("data") / "DIY")}
 
 
 @app.post("/api/byo/import/url")
@@ -7905,6 +8312,7 @@ async def import_byo_from_url(request: Request) -> Any:
         return JSONResponse({"error": "Provide at least one file URL."}, status_code=400)
     saved: List[Dict[str, Any]] = []
     errors: List[str] = []
+    current_user = STATE.get("current_user") or ""
     for url in urls:
         try:
             _validate_public_import_url(url)
@@ -7914,14 +8322,14 @@ async def import_byo_from_url(request: Request) -> Any:
             disposition = resp.headers.get("content-disposition", "")
             match = re.search(r'filename="?([^";]+)"?', disposition)
             name_hint = match.group(1) if match else (Path(urlparse(url).path).name or "dataset.csv")
-            info = _save_byo_bytes(content, name_hint)
+            info = _save_byo_bytes(content, name_hint, owner=current_user)
             info["source_url"] = url
             saved.append(info)
         except Exception as exc:
             errors.append(f"{url}: {exc}")
     if not saved:
         return JSONResponse({"error": "; ".join(errors) or "No files were imported."}, status_code=400)
-    return {"status": "ok", "saved": saved, "errors": errors, "storage_path": str(Path("Data") / "DIY")}
+    return {"status": "ok", "saved": saved, "errors": errors, "storage_path": str(Path("data") / "DIY")}
 
 
 @app.post("/api/byo/import/s3/list")
@@ -8097,6 +8505,7 @@ async def import_byo_from_sharepoint(request: Request) -> Any:
         return JSONResponse({"error": "Select at least one file to import."}, status_code=400)
     saved: List[Dict[str, Any]] = []
     errors: List[str] = []
+    current_user = STATE.get("current_user") or ""
     for entry in items:
         name = str(entry.get("name", "") or "dataset")
         url = str(entry.get("download_url", "") or "")
@@ -8105,21 +8514,22 @@ async def import_byo_from_sharepoint(request: Request) -> Any:
                 raise ValueError("Missing download link - list the folder again.")
             resp = requests.get(url, timeout=30)
             resp.raise_for_status()
-            info = _save_byo_bytes(resp.content, name)
+            info = _save_byo_bytes(resp.content, name, owner=current_user)
             info["source"] = "SharePoint/OneDrive"
             saved.append(info)
         except Exception as exc:
             errors.append(f"{name}: {exc}")
     if not saved:
         return JSONResponse({"error": "; ".join(errors) or "No files were imported."}, status_code=400)
-    return {"status": "ok", "saved": saved, "errors": errors, "storage_path": str(Path("Data") / "DIY")}
+    return {"status": "ok", "saved": saved, "errors": errors, "storage_path": str(Path("data") / "DIY")}
 
 
 @app.delete("/api/byo/files/{filename}")
 def delete_byo_file(filename: str) -> Any:
     try:
         path = _byo_path(filename)
-        path.unlink()
+        path.unlink(missing_ok=True)
+        delete_byo_dataset_from_db(filename)
         delete_byo_s3_source(filename)
         for automation in [t for t in load_byo_email_automations() if str(t.get("dataset_name")) == str(filename)]:
             delete_byo_email_automation(str(automation.get("id", "")))
