@@ -456,52 +456,72 @@ def _init_users_db() -> None:
                         pass
             conn.commit()
 
-            # Seed / sync from dart_users.json if SQLite table is empty or missing users
+            # Seed / sync from dart_users.json into SQLite table
             if USERS_FILE.exists():
                 try:
                     raw_data = json.loads(USERS_FILE.read_text(encoding="utf-8"))
                     users_dict = raw_data.get("users", {})
                     for uname, udata in users_dict.items():
-                        cur = conn.execute("SELECT username FROM users WHERE username = ?", (uname,))
-                        if not cur.fetchone():
-                            prof = udata.get("profile", {})
-                            persona = udata.get("persona")
-                            aws_data = udata.get("aws", {})
-                            ms_data = udata.get("microsoft", {})
-                            conn.execute("""
-                                INSERT INTO users (
-                                    username, password, display_name, email, organization, role,
-                                    created_at, persona_json, aws_access_key_id, aws_secret_access_key,
-                                    aws_region, aws_bucket, aws_session_token, aws_account_info_json,
-                                    ms_tenant_id, ms_client_id, ms_client_secret, ms_site_url,
-                                    ms_drive_name, ms_folder_path, ms_share_url, ms_account_info_json,
-                                    updated_at
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """, (
-                                uname,
-                                udata.get("password", ""),
-                                prof.get("display_name", uname),
-                                prof.get("email", ""),
-                                prof.get("organization", ""),
-                                prof.get("role", ""),
-                                udata.get("created_at", "local prototype"),
-                                json.dumps(persona) if isinstance(persona, dict) else "",
-                                aws_data.get("access_key_id", ""),
-                                aws_data.get("secret_access_key", ""),
-                                aws_data.get("region", ""),
-                                aws_data.get("bucket", ""),
-                                aws_data.get("session_token", ""),
-                                json.dumps(aws_data.get("account_info", {})) if isinstance(aws_data.get("account_info"), dict) else "",
-                                ms_data.get("tenant_id", ""),
-                                ms_data.get("client_id", ""),
-                                ms_data.get("client_secret", ""),
-                                ms_data.get("site_url", ""),
-                                ms_data.get("drive_name", ""),
-                                ms_data.get("folder_path", ""),
-                                ms_data.get("share_url", ""),
-                                json.dumps(ms_data.get("account_info", {})) if isinstance(ms_data.get("account_info"), dict) else "",
-                                udata.get("updated_at", datetime.now(timezone.utc).isoformat()),
-                            ))
+                        prof = udata.get("profile", {})
+                        persona = udata.get("persona")
+                        aws_data = udata.get("aws", {})
+                        ms_data = udata.get("microsoft", {})
+                        conn.execute("""
+                            INSERT INTO users (
+                                username, password, display_name, email, organization, role,
+                                created_at, persona_json, aws_access_key_id, aws_secret_access_key,
+                                aws_region, aws_bucket, aws_session_token, aws_account_info_json,
+                                ms_tenant_id, ms_client_id, ms_client_secret, ms_site_url,
+                                ms_drive_name, ms_folder_path, ms_share_url, ms_account_info_json,
+                                updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(username) DO UPDATE SET
+                                password = CASE WHEN excluded.password != '' THEN excluded.password ELSE users.password END,
+                                display_name = CASE WHEN excluded.display_name != '' THEN excluded.display_name ELSE users.display_name END,
+                                email = CASE WHEN excluded.email != '' THEN excluded.email ELSE users.email END,
+                                organization = CASE WHEN excluded.organization != '' THEN excluded.organization ELSE users.organization END,
+                                role = CASE WHEN excluded.role != '' THEN excluded.role ELSE users.role END,
+                                persona_json = CASE WHEN excluded.persona_json != '' THEN excluded.persona_json ELSE users.persona_json END,
+                                aws_access_key_id = CASE WHEN excluded.aws_access_key_id != '' THEN excluded.aws_access_key_id ELSE users.aws_access_key_id END,
+                                aws_secret_access_key = CASE WHEN excluded.aws_secret_access_key != '' THEN excluded.aws_secret_access_key ELSE users.aws_secret_access_key END,
+                                aws_region = CASE WHEN excluded.aws_region != '' THEN excluded.aws_region ELSE users.aws_region END,
+                                aws_bucket = CASE WHEN excluded.aws_bucket != '' THEN excluded.aws_bucket ELSE users.aws_bucket END,
+                                aws_session_token = CASE WHEN excluded.aws_session_token != '' THEN excluded.aws_session_token ELSE users.aws_session_token END,
+                                aws_account_info_json = CASE WHEN excluded.aws_account_info_json != '' THEN excluded.aws_account_info_json ELSE users.aws_account_info_json END,
+                                ms_tenant_id = CASE WHEN excluded.ms_tenant_id != '' THEN excluded.ms_tenant_id ELSE users.ms_tenant_id END,
+                                ms_client_id = CASE WHEN excluded.ms_client_id != '' THEN excluded.ms_client_id ELSE users.ms_client_id END,
+                                ms_client_secret = CASE WHEN excluded.ms_client_secret != '' THEN excluded.ms_client_secret ELSE users.ms_client_secret END,
+                                ms_site_url = CASE WHEN excluded.ms_site_url != '' THEN excluded.ms_site_url ELSE users.ms_site_url END,
+                                ms_drive_name = CASE WHEN excluded.ms_drive_name != '' THEN excluded.ms_drive_name ELSE users.ms_drive_name END,
+                                ms_folder_path = CASE WHEN excluded.ms_folder_path != '' THEN excluded.ms_folder_path ELSE users.ms_folder_path END,
+                                ms_share_url = CASE WHEN excluded.ms_share_url != '' THEN excluded.ms_share_url ELSE users.ms_share_url END,
+                                ms_account_info_json = CASE WHEN excluded.ms_account_info_json != '' THEN excluded.ms_account_info_json ELSE users.ms_account_info_json END,
+                                updated_at = excluded.updated_at
+                        """, (
+                            uname,
+                            udata.get("password", ""),
+                            prof.get("display_name", uname),
+                            prof.get("email", ""),
+                            prof.get("organization", ""),
+                            prof.get("role", ""),
+                            udata.get("created_at", "local prototype"),
+                            json.dumps(persona) if isinstance(persona, dict) else "",
+                            aws_data.get("access_key_id", ""),
+                            aws_data.get("secret_access_key", ""),
+                            aws_data.get("region", ""),
+                            aws_data.get("bucket", ""),
+                            aws_data.get("session_token", ""),
+                            json.dumps(aws_data.get("account_info", {})) if isinstance(aws_data.get("account_info"), dict) else "",
+                            ms_data.get("tenant_id", ""),
+                            ms_data.get("client_id", ""),
+                            ms_data.get("client_secret", ""),
+                            ms_data.get("site_url", ""),
+                            ms_data.get("drive_name", ""),
+                            ms_data.get("folder_path", ""),
+                            ms_data.get("share_url", ""),
+                            json.dumps(ms_data.get("account_info", {})) if isinstance(ms_data.get("account_info"), dict) else "",
+                            udata.get("updated_at", datetime.now(timezone.utc).isoformat()),
+                        ))
                     conn.commit()
                 except Exception:
                     pass
@@ -586,9 +606,12 @@ def get_all_byo_datasets_db() -> Dict[str, Dict[str, Any]]:
 
 
 def sync_byo_datasets_db_and_disk() -> None:
-    """Ensure datasets on disk and SQLite are fully bidirectionally synchronized."""
+    """Ensure datasets on disk, SQLite, and linked S3 sources are fully synchronized."""
     try:
         BYO_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        # 0. Sync S3 sources between SQLite and .s3_sources.json
+        s3_sources = load_byo_s3_sources()
+
         # 1. Restore any datasets stored in SQLite that are missing on disk
         with _get_users_db() as conn:
             rows = conn.execute("SELECT filename, file_bytes FROM byo_datasets WHERE file_bytes IS NOT NULL").fetchall()
@@ -598,7 +621,10 @@ def sync_byo_datasets_db_and_disk() -> None:
                 if fname and fbytes:
                     target = BYO_DATA_DIR / fname
                     if not target.exists() or target.stat().st_size == 0:
-                        target.write_bytes(fbytes)
+                        try:
+                            target.write_bytes(fbytes)
+                        except Exception:
+                            pass
 
         # 2. Seed any existing datasets on disk into SQLite if not already recorded
         for path in sorted([*BYO_DATA_DIR.glob("*.xlsx"), *BYO_DATA_DIR.glob("*.csv")]):
@@ -609,13 +635,27 @@ def sync_byo_datasets_db_and_disk() -> None:
                 try:
                     fbytes = path.read_bytes()
                     frame = _read_byo_dataset(path)
+                    s3_src = s3_sources.get(path.name)
+                    owner_val = (s3_src.get("created_by") if s3_src else "") or "system"
                     save_byo_dataset_to_db(
                         filename=path.name,
                         file_bytes=fbytes,
-                        owner="system",
+                        owner=owner_val,
                         rows=int(len(frame)),
                         cols=int(len(frame.columns)),
                     )
+                except Exception:
+                    pass
+
+        # 3. For any linked S3 sources, if file is missing locally or in SQLite, auto-recover from S3
+        for dataset_name, s3_info in s3_sources.items():
+            target = BYO_DATA_DIR / dataset_name
+            db_rec = get_byo_dataset_db_record(dataset_name)
+            needs_recovery = (not target.exists() or target.stat().st_size == 0 or not db_rec or not db_rec.get("size_bytes"))
+            if needs_recovery and boto3 is not None:
+                try:
+                    owner_user = s3_info.get("created_by") or STATE.get("current_user")
+                    sync_byo_s3_source(dataset_name, force_download=True, username=owner_user)
                 except Exception:
                     pass
     except Exception:
@@ -733,6 +773,8 @@ def sync_email_automations_db_and_disk() -> None:
 
 
 _init_users_db()
+sync_email_automations_db_and_disk()
+sync_byo_datasets_db_and_disk()
 
 
 def load_users() -> Dict[str, Any]:
@@ -1268,7 +1310,7 @@ def test_aws_credentials(
 BYO_S3_SOURCES_FILE = BYO_DATA_DIR / ".s3_sources.json"
 
 
-def load_byo_s3_sources() -> Dict[str, Dict[str, Any]]:
+def load_byo_s3_sources(username: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
     sources: Dict[str, Dict[str, Any]] = {}
     try:
         with _get_users_db() as conn:
@@ -1292,13 +1334,66 @@ def load_byo_s3_sources() -> Dict[str, Dict[str, Any]]:
     except Exception:
         pass
 
-    if not sources and BYO_S3_SOURCES_FILE.exists():
+    # Bidirectional sync: if .s3_sources.json has extra/restored sources, merge them into SQLite
+    if BYO_S3_SOURCES_FILE.exists():
         try:
             raw = json.loads(BYO_S3_SOURCES_FILE.read_text(encoding="utf-8"))
             if isinstance(raw, dict):
-                return raw
+                needs_db_write = False
+                for dname, info in raw.items():
+                    if isinstance(info, dict) and dname not in sources:
+                        sources[dname] = info
+                        needs_db_write = True
+                if needs_db_write:
+                    with _get_users_db() as conn:
+                        for dname, info in sources.items():
+                            conn.execute("""
+                                INSERT INTO byo_s3_sources (
+                                    dataset_name, bucket, key, region, etag, last_modified, size_bytes,
+                                    auto_sync, last_checked_at, last_synced_at, sync_status, created_by, updated_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                ON CONFLICT(dataset_name) DO UPDATE SET
+                                    bucket = excluded.bucket,
+                                    key = excluded.key,
+                                    region = excluded.region,
+                                    etag = excluded.etag,
+                                    last_modified = excluded.last_modified,
+                                    size_bytes = excluded.size_bytes,
+                                    auto_sync = excluded.auto_sync,
+                                    last_checked_at = excluded.last_checked_at,
+                                    last_synced_at = excluded.last_synced_at,
+                                    sync_status = excluded.sync_status,
+                                    created_by = excluded.created_by,
+                                    updated_at = excluded.updated_at
+                            """, (
+                                dname,
+                                info.get("bucket", ""),
+                                info.get("key", ""),
+                                info.get("region", ""),
+                                info.get("etag", ""),
+                                info.get("last_modified", ""),
+                                int(info.get("size_bytes", 0) or 0),
+                                1 if info.get("auto_sync", True) else 0,
+                                info.get("last_checked_at", ""),
+                                info.get("last_synced_at", ""),
+                                info.get("sync_status", "In sync"),
+                                info.get("created_by", ""),
+                                info.get("updated_at", ""),
+                            ))
+                        conn.commit()
         except Exception:
             pass
+
+    # Ensure .s3_sources.json is also kept in sync with SQLite records
+    if sources:
+        try:
+            BYO_S3_SOURCES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            BYO_S3_SOURCES_FILE.write_text(json.dumps(sources, indent=2, default=str), encoding="utf-8")
+        except Exception:
+            pass
+
+    if username:
+        return {k: v for k, v in sources.items() if not v.get("created_by") or v.get("created_by") == username}
     return sources
 
 
@@ -1453,6 +1548,13 @@ def sync_byo_s3_source(dataset_name: str, force_download: bool = False, username
         content = get_resp["Body"].read()
         frame = _frame_from_bytes(content, local_path.suffix.lower())
         local_path.write_bytes(content)
+        save_byo_dataset_to_db(
+            filename=dataset_name,
+            file_bytes=content,
+            owner=user or "",
+            rows=int(len(frame)),
+            cols=int(len(frame.columns)),
+        )
         updated_record = save_byo_s3_source(
             dataset_name=dataset_name,
             bucket=bucket,
@@ -3465,6 +3567,24 @@ def _byo_library_records() -> List[Dict[str, Any]]:
             except Exception as exc:
                 record["status"] = f"Read error: {exc}"
         records.append(record)
+
+    # Check for any connected S3 sources that are still syncing or awaiting first download
+    existing_file_names = {r["name"] for r in records}
+    for s3_name, s3_src in s3_sources.items():
+        if s3_name not in existing_file_names:
+            owner = s3_src.get("created_by") or "system"
+            records.append({
+                "name": s3_name,
+                "type": Path(s3_name).suffix.lower().lstrip(".").upper() or "FILE",
+                "size_bytes": int(s3_src.get("size_bytes", 0) or 0),
+                "size_mb": round(int(s3_src.get("size_bytes", 0) or 0) / (1024 * 1024), 2),
+                "modified_at": s3_src.get("last_synced_at") or s3_src.get("last_modified") or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "rows": None,
+                "columns": None,
+                "owner": owner,
+                "status": "S3 Connected (Pending Download)",
+                "s3_source": s3_src,
+            })
     return records
 
 
