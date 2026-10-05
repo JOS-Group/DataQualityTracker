@@ -1319,15 +1319,31 @@ def _snapshot_value(value: Any) -> str:
         return NULL_TOKEN
     if isinstance(value, (pd.Timestamp, datetime)):
         return value.isoformat()
-    if isinstance(value, float):
-        if np.isnan(value):
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        if pd.isna(value):
             return NULL_TOKEN
-        return format(value, ".15g")
-    return str(value).strip()
+        return format(float(value), ".15g")
+    return re.sub(r"\s+", " ", str(value).strip())
 
 
 def _valid_columns(columns: List[str], df: pd.DataFrame) -> List[str]:
     return [c for c in columns if c in df.columns]
+
+
+def _row_join(df: pd.DataFrame, columns: List[str], sep: str) -> pd.Series:
+    if not columns or df.empty:
+        return pd.Series([""] * len(df), index=df.index, dtype=str)
+    valid_cols = [c for c in columns if c in df.columns]
+    if not valid_cols:
+        return pd.Series([""] * len(df), index=df.index, dtype=str)
+    col_lists: List[List[str]] = []
+    for c in valid_cols:
+        s = df[c]
+        if isinstance(s, pd.DataFrame):
+            s = s.iloc[:, 0]
+        col_lists.append(s.map(lambda v: NULL_TOKEN if v is None or pd.isna(v) else str(v)).astype(str).tolist())
+    joined = [sep.join(items) for items in zip(*col_lists)]
+    return pd.Series(joined, index=df.index, dtype=str)
 
 
 def build_snapshot_frame(df: pd.DataFrame, template: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.DataFrame, List[str], List[str]]:
@@ -1336,18 +1352,21 @@ def build_snapshot_frame(df: pd.DataFrame, template: Dict[str, Any]) -> Tuple[pd
     if not identity_columns:
         identity_columns = [source.columns[0]] if len(source.columns) else []
     requested_monitor = template.get("monitor_columns", []) or list(source.columns)
-    condition_columns = [r.get("column") for r in template.get("conditions", [])]
+    condition_columns = [r.get("column") for r in template.get("conditions", []) if r.get("column")]
     display_columns = template.get("display_columns", [])
     monitor_columns = _valid_columns(list(dict.fromkeys(identity_columns + requested_monitor + condition_columns + display_columns)), source)
     if not monitor_columns:
         monitor_columns = list(source.columns)
     normalized = pd.DataFrame(index=source.index)
     for col in monitor_columns:
-        normalized[col] = source[col].map(_snapshot_value)
-    base_key = normalized[identity_columns].agg(" | ".join, axis=1) if identity_columns else pd.Series(["ROW"] * len(source), index=source.index)
+        col_series = source[col]
+        if isinstance(col_series, pd.DataFrame):
+            col_series = col_series.iloc[:, 0]
+        normalized[col] = col_series.map(_snapshot_value)
+    base_key = _row_join(normalized, identity_columns, " | ") if identity_columns else pd.Series(["ROW"] * len(source), index=source.index, dtype=str)
     occurrence = base_key.groupby(base_key, sort=False).cumcount().astype(str)
     row_key = base_key + " | occurrence=" + occurrence
-    row_payload = normalized[monitor_columns].agg("\x1f".join, axis=1)
+    row_payload = _row_join(normalized, monitor_columns, "\x1f")
     row_hash = row_payload.map(lambda s: hashlib.sha256(s.encode("utf-8")).hexdigest())
     snapshot = normalized.copy()
     snapshot.insert(0, "_row_hash", row_hash)
@@ -1378,7 +1397,7 @@ def detect_email_agent_changes(df: pd.DataFrame, template: Dict[str, Any]) -> Tu
     previous = read_email_snapshot(template["id"])
     meta = {"baseline_missing": previous is None, "identity_columns": identity_columns, "monitor_columns": monitor_columns, "duplicate_identity_count": 0, "source_rows": len(source)}
     if identity_columns and not source.empty:
-        normalized_keys = source[identity_columns].astype(str).agg(" | ".join, axis=1)
+        normalized_keys = _row_join(source, identity_columns, " | ")
         meta["duplicate_identity_count"] = int(normalized_keys.duplicated(keep=False).sum())
     if previous is None:
         empty = source.iloc[0:0].copy()
@@ -1399,7 +1418,7 @@ def detect_email_agent_changes(df: pd.DataFrame, template: Dict[str, Any]) -> Tu
             prev_row = prev_row.iloc[0]
         record = {c: prev_row.get(c, "") for c in source.columns}
         record["_Change Type"] = "Deleted"
-        record["_Changed Fields"] = ", ".join(c for c in monitor_columns if c in previous.columns and c not in identity_columns) or "Row deleted"
+        record["_Changed Fields"] = ", ".join(str(c) for c in monitor_columns if c in previous.columns and c not in identity_columns) or "Row deleted"
         record["_Previous Values"] = "Row existed in previous snapshot but is no longer present."
         if trigger_mode == "All changes including deletions":
             rows.append(record)
@@ -1412,7 +1431,7 @@ def detect_email_agent_changes(df: pd.DataFrame, template: Dict[str, Any]) -> Tu
         previous_values: List[str] = []
         if key not in prev_by_key.index:
             change_type = "New"
-            changed_fields = [c for c in monitor_columns if c not in identity_columns]
+            changed_fields = [str(c) for c in monitor_columns if c not in identity_columns]
         else:
             prev_row = prev_by_key.loc[key]
             if isinstance(prev_row, pd.DataFrame):
@@ -1423,7 +1442,7 @@ def detect_email_agent_changes(df: pd.DataFrame, template: Dict[str, Any]) -> Tu
                     old = str(prev_row.get(col, NULL_TOKEN))
                     new = str(snap_row.get(col, NULL_TOKEN))
                     if old != new:
-                        changed_fields.append(col)
+                        changed_fields.append(str(col))
                         previous_values.append(f"{col}: {'Null' if old == NULL_TOKEN else old} → {'Null' if new == NULL_TOKEN else new}")
         if change_type is None:
             continue
@@ -1431,8 +1450,8 @@ def detect_email_agent_changes(df: pd.DataFrame, template: Dict[str, Any]) -> Tu
             continue
         record = source.iloc[pos].to_dict()
         record["_Change Type"] = change_type
-        record["_Changed Fields"] = ", ".join(changed_fields) if changed_fields else "—"
-        record["_Previous Values"] = "; ".join(previous_values[:8]) if previous_values else "—"
+        record["_Changed Fields"] = ", ".join(str(c) for c in changed_fields) if changed_fields else "—"
+        record["_Previous Values"] = "; ".join(str(v) for v in previous_values[:8]) if previous_values else "—"
         rows.append(record)
     return pd.DataFrame(rows), meta
 
