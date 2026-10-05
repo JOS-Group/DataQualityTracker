@@ -314,6 +314,11 @@ BYO_EMAIL_AGENT_MIN_CHECK_SECONDS = max(15, int(os.environ.get("DART_BYO_EMAIL_M
 _BYO_EMAIL_AGENT_THREAD = None
 _BYO_EMAIL_AGENT_THREAD_LOCK = threading.Lock()
 
+SESSION_COOKIE_NAME = "dart_session"
+SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30  # 30 days
+_ACTIVE_SESSIONS: Dict[str, Dict[str, Any]] = {}
+_SESSION_LOCK = threading.Lock()
+
 EMAIL_OPERATORS = [
     "Is blank (empty or null)", "Is null / NaN", "Is empty string", "Equals",
     "Does not equal", "Contains", "Does not contain", "Starts with",
@@ -431,6 +436,14 @@ def _init_users_db() -> None:
                     config_json TEXT,
                     created_at TEXT,
                     updated_at TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    last_seen_at TEXT
                 )
             """)
             conn.commit()
@@ -916,6 +929,83 @@ def save_users(data: Dict[str, Any]) -> None:
         USERS_FILE.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
     except Exception:
         pass
+
+
+def create_user_session(username: str) -> str:
+    session_id = uuid.uuid4().hex + uuid.uuid4().hex
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _SESSION_LOCK:
+        _ACTIVE_SESSIONS[session_id] = {
+            "username": username,
+            "created_at": now_iso,
+            "last_seen_at": now_iso,
+        }
+    try:
+        with _get_users_db() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO user_sessions (session_id, username, created_at, last_seen_at)
+                VALUES (?, ?, ?, ?)
+            """, (session_id, username, now_iso, now_iso))
+            conn.commit()
+    except Exception:
+        pass
+    return session_id
+
+
+def delete_user_session(session_id: str) -> None:
+    if not session_id:
+        return
+    with _SESSION_LOCK:
+        _ACTIVE_SESSIONS.pop(session_id, None)
+    try:
+        with _get_users_db() as conn:
+            conn.execute("DELETE FROM user_sessions WHERE session_id = ?", (session_id,))
+            conn.commit()
+    except Exception:
+        pass
+
+
+def get_session_user(request: Optional[Request] = None, session_id: Optional[str] = None) -> Optional[str]:
+    if not session_id and request is not None:
+        session_id = request.cookies.get(SESSION_COOKIE_NAME)
+        if not session_id:
+            session_id = request.headers.get("x-dart-session")
+        if not session_id:
+            auth_header = request.headers.get("authorization", "")
+            if auth_header.lower().startswith("bearer "):
+                session_id = auth_header[7:].strip()
+    if not session_id:
+        return None
+
+    username = None
+    with _SESSION_LOCK:
+        sess = _ACTIVE_SESSIONS.get(session_id)
+        if sess:
+            username = sess.get("username")
+    if not username:
+        try:
+            with _get_users_db() as conn:
+                row = conn.execute("SELECT username FROM user_sessions WHERE session_id = ?", (session_id,)).fetchone()
+                if row:
+                    username = row["username"]
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    with _SESSION_LOCK:
+                        _ACTIVE_SESSIONS[session_id] = {
+                            "username": username,
+                            "created_at": now_iso,
+                            "last_seen_at": now_iso,
+                        }
+        except Exception:
+            pass
+
+    if not username:
+        return None
+
+    users = load_users().get("users", {})
+    if username not in users:
+        delete_user_session(session_id)
+        return None
+    return username
 
 
 def get_user_aws_config(username: Optional[str]) -> Dict[str, Any]:
@@ -1788,8 +1878,9 @@ def normalize_persona(payload: Dict[str, Any]) -> Dict[str, Any]:
     return persona
 
 
-def current_persona() -> Optional[Dict[str, Any]]:
-    username = STATE.get("current_user")
+def current_persona(username: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    if not username:
+        username = STATE.get("current_user")
     if not username:
         return None
     user = load_users().get("users", {}).get(username, {})
@@ -3607,11 +3698,10 @@ def _byo_library_records() -> List[Dict[str, Any]]:
     return records
 
 
-def byo_payload() -> Dict[str, Any]:
+def byo_payload(username: Optional[str] = None) -> Dict[str, Any]:
     datasets = _byo_library_records()
-    current_user = STATE.get("current_user")
-    user_aws = get_user_aws_config(current_user) if current_user else {}
-    user_ms = get_user_microsoft_config(current_user) if current_user else {}
+    user_aws = get_user_aws_config(username) if username else {}
+    user_ms = get_user_microsoft_config(username) if username else {}
     return {
         "datasets": datasets,
         "dataset_count": len(datasets),
@@ -6033,6 +6123,30 @@ HTML = r'''
       .aiInsightsKpiGrid,.dossierStatsGrid,.dossierMetaGrid{grid-template-columns:1fr}
     }
 
+    /* Confidentiality & Proprietary Modal */
+    .confidentialityModalBackdrop{position:fixed;inset:0;background:rgba(10,8,4,.75);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px}
+    .confidentialityModalCard{width:min(680px,96vw);max-height:90vh;overflow-y:auto;border-radius:24px;padding:28px 30px;background:#ffffff;border:1px solid #e1cf96;box-shadow:0 30px 90px rgba(15,23,42,.28);animation:cardIn .25s ease both}
+    :root[data-theme="dark"] .confidentialityModalCard{background:linear-gradient(180deg,#19150d,#100d07);border-color:#6c5723;box-shadow:0 32px 90px rgba(0,0,0,.75)}
+    .confidentialityHeader{display:flex;align-items:center;gap:14px;margin-bottom:16px}
+    .confidentialityIconBadge{width:46px;height:46px;border-radius:14px;background:#fff4cc;border:1px solid #e1c66f;display:flex;align-items:center;justify-content:center;font-size:1.45rem;flex:none;box-shadow:0 4px 14px rgba(111,82,0,.12)}
+    :root[data-theme="dark"] .confidentialityIconBadge{background:#2b240f;border-color:#796124}
+    .confidentialityBadge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:4px 10px;background:#fff4cc;border:1px solid #e1c66f;color:#725500;font-size:.74rem;font-weight:900;letter-spacing:.05em;text-transform:uppercase;margin-bottom:4px}
+    :root[data-theme="dark"] .confidentialityBadge{background:#2b240f;border-color:#796124;color:#f0d271}
+    .confidentialityTitle{margin:0;font-size:1.35rem;font-weight:900;color:#172033;line-height:1.3}
+    :root[data-theme="dark"] .confidentialityTitle{color:#f8f4e8}
+    .confidentialityBody{background:#fffaf0;border:1px solid #ead9a4;border-radius:16px;padding:18px 20px;margin-bottom:18px;color:#334155;font-size:.88rem;line-height:1.6}
+    :root[data-theme="dark"] .confidentialityBody{background:#14110a;border-color:#433618;color:#cbd5e1}
+    .confidentialityBody b{color:#0f172a}
+    :root[data-theme="dark"] .confidentialityBody b{color:#f8fafc}
+    .confidentialityBody ul{margin:10px 0 10px 18px;padding:0;display:grid;gap:8px}
+    .confidentialityCheckWrap{background:#fff8df;border:1px solid #dfc979;border-radius:14px;padding:14px 16px;display:flex;align-items:flex-start;gap:12px;margin-bottom:20px}
+    :root[data-theme="dark"] .confidentialityCheckWrap{background:#1e190d;border-color:#6f5820}
+    .confidentialityCheckWrap input[type="checkbox"]{margin-top:3px;cursor:pointer;width:18px;height:18px;accent-color:#b98b09}
+    .confidentialityCheckWrap label{cursor:pointer;font-size:.88rem;font-weight:700;color:#594300;line-height:1.45}
+    :root[data-theme="dark"] .confidentialityCheckWrap label{color:#f4e4aa}
+    .confidentialityActions{display:flex;justify-content:flex-end;align-items:center;gap:12px}
+    .confidentialityActions .btn:disabled{opacity:.45;cursor:not-allowed;box-shadow:none!important}
+
   </style>
 </head>
 <body data-workspace="medicare">
@@ -6255,6 +6369,10 @@ function setNav(){
 async function boot(){
   state.meta=await api('/api/meta');
   if(!state.meta.auth_user){renderAuth();return;}
+  if(sessionStorage.getItem('dart_nda_accepted')!=='1'){
+    showConfidentialityModal();
+    return;
+  }
   if(!state.meta.persona){renderOnboarding();return;}
   const p=state.meta.persona||{};
   const target=sessionStorage.getItem('dart_target_page');
@@ -6277,10 +6395,67 @@ async function boot(){
 }
 function sectionShell(items,content){return `<div class="pageShell"><aside class="sectionRail"><div class="railTitle">On this page</div>${items.map(x=>`<a href="#${x[0]}">${x[1]}</a>`).join('')}</aside><div>${content}</div></div>`;}
 function section(id,title,content){return `<section class="sectionBlock" id="${id}"><div class="sectionTitle"><h2>${title}</h2></div>${content}</section>`;}
-function renderAuth(){document.body.dataset.workspace='auth';if(document.getElementById('workspaceSwitcher'))document.getElementById('workspaceSwitcher').style.display='none';document.getElementById('navlinks').innerHTML='';document.getElementById('footer').innerHTML='';document.getElementById('app').innerHTML=`<div class="hero"><h1>DART</h1><p><b>Data Assurance Reconciliation Tracker</b>. Sign in or create a local prototype account to save a profile in <code>dart_users.json</code>.</p></div><div class="grid grid2"><form class="panel" id="loginForm"><h2>Login</h2><div class="field"><label>Username</label><input id="loginUser" autocomplete="username"></div><div class="field"><label>Password</label><input id="loginPass" type="password" autocomplete="current-password"></div><br><button class="btn" type="submit">Login</button></form><form class="panel" id="signupForm"><h2>Create profile</h2><p class="muted">Saved to <code>dart_users.json</code> in the same folder as this app.</p><div class="field"><label>Username</label><input id="signupUser" autocomplete="username"></div><div class="field"><label>Password</label><input id="signupPass" type="password" autocomplete="new-password"></div><div class="field"><label>Display name</label><input id="signupName" placeholder="Nick Holmes"></div><div class="field"><label>Email</label><input id="signupEmail" placeholder="name@example.com"></div><div class="field"><label>Organization</label><input id="signupOrg" placeholder="Team or organization"></div><br><button class="btn" type="submit">Create profile</button></form></div>`;document.getElementById('loginForm').onsubmit=submitLogin;document.getElementById('signupForm').onsubmit=submitSignup;refreshThemeVisuals(document.getElementById('app'));}
-async function submitLogin(e){e.preventDefault();try{await postJson('/api/login',{username:document.getElementById('loginUser').value,password:document.getElementById('loginPass').value});sessionStorage.setItem('dart_fresh_login','1');sessionStorage.removeItem('dart_target_page');toast('Logged in');window.location.reload();}catch(err){console.error(err);toast('Login failed');}}
-async function submitSignup(e){e.preventDefault();try{await postJson('/api/signup',{username:document.getElementById('signupUser').value,password:document.getElementById('signupPass').value,display_name:document.getElementById('signupName').value,email:document.getElementById('signupEmail').value,organization:document.getElementById('signupOrg').value});sessionStorage.setItem('dart_fresh_login','1');toast('Profile created');window.location.reload();}catch(err){console.error(err);toast('Could not create profile');}}
-async function logoutUser(){await postJson('/api/logout',{});['dart_workspace','dart_target_page','dart_fresh_login','dart_byo_left','dart_byo_right'].forEach(k=>sessionStorage.removeItem(k));toast('Logged out');window.location.reload();}
+function renderAuth(){
+  const modal=document.getElementById('confidentialityModalBackdrop');
+  if(modal) modal.remove();
+  document.body.dataset.workspace='auth';
+  if(document.getElementById('workspaceSwitcher'))document.getElementById('workspaceSwitcher').style.display='none';
+  document.getElementById('navlinks').innerHTML='';
+  document.getElementById('footer').innerHTML='';
+  document.getElementById('app').innerHTML=`<div class="hero"><h1>DART</h1><p><b>Data Assurance Reconciliation Tracker</b>. Sign in or create an account to access the workspace.</p></div><div class="grid grid2"><form class="panel" id="loginForm"><h2>Login</h2><div class="field"><label>Username</label><input id="loginUser" autocomplete="username"></div><div class="field"><label>Password</label><input id="loginPass" type="password" autocomplete="current-password"></div><br><button class="btn" type="submit">Login</button></form><form class="panel" id="signupForm"><h2>Create profile</h2><p class="muted">Create an account to save your workspace persona and credentials.</p><div class="field"><label>Username</label><input id="signupUser" autocomplete="username"></div><div class="field"><label>Password</label><input id="signupPass" type="password" autocomplete="new-password"></div><div class="field"><label>Display name</label><input id="signupName" placeholder="Nick Holmes"></div><div class="field"><label>Email</label><input id="signupEmail" placeholder="name@example.com"></div><div class="field"><label>Organization</label><input id="signupOrg" placeholder="Team or organization"></div><br><button class="btn" type="submit">Create profile</button></form></div>`;
+  document.getElementById('loginForm').onsubmit=submitLogin;
+  document.getElementById('signupForm').onsubmit=submitSignup;
+  refreshThemeVisuals(document.getElementById('app'));
+}
+function showConfidentialityModal(){
+  const existing=document.getElementById('confidentialityModalBackdrop');
+  if(existing) existing.remove();
+  const backdrop=document.createElement('div');
+  backdrop.id='confidentialityModalBackdrop';
+  backdrop.className='confidentialityModalBackdrop';
+  backdrop.innerHTML=`
+    <div class="confidentialityModalCard" role="dialog" aria-modal="true" aria-labelledby="confidentialityTitle">
+      <div class="confidentialityHeader">
+        <div class="confidentialityIconBadge">🔒</div>
+        <div>
+          <span class="confidentialityBadge">Proprietary &amp; Confidential Notice</span>
+          <h2 class="confidentialityTitle" id="confidentialityTitle">Confidentiality &amp; Property Agreement</h2>
+        </div>
+      </div>
+      <div class="confidentialityBody">
+        <p><b>Welcome to DART (Data Assurance Reconciliation Tracker).</b></p>
+        <p>This software platform, including its analytical architecture, reconciliation algorithms, user interface designs, reporting methodologies, and data workflows, is the <b>strictly confidential and proprietary property</b> of the organization.</p>
+        <p>By proceeding and utilizing this tool, you acknowledge, represent, and agree that:</p>
+        <ul>
+          <li><b>Authorized Access Only:</b> You are an authorized user accessing this system exclusively for legitimate business and reconciliation operations.</li>
+          <li><b>Strict Confidentiality &amp; Non-Disclosure:</b> All proprietary algorithms, reconciliations, datasets, metrics, and insights are confidential and may not be disclosed, shared, or distributed to any unauthorized entity or individual.</li>
+          <li><b>No Replication or Theft:</b> This tool and its underlying code, features, ideas, and artifacts <b>cannot be replicated, duplicated, copied, reverse-engineered, or stolen</b> in whole or in part under any circumstances.</li>
+          <li><b>Compliance &amp; Monitoring:</b> System access, activities, and data changes are subject to continuous logging, auditing, and compliance enforcement.</li>
+        </ul>
+      </div>
+      <div class="confidentialityCheckWrap">
+        <input type="checkbox" id="agreeConfidentialityCheckbox" onchange="document.getElementById('btnAgreeConfidentiality').disabled = !this.checked">
+        <label for="agreeConfidentialityCheckbox">
+          I have read, understand, and agree to these confidentiality and proprietary software conditions.
+        </label>
+      </div>
+      <div class="confidentialityActions">
+        <button class="btn secondary" type="button" onclick="logoutUser()">Cancel &amp; Sign Out</button>
+        <button class="btn" id="btnAgreeConfidentiality" type="button" disabled onclick="acceptConfidentialityAgreement()">I Understand &amp; Agree</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+}
+function acceptConfidentialityAgreement(){
+  sessionStorage.setItem('dart_nda_accepted','1');
+  const modal=document.getElementById('confidentialityModalBackdrop');
+  if(modal) modal.remove();
+  boot();
+}
+async function submitLogin(e){e.preventDefault();try{await postJson('/api/login',{username:document.getElementById('loginUser').value,password:document.getElementById('loginPass').value});sessionStorage.setItem('dart_fresh_login','1');sessionStorage.removeItem('dart_target_page');sessionStorage.removeItem('dart_nda_accepted');toast('Logged in');window.location.reload();}catch(err){console.error(err);toast('Login failed');}}
+async function submitSignup(e){e.preventDefault();try{await postJson('/api/signup',{username:document.getElementById('signupUser').value,password:document.getElementById('signupPass').value,display_name:document.getElementById('signupName').value,email:document.getElementById('signupEmail').value,organization:document.getElementById('signupOrg').value});sessionStorage.setItem('dart_fresh_login','1');sessionStorage.removeItem('dart_nda_accepted');toast('Profile created');window.location.reload();}catch(err){console.error(err);toast('Could not create profile');}}
+async function logoutUser(){await postJson('/api/logout',{});['dart_workspace','dart_target_page','dart_fresh_login','dart_nda_accepted','dart_byo_left','dart_byo_right'].forEach(k=>sessionStorage.removeItem(k));const modal=document.getElementById('confidentialityModalBackdrop');if(modal)modal.remove();toast('Logged out');window.location.reload();}
 async function saveProfile(e){if(e)e.preventDefault();await postJson('/api/profile',{display_name:profileName.value,email:profileEmail.value,organization:profileOrg.value,role:profileRole.value,password:profilePass.value});toast('Profile saved');state.meta=await api('/api/meta');await render();}
 function renderOnboarding(){
   document.body.dataset.workspace='onboarding';
@@ -8980,12 +9155,17 @@ async def signup(request: Request) -> Any:
         },
     }
     save_users(data)
-    STATE["current_user"] = username
-    STATE["persona"] = None
-    STATE["chat"] = []
-    STATE["byo_chat"] = []
-    STATE["byo_chat_pair"] = []
-    return {"status": "ok"}
+    session_id = create_user_session(username)
+    response = JSONResponse({"status": "ok", "session_id": session_id})
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=session_id,
+        max_age=SESSION_MAX_AGE_SECONDS,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+    return response
 
 
 @app.post("/api/login")
@@ -8996,34 +9176,40 @@ async def login(request: Request) -> Any:
     user = load_users().get("users", {}).get(username)
     if not user or user.get("password") != password:
         return JSONResponse({"error": "Invalid username or password."}, status_code=401)
-    STATE["current_user"] = username
+    session_id = create_user_session(username)
     stored_persona = user.get("persona") if isinstance(user.get("persona"), dict) else None
-    STATE["persona"] = normalize_persona(stored_persona) if stored_persona else None
-    # Chat is intentionally session-local; clear it at login so one local account never sees another account's conversation.
-    STATE["chat"] = []
-    STATE["byo_chat"] = []
-    STATE["byo_chat_pair"] = []
-    return {
+    persona_obj = normalize_persona(stored_persona) if stored_persona else None
+    response = JSONResponse({
         "status": "ok",
-        "has_persona": bool(STATE["persona"]),
-        "preferred_workspace": (STATE["persona"] or {}).get("preferred_workspace"),
-        "landing_page": (STATE["persona"] or {}).get("landing_page"),
-    }
+        "session_id": session_id,
+        "has_persona": bool(persona_obj),
+        "preferred_workspace": (persona_obj or {}).get("preferred_workspace"),
+        "landing_page": (persona_obj or {}).get("landing_page"),
+    })
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=session_id,
+        max_age=SESSION_MAX_AGE_SECONDS,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+    return response
 
 
 @app.post("/api/logout")
-async def logout() -> Dict[str, str]:
-    STATE["current_user"] = None
-    STATE["persona"] = None
-    STATE["chat"] = []
-    STATE["byo_chat"] = []
-    STATE["byo_chat_pair"] = []
-    return {"status": "ok"}
+async def logout(request: Request) -> Any:
+    session_id = request.cookies.get(SESSION_COOKIE_NAME) or request.headers.get("x-dart-session")
+    if session_id:
+        delete_user_session(session_id)
+    response = JSONResponse({"status": "ok"})
+    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
+    return response
 
 
 @app.post("/api/profile")
 async def update_profile(request: Request) -> Any:
-    username = STATE.get("current_user")
+    username = get_session_user(request)
     if not username:
         return JSONResponse({"error": "Not logged in."}, status_code=401)
     payload = await request.json()
@@ -9041,8 +9227,8 @@ async def update_profile(request: Request) -> Any:
 
 
 @app.get("/api/settings/aws")
-def get_aws_settings() -> Dict[str, Any]:
-    username = STATE.get("current_user")
+def get_aws_settings(request: Request) -> Dict[str, Any]:
+    username = get_session_user(request)
     cfg = get_user_aws_config(username)
     secret_masked = "••••••••" if cfg.get("secret_access_key") else ""
     token_masked = "••••••••" if cfg.get("session_token") else ""
@@ -9064,7 +9250,7 @@ def get_aws_settings() -> Dict[str, Any]:
 
 @app.post("/api/settings/aws")
 async def save_aws_settings_endpoint(request: Request) -> Any:
-    username = STATE.get("current_user")
+    username = get_session_user(request)
     if not username:
         return JSONResponse({"error": "Not logged in."}, status_code=401)
     payload = await request.json()
@@ -9113,7 +9299,7 @@ async def save_aws_settings_endpoint(request: Request) -> Any:
 
 @app.post("/api/settings/aws/test")
 async def test_aws_settings_endpoint(request: Request) -> Any:
-    username = STATE.get("current_user")
+    username = get_session_user(request)
     payload = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
     access_key = str(payload.get("access_key_id", "")).strip()
     secret_key = str(payload.get("secret_access_key", "")).strip()
@@ -9145,8 +9331,8 @@ async def test_aws_settings_endpoint(request: Request) -> Any:
 
 
 @app.post("/api/settings/aws/clear")
-async def clear_aws_settings_endpoint() -> Any:
-    username = STATE.get("current_user")
+async def clear_aws_settings_endpoint(request: Request) -> Any:
+    username = get_session_user(request)
     if not username:
         return JSONResponse({"error": "Not logged in."}, status_code=401)
     clear_user_aws_config(username)
@@ -9154,8 +9340,8 @@ async def clear_aws_settings_endpoint() -> Any:
 
 
 @app.get("/api/settings/microsoft")
-def get_microsoft_settings() -> Dict[str, Any]:
-    username = STATE.get("current_user")
+def get_microsoft_settings(request: Request) -> Dict[str, Any]:
+    username = get_session_user(request)
     cfg = get_user_microsoft_config(username)
     secret_masked = "••••••••" if cfg.get("client_secret") else ""
     return {
@@ -9177,7 +9363,7 @@ def get_microsoft_settings() -> Dict[str, Any]:
 
 @app.post("/api/settings/microsoft")
 async def save_microsoft_settings_endpoint(request: Request) -> Any:
-    username = STATE.get("current_user")
+    username = get_session_user(request)
     if not username:
         return JSONResponse({"error": "Not logged in."}, status_code=401)
     payload = await request.json()
@@ -9232,7 +9418,7 @@ async def save_microsoft_settings_endpoint(request: Request) -> Any:
 
 @app.post("/api/settings/microsoft/test")
 async def test_microsoft_settings_endpoint(request: Request) -> Any:
-    username = STATE.get("current_user")
+    username = get_session_user(request)
     payload = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
     tenant_id = str(payload.get("tenant_id", "")).strip()
     client_id = str(payload.get("client_id", "")).strip()
@@ -9276,8 +9462,8 @@ async def test_microsoft_settings_endpoint(request: Request) -> Any:
 
 
 @app.post("/api/settings/microsoft/clear")
-async def clear_microsoft_settings_endpoint() -> Any:
-    username = STATE.get("current_user")
+async def clear_microsoft_settings_endpoint(request: Request) -> Any:
+    username = get_session_user(request)
     if not username:
         return JSONResponse({"error": "Not logged in."}, status_code=401)
     clear_user_microsoft_config(username)
@@ -9285,8 +9471,9 @@ async def clear_microsoft_settings_endpoint() -> Any:
 
 
 @app.get("/api/meta")
-def meta() -> Dict[str, Any]:
+def meta(request: Request) -> Dict[str, Any]:
     ensure_data()
+    username = get_session_user(request)
     df = standardize(STATE["df"])
     profile = pd.DataFrame({
         "Column": df.columns,
@@ -9294,10 +9481,9 @@ def meta() -> Dict[str, Any]:
         "Non-null": [int(df[c].notna().sum()) for c in df.columns],
         "Unique": [int(df[c].nunique(dropna=True)) for c in df.columns],
     }).to_dict("records")
-    persisted_persona = current_persona()
-    STATE["persona"] = persisted_persona
+    persisted_persona = current_persona(username) if username else None
     return {
-        "auth_user": public_user(STATE.get("current_user")),
+        "auth_user": public_user(username) if username else None,
         "persona": persisted_persona,
         "persona_effects": persona_effects(persisted_persona),
         "source": STATE["source"],
@@ -9324,7 +9510,7 @@ def meta() -> Dict[str, Any]:
 
 @app.post("/api/persona")
 async def persona(request: Request) -> Any:
-    username = STATE.get("current_user")
+    username = get_session_user(request)
     if not username:
         return JSONResponse({"error": "Not logged in."}, status_code=401)
     normalized = normalize_persona(await request.json())
@@ -9332,9 +9518,6 @@ async def persona(request: Request) -> Any:
     user = data.setdefault("users", {}).setdefault(username, {"password": "", "profile": {}})
     user["persona"] = normalized
     save_users(data)
-    STATE["persona"] = normalized
-    if not STATE["chat"]:
-        STATE["chat"] = [{"role": "assistant", "content": "Hi. I am Dartboard, your DART assistant. I will tailor the level of detail and next-step framing to your saved workspace persona."}]
     return {
         "status": "ok",
         "persona": normalized,
@@ -9466,8 +9649,9 @@ async def upload(file: UploadFile = File(...)) -> Any:
     )
 
 @app.get("/api/byo")
-def get_byo_workspace() -> Dict[str, Any]:
-    return byo_payload()
+def get_byo_workspace(request: Request) -> Dict[str, Any]:
+    username = get_session_user(request)
+    return byo_payload(username)
 
 
 @app.get("/api/byo/dataset/{filename}")
@@ -9484,10 +9668,10 @@ def get_byo_dataset(filename: str) -> Any:
 
 
 @app.post("/api/byo/upload")
-async def upload_byo(files: List[UploadFile] = File(...)) -> Any:
+async def upload_byo(request: Request, files: List[UploadFile] = File(...)) -> Any:
     saved: List[Dict[str, Any]] = []
     errors: List[str] = []
-    current_user = STATE.get("current_user") or ""
+    current_user = get_session_user(request) or ""
     for file in files:
         filename = str(file.filename or "dataset").strip() or "dataset"
         try:
@@ -9534,7 +9718,7 @@ async def import_byo_from_url(request: Request) -> Any:
         return JSONResponse({"error": "Provide at least one file URL."}, status_code=400)
     saved: List[Dict[str, Any]] = []
     errors: List[str] = []
-    current_user = STATE.get("current_user") or ""
+    current_user = get_session_user(request) or ""
     for url in urls:
         try:
             _validate_public_import_url(url)
@@ -9575,7 +9759,7 @@ async def list_byo_s3_files(request: Request) -> Any:
         bucket = raw_bucket
 
     if not bucket:
-        current_user = STATE.get("current_user")
+        current_user = get_session_user(request)
         user_aws = get_user_aws_config(current_user) if current_user else {}
         bucket = user_aws.get("bucket", "") or os.getenv("AWS_S3_BUCKET", "").strip() or os.getenv("S3_BUCKET", "").strip() or os.getenv("AWS_BUCKET", "").strip()
 
@@ -9631,8 +9815,8 @@ async def import_byo_from_s3(request: Request) -> Any:
     else:
         bucket = raw_bucket
 
+    current_user = get_session_user(request) or ""
     if not bucket:
-        current_user = STATE.get("current_user")
         user_aws = get_user_aws_config(current_user) if current_user else {}
         bucket = user_aws.get("bucket", "") or os.getenv("AWS_S3_BUCKET", "").strip() or os.getenv("S3_BUCKET", "").strip() or os.getenv("AWS_BUCKET", "").strip()
 
@@ -9653,7 +9837,7 @@ async def import_byo_from_s3(request: Request) -> Any:
             safe_hint = Path(key).name
             if safe_hint.lower().endswith(".xlsm"):
                 safe_hint = safe_hint[:-5] + ".xlsx"
-            info = _save_byo_bytes(content, safe_hint)
+            info = _save_byo_bytes(content, safe_hint, owner=current_user)
             saved_name = info["name"]
             etag = str(obj.get("ETag", "")).strip('"')
             last_mod = obj.get("LastModified")
@@ -9669,7 +9853,7 @@ async def import_byo_from_s3(request: Request) -> Any:
                 auto_sync=True,
                 last_synced_at=datetime.now(timezone.utc).isoformat(),
                 sync_status="Imported from S3",
-                created_by=STATE.get("current_user") or "",
+                created_by=current_user,
             )
             info["source_key"] = key
             info["bucket"] = bucket
@@ -9685,7 +9869,7 @@ async def import_byo_from_s3(request: Request) -> Any:
 @app.post("/api/byo/import/sharepoint/list")
 async def list_byo_sharepoint_files(request: Request) -> Any:
     body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
-    username = STATE.get("current_user")
+    username = get_session_user(request)
     user_ms = get_user_microsoft_config(username) if username else {}
 
     tenant_id = str(body.get("tenant_id") or "").strip() or user_ms.get("tenant_id", "") or os.getenv("AZURE_TENANT_ID", "").strip() or os.getenv("MS_TENANT_ID", "").strip()
@@ -9727,7 +9911,7 @@ async def import_byo_from_sharepoint(request: Request) -> Any:
         return JSONResponse({"error": "Select at least one file to import."}, status_code=400)
     saved: List[Dict[str, Any]] = []
     errors: List[str] = []
-    current_user = STATE.get("current_user") or ""
+    current_user = get_session_user(request) or ""
     for entry in items:
         name = str(entry.get("name", "") or "dataset")
         url = str(entry.get("download_url", "") or "")
@@ -10014,7 +10198,7 @@ async def link_byo_s3_source_route(request: Request) -> Any:
             key=key,
             region=region,
             auto_sync=auto_sync,
-            created_by=STATE.get("current_user") or "",
+            created_by=get_session_user(request) or "",
         )
         return {"status": "ok", "source": record}
     except Exception as exc:
