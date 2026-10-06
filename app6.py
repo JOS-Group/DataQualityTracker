@@ -622,7 +622,12 @@ def sync_byo_datasets_db_and_disk() -> None:
     """Ensure datasets on disk, SQLite, and linked S3 sources are fully synchronized."""
     try:
         BYO_DATA_DIR.mkdir(parents=True, exist_ok=True)
-        # 0. Sync S3 sources between SQLite and .s3_sources.json
+        # 0. Sync S3 sources and automations with remote S3 bucket if available
+        try:
+            if "pull_byo_metadata_from_s3" in globals():
+                pull_byo_metadata_from_s3()
+        except Exception:
+            pass
         s3_sources = load_byo_s3_sources()
 
         # 1. Restore any datasets stored in SQLite that are missing on disk
@@ -1559,6 +1564,11 @@ def save_byo_s3_source(
     except Exception:
         pass
 
+    try:
+        push_byo_metadata_to_s3(target="sources", bucket=bucket, username=created_by)
+    except Exception:
+        pass
+
     return record
 
 
@@ -1579,6 +1589,41 @@ def delete_byo_s3_source(dataset_name: str) -> None:
     except Exception:
         pass
 
+    try:
+        push_byo_metadata_to_s3(target="sources")
+    except Exception:
+        pass
+
+
+def _get_active_s3_bucket(username: Optional[str] = None) -> str:
+    env_bucket = (
+        os.getenv("AWS_S3_BUCKET", "").strip()
+        or os.getenv("S3_BUCKET", "").strip()
+        or os.getenv("AWS_BUCKET", "").strip()
+    )
+    if env_bucket:
+        return env_bucket
+    if username:
+        user_aws = get_user_aws_config(username)
+        if user_aws.get("bucket"):
+            return str(user_aws.get("bucket")).strip()
+    try:
+        users = load_users().get("users", {})
+        for udata in users.values():
+            b = str(udata.get("aws", {}).get("bucket", "")).strip()
+            if b:
+                return b
+    except Exception:
+        pass
+    try:
+        with _get_users_db() as conn:
+            row = conn.execute("SELECT bucket FROM byo_s3_sources WHERE bucket != '' LIMIT 1").fetchone()
+            if row and row["bucket"]:
+                return str(row["bucket"]).strip()
+    except Exception:
+        pass
+    return ""
+
 
 def _get_s3_client_for_user(
     username: Optional[str] = None,
@@ -1598,6 +1643,21 @@ def _get_s3_client_for_user(
     eff_secret = (secret_key or "").strip() or user_aws.get("secret_access_key", "") or os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
     eff_token = (session_token or "").strip() or user_aws.get("session_token", "") or os.getenv("AWS_SESSION_TOKEN", "").strip()
 
+    if not (eff_key and eff_secret):
+        try:
+            users = load_users().get("users", {})
+            for udata in users.values():
+                k = str(udata.get("aws", {}).get("access_key_id", "")).strip()
+                s = str(udata.get("aws", {}).get("secret_access_key", "")).strip()
+                if k and s:
+                    eff_key = k
+                    eff_secret = s
+                    eff_region = eff_region or str(udata.get("aws", {}).get("region", "")).strip()
+                    eff_token = eff_token or str(udata.get("aws", {}).get("session_token", "")).strip()
+                    break
+        except Exception:
+            pass
+
     kwargs: Dict[str, Any] = {}
     if eff_region:
         kwargs["region_name"] = eff_region
@@ -1607,6 +1667,176 @@ def _get_s3_client_for_user(
         if eff_token:
             kwargs["aws_session_token"] = eff_token
     return boto3.client("s3", **kwargs)
+
+
+def push_byo_metadata_to_s3(
+    target: str = "all",
+    bucket: Optional[str] = None,
+    username: Optional[str] = None,
+    snapshot_id: Optional[str] = None,
+) -> None:
+    if boto3 is None:
+        return
+    eff_bucket = bucket or _get_active_s3_bucket(username)
+    if not eff_bucket:
+        return
+    try:
+        client = _get_s3_client_for_user(username=username)
+        if target in ("sources", "all"):
+            try:
+                sources = load_byo_s3_sources()
+                if sources:
+                    payload = json.dumps(sources, indent=2, ensure_ascii=False, default=str).encode("utf-8")
+                    client.put_object(
+                        Bucket=eff_bucket,
+                        Key=".dart_metadata/byo_s3_sources.json",
+                        Body=payload,
+                        ContentType="application/json",
+                    )
+            except Exception:
+                pass
+
+        if target in ("automations", "all"):
+            try:
+                automations = load_byo_email_automations()
+                if automations:
+                    payload = json.dumps(automations, indent=2, ensure_ascii=False, default=str).encode("utf-8")
+                    client.put_object(
+                        Bucket=eff_bucket,
+                        Key=".dart_metadata/byo_email_automations.json",
+                        Body=payload,
+                        ContentType="application/json",
+                    )
+            except Exception:
+                pass
+
+        if target in ("snapshots", "all") and snapshot_id:
+            try:
+                snap_path = _snapshot_path(snapshot_id)
+                if snap_path.exists():
+                    client.put_object(
+                        Bucket=eff_bucket,
+                        Key=f".dart_metadata/snapshots/{_safe_template_id(snapshot_id)}.csv",
+                        Body=snap_path.read_bytes(),
+                        ContentType="text/csv",
+                    )
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def pull_byo_metadata_from_s3(bucket: Optional[str] = None, username: Optional[str] = None) -> Dict[str, Any]:
+    if boto3 is None:
+        return {"synced": False, "reason": "boto3 not installed"}
+    eff_bucket = bucket or _get_active_s3_bucket(username)
+    if not eff_bucket:
+        return {"synced": False, "reason": "no bucket configured"}
+
+    synced_sources = 0
+    synced_automations = 0
+    synced_snapshots = 0
+    discovered_files = 0
+
+    try:
+        client = _get_s3_client_for_user(username=username)
+
+        # 1. Pull S3 sources metadata
+        try:
+            resp = client.get_object(Bucket=eff_bucket, Key=".dart_metadata/byo_s3_sources.json")
+            raw_sources = json.loads(resp["Body"].read().decode("utf-8"))
+            if isinstance(raw_sources, dict):
+                for ds_name, sinfo in raw_sources.items():
+                    if isinstance(sinfo, dict) and sinfo.get("bucket") and sinfo.get("key"):
+                        save_byo_s3_source(
+                            dataset_name=ds_name,
+                            bucket=sinfo.get("bucket"),
+                            key=sinfo.get("key"),
+                            region=sinfo.get("region", ""),
+                            etag=sinfo.get("etag", ""),
+                            last_modified=sinfo.get("last_modified", ""),
+                            size_bytes=sinfo.get("size_bytes", 0),
+                            auto_sync=sinfo.get("auto_sync", True),
+                            last_synced_at=sinfo.get("last_synced_at", ""),
+                            sync_status=sinfo.get("sync_status", "In sync"),
+                            created_by=sinfo.get("created_by", ""),
+                        )
+                        synced_sources += 1
+        except Exception:
+            pass
+
+        # 2. Pull BYO Email automations metadata
+        try:
+            resp = client.get_object(Bucket=eff_bucket, Key=".dart_metadata/byo_email_automations.json")
+            raw_automations = json.loads(resp["Body"].read().decode("utf-8"))
+            if isinstance(raw_automations, list) and raw_automations:
+                save_byo_email_automations(raw_automations)
+                synced_automations += len(raw_automations)
+        except Exception:
+            pass
+
+        # 3. Pull Baseline snapshots
+        try:
+            list_resp = client.list_objects_v2(Bucket=eff_bucket, Prefix=".dart_metadata/snapshots/")
+            for obj in list_resp.get("Contents", []):
+                key = obj.get("Key", "")
+                if key.endswith(".csv"):
+                    snap_filename = Path(key).name
+                    target_path = EMAIL_SNAPSHOT_DIR / snap_filename
+                    if not target_path.exists():
+                        snap_obj = client.get_object(Bucket=eff_bucket, Key=key)
+                        target_path.parent.mkdir(parents=True, exist_ok=True)
+                        target_path.write_bytes(snap_obj["Body"].read())
+                        synced_snapshots += 1
+        except Exception:
+            pass
+
+        # 4. Auto-discover any data files in bucket
+        try:
+            paginator = client.get_paginator("list_objects_v2")
+            current_sources = load_byo_s3_sources()
+            for page in paginator.paginate(Bucket=eff_bucket):
+                for item in page.get("Contents", []):
+                    key = item.get("Key", "")
+                    if key.startswith(".") or "/." in key or key.startswith(".dart_metadata/"):
+                        continue
+                    ext = Path(key).suffix.lower()
+                    if ext in [".csv", ".xlsx", ".xlsm"]:
+                        ds_name = Path(key).name
+                        if ds_name not in current_sources:
+                            save_byo_s3_source(
+                                dataset_name=ds_name,
+                                bucket=eff_bucket,
+                                key=key,
+                                size_bytes=int(item.get("Size", 0)),
+                                etag=str(item.get("ETag", "")).strip('"'),
+                                last_modified=item.get("LastModified", "").isoformat() if hasattr(item.get("LastModified"), "isoformat") else str(item.get("LastModified", "")),
+                                auto_sync=True,
+                                created_by=username or "",
+                            )
+                            discovered_files += 1
+        except Exception:
+            pass
+
+        # 5. Ensure all S3 datasets are downloaded locally and in SQLite
+        sources_to_sync = load_byo_s3_sources()
+        for ds_name, sinfo in sources_to_sync.items():
+            try:
+                local_f = _byo_path(ds_name)
+                if not local_f.exists() or local_f.stat().st_size == 0:
+                    sync_byo_s3_source(ds_name, force_download=True, username=username)
+            except Exception:
+                pass
+
+        return {
+            "synced": True,
+            "sources": synced_sources,
+            "automations": synced_automations,
+            "snapshots": synced_snapshots,
+            "discovered": discovered_files,
+        }
+    except Exception as exc:
+        return {"synced": False, "error": str(exc)}
 
 
 def sync_byo_s3_source(dataset_name: str, force_download: bool = False, username: Optional[str] = None) -> Dict[str, Any]:
@@ -2861,6 +3091,10 @@ def write_email_snapshot(df: pd.DataFrame, template: Dict[str, Any]) -> Path:
     _, snapshot, _, _ = build_snapshot_frame(df, template)
     path = _snapshot_path(template["id"])
     snapshot.to_csv(path, index=False)
+    try:
+        push_byo_metadata_to_s3(target="snapshots", snapshot_id=template.get("id"))
+    except Exception:
+        pass
     return path
 
 
@@ -3460,27 +3694,13 @@ def _validate_public_import_url(url: str) -> str:
 
 
 def _s3_client(region: str = "", access_key: str = "", secret_key: str = "", session_token: str = ""):
-    if boto3 is None:
-        raise RuntimeError("The 'boto3' package is not installed on the server. Run: pip install boto3")
-
-    current_user = STATE.get("current_user")
-    user_aws = get_user_aws_config(current_user) if current_user else {}
-
-    region = (region or "").strip() or user_aws.get("region", "") or os.getenv("AWS_DEFAULT_REGION", "").strip() or os.getenv("AWS_REGION", "").strip()
-    access_key = (access_key or "").strip() or user_aws.get("access_key_id", "") or os.getenv("AWS_ACCESS_KEY_ID", "").strip()
-    secret_key = (secret_key or "").strip() or user_aws.get("secret_access_key", "") or os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
-    session_token = (session_token or "").strip() or user_aws.get("session_token", "") or os.getenv("AWS_SESSION_TOKEN", "").strip()
-
-    kwargs: Dict[str, Any] = {}
-    if region:
-        kwargs["region_name"] = region
-
-    if access_key and secret_key:
-        kwargs["aws_access_key_id"] = access_key
-        kwargs["aws_secret_access_key"] = secret_key
-        if session_token:
-            kwargs["aws_session_token"] = session_token
-    return boto3.client("s3", **kwargs)
+    return _get_s3_client_for_user(
+        username=None,
+        region=region,
+        access_key=access_key,
+        secret_key=secret_key,
+        session_token=session_token,
+    )
 
 
 def _graph_access_token(tenant_id: str, client_id: str, client_secret: str) -> str:
@@ -3940,6 +4160,11 @@ def save_byo_email_automations(templates: List[Dict[str, Any]]) -> None:
     except Exception:
         pass
 
+    try:
+        push_byo_metadata_to_s3(target="automations")
+    except Exception:
+        pass
+
 
 def _byo_email_history_event(event: Dict[str, Any]) -> None:
     try:
@@ -4010,6 +4235,10 @@ def delete_byo_email_automation(template_id: str) -> None:
     except Exception:
         pass
     _snapshot_path(template_id).unlink(missing_ok=True)
+    try:
+        push_byo_metadata_to_s3(target="automations")
+    except Exception:
+        pass
 
 
 def _find_byo_email_template(template_id: str) -> Optional[Dict[str, Any]]:
@@ -4079,6 +4308,12 @@ def _byo_email_scheduler_loop() -> None:
     _write_byo_email_status("Running", interval_seconds=BYO_EMAIL_AGENT_MIN_CHECK_SECONDS)
     while True:
         try:
+            # 0. Sync S3 metadata and auto-discover remote bucket files
+            try:
+                pull_byo_metadata_from_s3()
+            except Exception:
+                pass
+
             enabled = [t for t in load_byo_email_automations() if t.get("enabled")]
             datasets = list(dict.fromkeys(str(t.get("dataset_name", "")) for t in enabled if str(t.get("dataset_name", "")).strip()))
 
@@ -10159,8 +10394,12 @@ async def sync_byo_s3_route(request: Request) -> Any:
     filename = str(payload.get("filename", "")).strip()
     force = bool(payload.get("force", False))
     try:
+        pull_byo_metadata_from_s3(username=get_session_user(request))
+    except Exception:
+        pass
+    try:
         if filename:
-            sync_res = sync_byo_s3_source(filename, force_download=force)
+            sync_res = sync_byo_s3_source(filename, force_download=force, username=get_session_user(request))
             agent_results: List[Dict[str, Any]] = []
             if sync_res.get("changed"):
                 agent_results = [_public_automation_result(r) for r in run_enabled_byo_email_automations(filename)]
@@ -10177,7 +10416,11 @@ async def sync_byo_s3_route(request: Request) -> Any:
 
 
 @app.get("/api/byo/s3/sources")
-def get_byo_s3_sources_route() -> Dict[str, Any]:
+def get_byo_s3_sources_route(request: Request) -> Dict[str, Any]:
+    try:
+        pull_byo_metadata_from_s3(username=get_session_user(request))
+    except Exception:
+        pass
     return {"status": "ok", "sources": load_byo_s3_sources()}
 
 
@@ -10545,6 +10788,10 @@ async def add_rule(request: Request) -> Dict[str, str]:
 
 @app.on_event("startup")
 def _start_background_email_agent() -> None:
+    try:
+        pull_byo_metadata_from_s3()
+    except Exception:
+        pass
     start_email_agent_scheduler()
     start_byo_email_agent_scheduler()
 
