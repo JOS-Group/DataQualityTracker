@@ -1,0 +1,337 @@
+DART POWERPOINT COPILOT SLIDE DECK SCRIPT
+================================================================================
+Instructions for PowerPoint Copilot:
+- Create one slide for each numbered block below (27 slides total).
+- Keep each slide title exactly as specified: "Workspace Name - Tab Name" (or Summary / Overview).
+- Use the "On-slide bullets" section for the slide body bullet points.
+- Place the "Speaker notes" section directly into the PowerPoint presenter / speaker notes.
+- Format with a clean, professional executive design (white/cream background, deep navy/slate text, refined gold/bronze accents).
+================================================================================
+
+============================================================
+SLIDE 1
+Title: DART Platform Overview - Core Capabilities & Enterprise Value Proposition
+On-slide bullets:
+- Data Assurance Reconciliation Tracker (DART): Enterprise data trust, reconciliation, and automated quality intelligence
+- Validate source-to-target data as claims and related information move through ingestion and transformation pipelines
+- Reconcile record counts, financial values, key fields, and business rules between source systems
+- Identify discrepancies and exceptions with structured tracking through resolution, including dynamic AI-driven email alerts
+- Deliver lineage and traceability, showing where data originated, how it was transformed, and where quality issues occurred
+- Establish measurable data-quality and assurance metrics monitored across datasets, streams, and release cadences
+- Enhance trust in Claims and operational data for analytics, program integrity, executive reporting, and emerging AI use cases
+- Fully containerized architecture capable of operating directly within the CMS environment with no new ATO needs
+Speaker notes:
+Start here by introducing the overall mission and value proposition of DART—the Data Assurance Reconciliation Tracker. You would explain that modern healthcare and public sector systems process billions of dollars in claims and critical records, yet verifying that data moves accurately from ingestion to final reporting is often manual, fragmented, and slow. DART solves this by providing an independent, automated reconciliation and data assurance platform. It continuously validates source-to-target pipelines, reconciles dollars and record counts, tracks exceptions to resolution with AI-driven email alerts, and guarantees full end-to-end lineage. Crucially, DART is fully containerized and designed to deploy natively within secure CMS environments without requiring new Authority to Operate (ATO) friction. This sets the stage for how DART establishes uncompromising trust in claims data across three tailored workspaces: Medicare, Medicaid, and Build Your Own.
+
+============================================================
+SLIDE 2
+Title: Medicare Workspace - Summary
+On-slide bullets:
+- Flagship operational reconciliation workspace purpose-built for Medicare claims, NCH tables, and STTM transformations
+- Automated source-to-target reconciliation comparing claims records, financial balances, and field mappings across data streams
+- End-to-end exception lifecycle: automated risk scoring, AI root-cause diagnostics, Kanban remediation tracking, and governance controls
+- Integrated data toolset: live Excel workbook synchronization, automated backups, and real-time email alerting on data drift
+- Native conversational AI: DART Copilot provides contextual question answering grounded in active reconciliation evidence
+- Persona-tailored navigation delivering targeted views for Executives, Analytics, Operations, Quality/Compliance, and IT Engineering
+Speaker notes:
+You would start the Medicare story by summarizing what makes this workspace the core operational engine of DART. In this workspace, DART takes real, complex Medicare reconciliation workbooks—enriched directly with CMS NCH-to-STTM mapping dictionaries—and provides complete visibility into pipeline health. Instead of managing reconciliations through disconnected spreadsheets or static status meetings, the Medicare workspace creates an integrated workflow: leaders see executive health scores and risk distributions, analysts drill into field-level anomalies, operations teams manage remediation tickets, and engineers inspect data changes and automated alerting rules. It unites every stakeholder around a single source of verified truth.
+
+============================================================
+SLIDE 3
+Title: Medicare - Command Center & Operational Health
+On-slide bullets:
+- Executive operational landing page providing an instant snapshot of pipeline health, reconciliation volume, and risk exposure
+- Key Performance Indicators: Overall Health Score, Field Average Match Rate, Weighted Match Rate, Critical Risk Count, and Impacted Reports
+- Reconciliation Volume & Risk Distribution: Visual breakdown of total records, match rates, and severity tiers across all streams
+- Prioritized Investigation Queue: Dynamically ranked list of high-risk field discrepancies requiring immediate team attention
+- Persona Lens Adaptation: Tailors recommended actions and key metrics based on user role and depth preference
+Speaker notes:
+You would say, "This is where you start your daily Medicare review." The Command Center provides an immediate, high-altitude health assessment of the entire data pipeline. At a single glance, executives and managers can see overall match rates, total reconciliation volume, and the number of active high-risk discrepancies. The prioritized investigation queue surfaces the exact fields and streams that are dragging down quality before they impact downstream reporting or financial balances. It ensures that every team member knows where quality stands within seconds of logging in.
+
+============================================================
+SLIDE 4
+Title: Medicare - Briefing & Executive Reporting
+On-slide bullets:
+- Plain-English narrative intelligence summarizing current quality, reconciliation findings, and risk posture
+- Executive-ready briefing sections: High-Risk Attention Areas, Key Stream Highlights, and Recommended Next Actions
+- Automated Executive Brief Generation: Compiles structured readouts with 30/60/90-day priorities from the active filtered scope
+- Persona-driven storytelling: Automatically tailors tone, technical depth, and focal points for leadership, policy, or technical roles
+- Formatted markdown and rich-text output optimized for copy-pasting into executive emails, steering committee slides, and memos
+Speaker notes:
+Moving from the Command Center, you would explain that the Briefing and Executive Brief tools transform raw technical reconciliation data into plain-English executive intelligence. Many leaders do not have time to comb through thousands of data rows; they need to know what is broken, what the business impact is, and what decisions need to be made. These views synthesize stream results, highlight top risk drivers, articulate concrete 30, 60, and 90-day action items, and allow teams to generate polished executive updates in seconds with zero manual friction.
+
+============================================================
+SLIDE 5
+Title: Medicare - Metric Explanations & Methodology
+On-slide bullets:
+- Transparent methodology and definitions catalog for all proprietary DART data assurance metrics
+- Clear mathematical formulas and operational interpretations for Health Score, Weighted Match Rate, Risk Score, and Impact Score
+- Risk Tier Thresholds: Explains how Critical, High, Medium, and Low risk classifications are calculated and prioritized
+- Downstream Report Impact Scoring: Details how field-level errors are weighted based on their appearance in key CMS financial and operational reports
+- Establishes cross-functional alignment and audit-ready trust between technical, business, and compliance stakeholders
+Speaker notes:
+Next, you would explain that transparency is essential for data trust. The Metric Explanations tab acts as the official dictionary and methodological guide for everything DART measures. When a dashboard flags a weighted match rate of 94% or a critical risk score of 85, users can come here to see exactly how those numbers were calculated, what thresholds triggered the severity tier, and how report impacts were weighed. This guarantees that all stakeholders—from data engineers to audit teams—share a common understanding of the metrics without ambiguity.
+
+============================================================
+SLIDE 6
+Title: Medicare - Risk Center & AI Insights
+On-slide bullets:
+- Focused operational hub dedicated to isolating, triaging, and diagnosing critical reconciliation risks
+- Risk Driver Analysis: Pinpoints specific field-level mismatches, unmapped data elements, and severe volume drops
+- Machine-Learning Pattern Detection: Automatically detects zero-match disconnects, structural schema shifts, and high-impact KPI exposure
+- Investigation Cards & Root-Cause Hypotheses: Highlights probable causes (missing joins, formatting drift, date truncation) and next steps
+- Direct handoff into remediation workflows to ensure high-severity risks are immediately assigned and resolved
+Speaker notes:
+Now you move into the diagnostic portion of the story with the Risk Center and AI Insights. You would say, "Not all data issues carry equal weight; DART isolates the highest-impact failures that threaten claims processing, financial integrity, or regulatory reporting." Rather than requiring engineers to manually write dozens of SQL queries or inspect thousands of rows, DART's diagnostic engine analyzes patterns across all reconciliation streams simultaneously. It presents clear investigation cards with probable root causes and directly feeds the highest-priority issues into active remediation.
+
+============================================================
+SLIDE 7
+Title: Medicare - Scorecards & Stream Performance
+On-slide bullets:
+- Stream-by-stream performance benchmarking and comparative health scorecards
+- Side-by-side evaluation of reconciliation volume, field pass rates, unmatched records, and severity distributions
+- Stream Owner Accountability: Connects reconciliation results directly to responsible teams, data owners, and release checkpoints
+- Trend and distribution charts: Visualize quality variations across different Medicare claim types (Inpatient, Outpatient, Carrier, DME, etc.)
+- Ideal for sprint reviews, release sign-offs, and continuous pipeline monitoring
+Speaker notes:
+You would then introduce the Scorecards tab as the comparative accountability view. When managing enterprise pipelines, different streams or claim types (such as Inpatient, Carrier, or Part D) are often owned by different engineering teams or data custodians. The Scorecards tab gives each stream its own standardized performance card, summarizing total records, pass rates, and critical issues. It allows leaders to benchmark quality across streams and verify that release quality gates are satisfied before promoting pipelines into production.
+
+============================================================
+SLIDE 8
+Title: Medicare - Remediation Center (Action Center)
+On-slide bullets:
+- Full-lifecycle issue tracking and workflow management for reconciliation discrepancies (Action Center)
+- Interactive Kanban Board & Table Views: Manage finding states across Open, In Progress, Blocked, and Resolved
+- Structured Action Candidates: Convert detected reconciliation anomalies into actionable tickets with assigned owners, priorities, and deadlines
+- Seeded Workflow Issues: Pre-populated with realistic reconciliation issues for immediate triage and progress demonstration
+- Audit Trail & Resolution Logging: Captures resolution notes and root-cause remedies for permanent governance records
+Speaker notes:
+At this point in the presentation, you would emphasize that DART goes far beyond passive reporting—it drives active resolution. The Remediation Center (Action Center) turns data discrepancies into structured, assignable work items. Teams can track tickets on an interactive Kanban board, assign owners, set target resolution dates, and record remediation notes. This ensures that every reconciliation failure is tracked through a disciplined workflow until the underlying pipeline or mapping issue is fully resolved and verified.
+
+============================================================
+SLIDE 9
+Title: Medicare - Mapping Catalog & Governance Center
+On-slide bullets:
+- Centralized, editable source-to-target data lineage catalog enriched with CMS NCH-to-STTM specifications
+- Complete Lineage Inventory: Maps source tables and fields to target tables, target fields, business rules, and transformation logic
+- Governance Control Inventory: Tracks automated controls, validation rules, review frequencies (Daily, Weekly, Monthly), and designated stewards
+- Downstream Dependency Mapping: Associates each field mapping with downstream CMS reports, business KPIs, and designated data owners
+- Decision Readiness Scorecard: Evaluates whether datasets meet required quality thresholds for production release or regulatory reporting
+Speaker notes:
+Next, you would combine the Mapping Catalog and Governance Center to demonstrate DART's source-to-target lineage and compliance oversight. The Mapping Catalog maintains a live, searchable repository of every source-to-target mapping, complete with transformation rules and downstream report linkages. The Governance Center connects those mappings to active internal controls, review cadences, and compliance evidence. It proves that data quality is managed as a rigorous, audit-ready operational discipline.
+
+============================================================
+SLIDE 10
+Title: Medicare - System Explorer & Data Management
+On-slide bullets:
+- Interactive technical search and relationship explorer for deep field-level investigation
+- Comprehensive Field Profiling: Displays source table/field, target table/field, match rates, risk tiers, and record counts side by side
+- Rapid Search & Multi-Attribute Filtering: Instantly locate specific fields, streams, or transformation rules across thousands of mappings
+- Central Data Foundation: Displays active workbook metadata, loaded sheets, file sizes, timestamps, and CMS dictionary enrichment status
+- Grounded Data Integrity: Verifies that all downstream analytics, metrics, and risk scores originate from verified source assets
+Speaker notes:
+You would describe the System Explorer and Data Management tab as the power-search and architectural foundation of the Medicare workspace. When investigating a specific anomaly, users can instantly query any field name, stream, or table to view its end-to-end relationship, current match rate, risk tier, and downstream dependencies. Concurrently, the Data Management page confirms the underlying workbook metadata, loaded sheets, and CMS dictionary enrichment, verifying that all analytics remain strictly grounded in authentic source data.
+
+============================================================
+SLIDE 11
+Title: Medicaid Workspace - Summary
+On-slide bullets:
+- Comprehensive 50-state Medicaid program quality, claims integrity, and financial risk oversight workspace
+- 50-State Quality Model: Evaluates state-by-state data quality scores, duplicate claims rates, issue backlogs, and money at risk
+- Integrated Analytical Suite: Interactive US heatmaps, state-to-state benchmarking, issue trend analytics, and claims surveillance
+- AI-Powered Medicaid Intelligence: Automated state recommendations and the CMS Q&A conversational chatbot
+- Financial Opportunity Modeling: Identifies and prioritizes modeled spending recovery and cost optimization across 30/60/90 day horizons
+Speaker notes:
+You would introduce the Medicaid Workspace as DART's macro-level, multi-program oversight environment. While Medicare focuses deeply on granular source-to-target reconciliation pipelines, Medicaid addresses enterprise program integrity across all 50 states. It synthesizes state-level data quality, duplicate claims volume, issue resolution backlogs, and modeled financial exposure into a unified command environment. It allows CMS leadership and state program directors to pinpoint quality disparities, optimize spending, and drive nationwide data consistency.
+
+============================================================
+SLIDE 12
+Title: Medicaid - Dashboard & US Heatmap
+On-slide bullets:
+- National Medicaid executive dashboard presenting nationwide quality KPIs, rankings, and financial exposure
+- National Macro Metrics: Average Quality Score, Total Tracked Issues, Critical State Backlog, and Estimated Money at Risk
+- State Leaderboard & Rankings: Ranks all 50 states from highest to lowest quality with composite scoring and confidence ratings
+- Interactive Choropleth US Heatmap: Toggle views by Composite Score, Duplicate Claims Rate, Backlog, or Modeled Money at Risk
+- Dynamic State Drill-Down: Hover for quick statistics and click any state to immediately launch a dedicated investigation
+Speaker notes:
+You would say, "This is the front door to the Medicaid quality story." The Dashboard and US Heatmap establish the nationwide baseline. Executives can immediately see the national average quality score, total open issues, and aggregate financial exposure on the state leaderboard. The interactive choropleth heatmap provides a compelling visual overview, allowing users to hover for instant stats or click directly into any state to investigate regional quality clusters and systemic outliers.
+
+============================================================
+SLIDE 13
+Title: Medicaid - Executive Brief
+On-slide bullets:
+- Automated leadership briefing synthesizing nationwide Medicaid quality, state disparities, and corrective priorities
+- Structured Narrative Sections: National Quality Posture, High-Exposure State Clusters, Top Systemic Issues, and Strategic Guidance
+- 30 / 60 / 90 Day Strategic Roadmap: Actionable milestones for state technical assistance, audits, and policy enforcement
+- Scope-Aware Generation: Automatically adapts summary narrative based on active state filters and severity selections
+- Ready for immediate export into CMS leadership briefings, state oversight packets, and budget hearings
+Speaker notes:
+You would explain that the Medicaid Executive Brief tab automates executive reporting for program directors. It synthesizes complex 50-state data into a concise narrative briefing, highlighting top-risk states, major financial vulnerabilities, and systemic issue categories. It provides concrete 30, 60, and 90-day roadmaps, giving leadership an instant, decision-ready readout for state oversight meetings and legislative reviews.
+
+============================================================
+SLIDE 14
+Title: Medicaid - State Explorer & Comparative Benchmarking
+On-slide bullets:
+- 360-Degree State Dossiers: Displays state quality score, national rank, open issue inventory, and modeled money at risk
+- Full Issue Catalog: Detailed breakdown of state-specific findings by severity, technical category, and remediation status
+- Multi-State Comparative Benchmarking: Direct side-by-side comparison of up to 4 states simultaneously across all quality metrics
+- Radar & Bar Visualizations: Visual benchmarking highlighting comparative strengths, backlogs, and vulnerabilities
+- Facilitates peer-group analysis against regional neighbors or states with similar population sizes to share best practices
+Speaker notes:
+From the national view, you would drill down into the State Explorer and Compare States capabilities. You would explain, "When you need to know exactly what is happening in a specific state—like California, Texas, or Florida—the State Explorer is your dedicated investigative dossier." Furthermore, program managers can benchmark states side by side to see why one achieves a 95% quality score while a neighbor struggles with high backlogs. It helps CMS identify high-performing state practices that can be replicated nationwide.
+
+============================================================
+SLIDE 15
+Title: Medicaid - Analytics & Cross-State AI Insights
+On-slide bullets:
+- Deep-dive analytical suite investigating issue categories, resolution velocity, and modeled financial exposure
+- Issue Classification Analysis: In-depth metrics across Duplicate Claims, Missing Demographics, Provider NPI Errors, and Coding Anomalies
+- Resolution Velocity & Aging: Tracks how quickly states resolve open issues and identifies aging backlogs
+- Machine-Learning Pattern Discovery: Detects systemic anomalies occurring simultaneously across multiple state programs
+- Root-Cause Hypothesis Generation: Highlights underlying causes such as legacy MMIS migrations or billing rule drift
+Speaker notes:
+You would present Analytics and AI Insights as the deep-dive research hub for Medicaid. Here, data analysts can investigate the structural mechanics behind quality failures: which issue categories take the longest to resolve and where duplicate billing is accelerating. Simultaneously, DART's cross-state AI engine detects macro trends spanning multiple states—such as surges in specific billing codes—and generates evidence-based recommendations for proactive federal surveillance.
+
+============================================================
+SLIDE 16
+Title: Medicaid - Claims Analysis & Spending Optimization
+On-slide bullets:
+- Specialized claims surveillance and financial risk monitoring engine focused on duplicate billing and data anomalies
+- Top Recovery Opportunities: Identifies high-dollar claim discrepancy clusters with the highest recovery and savings potential
+- Optimization Priority Queue: Ranks state-level intervention opportunities by modeled ROI and feasibility of remediation
+- Phased Action Plans: Generates concrete 30-day, 60-day, and 90-day operational intervention steps for state cost reduction
+- Translates data quality improvements directly into measurable financial stewardship and program integrity ROI
+Speaker notes:
+Next, you would present Claims Analysis and Optimize Spending as the ROI engine of the Medicaid workspace. This tab connects data quality directly to financial stewardship. It isolates duplicate claims and billing errors, quantifying exact dollars at risk and ranking top recovery opportunities. It models how much money the program can save by fixing underlying data controls and provides structured 30, 60, and 90-day action plans tailored to each state's primary cost drivers.
+
+============================================================
+SLIDE 17
+Title: Medicaid - Methodology & Scoring Framework
+On-slide bullets:
+- Complete reference guide and mathematical documentation for the 50-state Medicaid quality and risk scoring model
+- Composite Scoring Formulas: Explains the exact mathematical weights assigned to quality, backlog, duplicates, and reporting timeliness
+- Financial Exposure Formulas: Details how cost multipliers and dollar-at-risk proxies are calculated for each issue category
+- Data Dictionary & Issue Taxonomy: Standardized definitions for all Medicaid issue categories, severity levels, and state metrics
+- Builds trust, defensibility, and transparency for federal and state auditors
+Speaker notes:
+You would present the Methodology tab to reinforce DART's commitment to explainable, defensible analytics. This page documents the exact statistical models, weighting schemes, and financial multiplier formulas used throughout the Medicaid workspace. When state directors or auditors ask how a state's quality score or money-at-risk was derived, everything is fully transparent and documented here.
+
+============================================================
+SLIDE 18
+Title: Build Your Own Workspace - Summary
+On-slide bullets:
+- Self-service dataset intelligence, reconciliation, and AI exploration lab for any user-provided CSV or Excel files
+- Multi-Source Ingestion: Upload local files, import via direct URLs, connect to AWS S3 buckets, or integrate with Microsoft SharePoint/OneDrive
+- Two-Dataset Reconciliation Engine: Row-level matching, candidate key inference, discrepancy classification, and value drift analysis
+- Complete Data Lifecycle: Ingest -> Inspect & Profile -> Reconcile -> Automated Email Alerts -> Grounded AI Analyst -> Export
+- Reusable DIY Library: Automatically persists uploaded datasets in a structured local library that survives restarts
+Speaker notes:
+You would introduce the Build Your Own (BYO / DIY) Workspace as DART's most versatile and extensible environment. You would say, "What if you have custom claims files, financial extracts, vendor datasets, or ad-hoc spreadsheets that need the same powerful reconciliation and AI intelligence as our preloaded Medicare and Medicaid workspaces?" The BYO workspace allows users to upload or import any two CSV or Excel datasets, run deep automated reconciliations, set up continuous monitoring alerts, query findings with an AI Analyst, and export audit packages.
+
+============================================================
+SLIDE 19
+Title: Build Your Own - DIY Home & Dataset Library
+On-slide bullets:
+- Guided onboarding launcher outlining the 4-step custom dataset lifecycle: Ingest, Inspect, Reconcile, and AI Alerting
+- Active Environment Snapshot: Displays total saved datasets in Data/DIY library, active dataset pair (Dataset A & Dataset B), and AI readiness
+- Persistent File Repository: Manages uploaded, imported, and S3-linked datasets with permanent local storage across restarts
+- Dynamic Dataset Pairing: Easily select any file as "Dataset A" (Source) and another as "Dataset B" (Target) for instant comparison
+- Live S3-Linked Dataset Awareness: Displays S3 bucket, key, and auto-sync status for datasets imported from Amazon S3
+Speaker notes:
+You would start the BYO walkthrough at DIY Home and the Dataset Library. This page clearly lays out the end-to-end user journey: first bring in datasets, inspect their structure, run reconciliation and comparison analysis, configure automated email alerts, and explore insights with the AI Analyst. The Dataset Library serves as the central repository where all user-uploaded and cloud-imported files reside permanently, allowing users to designate any two files as Dataset A (Source) and Dataset B (Target) to drive all downstream analysis.
+
+============================================================
+SLIDE 20
+Title: Build Your Own - Upload Data (Local, AWS S3 & Microsoft 365 Ingestion)
+On-slide bullets:
+- Multi-channel data ingestion center supporting local uploads, web imports, and enterprise cloud repositories
+- Local Multi-File Upload: Drag-and-drop or select multiple CSV and Excel (.xlsx, .xls) files with automatic parsing
+- Web URL Ingestion: Import remote datasets directly via secure HTTP/HTTPS web links
+- AWS S3 Bucket Ingestion: Connect directly to AWS S3, list accessible buckets, browse files, and import with optional auto-sync polling
+- Microsoft SharePoint & OneDrive: Authenticate via Microsoft Graph / Entra ID to discover and import files from corporate drives
+Speaker notes:
+You would emphasize this slide as one of the most powerful demonstrations of DART's enterprise readiness. The Upload Data tab allows users to bring in data through four distinct methods: uploading local files, importing from direct web URLs, browsing and pulling from AWS S3 buckets, or importing from corporate Microsoft SharePoint and OneDrive directories. For S3 files, DART can even establish background polling to automatically synchronize when remote S3 objects change.
+
+============================================================
+SLIDE 21
+Title: Build Your Own - Compare Lab & Schema Quality
+On-slide bullets:
+- High-level deterministic comparison tool evaluating structural alignment and statistical differences between two datasets
+- Structural Comparison: Compares row counts, column counts, memory footprint, missingness rates, and duplicate rates
+- Schema & Field Alignment: Identifies common shared columns, exclusive columns in A or B, and data type mismatches
+- Candidate Join Key Recommender: Analyzes column uniqueness across both datasets and automatically recommends optimal join keys
+- Column-by-Column Profiling: In-depth hygiene diagnostics highlighting trailing whitespace, mixed types, and null token anomalies
+Speaker notes:
+Before performing record-level matching, you would use Compare Lab and Schema & Quality to evaluate structural compatibility. Compare Lab tells users whether two datasets can be reconciled cleanly: do they have the same columns, are data types compatible, how do missingness rates compare, and what columns have sufficient uniqueness to serve as reliable join keys? It uncovers hidden hygiene issues—like trailing spaces or mismatched date formats—saving hours of trial-and-error before launching row-level reconciliation.
+
+============================================================
+SLIDE 22
+Title: Build Your Own - Reconciliation Studio
+On-slide bullets:
+- High-performance, record-level reconciliation engine comparing Dataset A and Dataset B across custom join keys
+- Smart Join Key Selection & Tuning: Select single or multi-column composite join keys with case-sensitivity, whitespace trimming, and numeric zero stripping
+- Numeric Tolerance Thresholds: Configure absolute or percentage-based tolerance limits for financial and numeric variance detection
+- 4-Way Population Segmentation: Categorizes records into Exact Matches, Discrepant Matches, Only in Dataset A, and Only in Dataset B
+- Grounded AI Reconciliation Diagnosis: One-click AI evaluation explaining why discrepancies occurred and suggesting fixes
+Speaker notes:
+You would present the Reconciliation Studio as the flagship analytical engine of the BYO workspace. It performs deterministic, row-level reconciliation between any two datasets. Users select the key fields to match on, configure numeric tolerance limits (e.g., allowing a $0.05 rounding difference), and run the match. DART instantly categorizes every record into exact matches, value discrepancies, and unmatched populations. An embedded AI button provides instant diagnostic summaries explaining the exact cause of any discrepancies.
+
+============================================================
+SLIDE 23
+Title: Build Your Own - Data Explorer & Export Center
+On-slide bullets:
+- Side-by-Side Read-Only Data Previewer: Scroll and inspect raw records from Dataset A and Dataset B simultaneously
+- Shared Column Highlighter: Instantly view which columns exist in both files versus file-specific attributes
+- Comprehensive Export Hub: Download original datasets, sanitized full CSV files, and structured reconciliation discrepancy tables
+- Discrepancy-Only Exports: Generate filtered CSV files containing only mismatched or unlinked records for targeted engineering review
+- Audit & Handoff Packages: Package comparison metadata, match statistics, and schema profiles for downstream documentation
+Speaker notes:
+You would describe Data Explorer and Export Center as the inspection and delivery terminals of the BYO workflow. When an analyst needs to inspect records from Dataset A and Dataset B side by side, the Data Explorer provides responsive data grids with quick search. Once reconciliation is complete, the Export Center allows users to download original files, export full reconciled datasets, or extract discrepancy-only CSV files for targeted engineering review and executive handoffs.
+
+============================================================
+SLIDE 24
+Title: DART Conversational AI Suite - DART Copilot, CMS Q&A & AI Analyst
+On-slide bullets:
+- Context-aware natural-language AI conversational assistants embedded across all three DART workspaces
+- DART Copilot (Medicare): Answers complex reconciliation, risk queue, and stream questions grounded in active workbook metrics
+- CMS Q&A (Medicaid): Natural-language assistant specialized in 50-state quality rankings, duplicate claims, and financial risk
+- AI Analyst (Build Your Own): Ingests dataset profiles, schema comparisons, candidate keys, and discrepancy samples for custom files
+- Grounded Dual-Engine Flexibility: Connects to Groq/OpenAI LLM models with robust deterministic fallback analysis and full chat persistence
+Speaker notes:
+You would present this slide as the unified showcase for DART's conversational intelligence. DART features specialized conversational bots across each environment: DART Copilot in Medicare for stream-level reconciliation questions, CMS Q&A in Medicaid for 50-state program queries, and the AI Analyst in BYO for ad-hoc dataset comparisons. All three bots are strictly grounded in active data context with zero hallucinations, support multi-session chat histories, and provide suggested prompt starters to democratize complex data analysis for every user.
+
+============================================================
+SLIDE 25
+Title: DART Intelligent Email Agent - Automated Monitoring & Dynamic AI Alerts
+On-slide bullets:
+- Continuous background data monitoring engine watching reconciliation workbooks and custom datasets for data drift
+- Automated Baseline Tracking: Captures baseline snapshots and triggers alerts when new, modified, or non-compliant records appear
+- Multi-Program Tuning: Monitors Medicare reconciliation streams, Medicaid state anomalies, and custom BYO datasets
+- Dynamic AI & Rule-Based Conditions: Configure triggers using operators (Equals, Greater Than, Null checks, RegEx, or AI thresholds)
+- Multi-Channel SMTP Delivery: Automatically formats rich HTML alerts, attaches CSV exception records, and logs complete audit history
+Speaker notes:
+This slide highlights DART's continuous data surveillance engine: the Email Agent. Whether monitoring flagship Medicare reconciliation workbooks, watching 50-state Medicaid claim spikes, or polling custom BYO files synced from S3, the Email Agent provides automated observability. Teams configure custom threshold conditions; when data updates or drifts beyond acceptable boundaries, DART automatically detects the delta, formats an executive HTML alert, attaches the offending exception rows as a CSV, and emails the responsible data owners.
+
+============================================================
+SLIDE 26
+Title: DART Platform Profile & Persona Tailoring
+On-slide bullets:
+- User profile and authentication management supporting personalized workspace sessions and role persistence
+- Identity & Role Context: Stores user display name, email, organization, password, and assigned persona settings
+- Role-Based Persona Tuning: Adapts landing workspaces, recommended actions, and analytical depth for 7 specialized roles
+- Supported Persona Lenses: Executive/Leadership, Data/Analytics, Program/Policy, Operations, Quality/Compliance, IT/Engineering, and Research
+- Session Continuity: Securely persists user preferences, default filters, and active workspaces in a local encrypted SQLite database
+Speaker notes:
+You would explain that DART is engineered to serve diverse organizational stakeholders through personalized personas. The Profile system maintains user credentials, contact information, and role definitions. Based on whether a user is an Executive, Data Analyst, Compliance Officer, or IT Engineer, DART automatically tailors the landing page, dashboard depth, and recommended action items. This ensures that every stakeholder receives an experience optimized for their exact operational focus.
+
+============================================================
+SLIDE 27
+Title: DART Enterprise Cloud Infrastructure - AWS S3 & Microsoft 365
+On-slide bullets:
+- Comprehensive enterprise configuration hub for secure cloud storage integrations and system defaults
+- AWS S3 Bucket Integration: Save IAM credentials, test live connectivity, list accessible S3 buckets, and configure automated syncs
+- Microsoft 365 / Graph Integration: Connect Entra ID, SharePoint sites, and OneDrive folders to discover and import remote datasets
+- Enterprise Security & Credential Isolation: Securely manages connection secrets and access tokens with encrypted local storage
+- Establishes enterprise cloud connectivity for automated data ingestion beyond local file systems
+Speaker notes:
+You would conclude the presentation on the Enterprise Cloud Infrastructure slide. This slide emphasizes DART's enterprise integration and security readiness. In addition to local file handling, DART connects directly to enterprise cloud infrastructure. Users can securely configure AWS S3 bucket credentials—listing buckets, browsing files, and setting up automated background syncs—as well as Microsoft SharePoint and OneDrive repositories via Microsoft Graph. It proves that DART is an enterprise-ready data assurance platform capable of integrating seamlessly into modern federal and commercial cloud environments.
