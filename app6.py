@@ -4,7 +4,7 @@ One-file FastAPI website edition
 
 Run:
   python -m pip install fastapi uvicorn pandas numpy plotly openpyxl python-multipart openai
-  python -m uvicorn app5:app --reload
+  python -m uvicorn app6:app --reload
 
 What is included in this update:
 - Metric Explanations page and inline metric help cards
@@ -28,6 +28,11 @@ What is included in this update:
 - Build Your Own Raw Data Editor with per-file CSV/XLSX writeback, backups, and immediate BYO alert checks
 - Build Your Own Email Alerts with per-dataset automations, baselines, SMTP delivery, and background file watching
 - Build Your Own navigation uses the same compact dropdown groups as the other workspaces; Raw Data Editor and Email Alerts are standard Workspace menu items with no special badge or gradient styling
+- Weekly Dataset History under Analyze: synthetic four-week claims demo and local SQLite
+  snapshots for saved datasets. A unique row identity is required; the baseline is
+  captured immediately and refreshes run every seven days at 00:00 UTC. The server
+  must be running; missed weeks are not fabricated. Set DART_BYO_HISTORY_DB to
+  override data/byo_weekly_history.db. SQLite storage is local to the deployment.
 - One Python file only: FastAPI backend + embedded HTML/CSS/JS frontend
 
 Prototype note:
@@ -65,6 +70,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
+import weekly_history
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, FileResponse
 
@@ -130,6 +136,7 @@ MAPPING_PATH = _resolve_local_file("CMS Version NCH to NCH STTM 12_13_2024.xlsx"
 WORKBOOK_BACKUP_DIR = Path(os.environ.get("DART_BACKUP_DIR", str(DATA_DIR / "demo_backups")))
 BYO_DATA_DIR = Path(os.environ.get("DART_BYO_DATA_DIR", str(DATA_DIR / "DIY")))
 BYO_MAX_FILE_BYTES = 25 * 1024 * 1024
+BYO_HISTORY_DB = Path(os.environ.get("DART_BYO_HISTORY_DB", str(DATA_DIR / "byo_weekly_history.db")))
 
 # Shared Groq configuration for both DART Copilot and Build Your Own AI Analyst.
 # Configure GROQ_API_KEY in the local environment or Render service settings.
@@ -2007,7 +2014,7 @@ PERSONA_WORKSPACE_PAGES: Dict[str, List[str]] = {
     ],
     "byo": [
         "byo-home", "byo-library", "byo-lab", "byo-compare", "byo-reconcile", "byo-quality",
-        "byo-preview", "byo-raw", "byo-email", "byo-ai", "byo-export", "profile", "settings",
+        "byo-preview", "byo-raw", "byo-email", "byo-history", "byo-ai", "byo-export", "profile", "settings",
     ],
 }
 
@@ -6431,6 +6438,21 @@ HTML = r'''
     @media(max-width:900px){.welcomeHero{grid-template-columns:1fr}.welcomeCompass{max-width:600px}.welcomeCards{grid-template-columns:1fr}.welcomeCard{padding:24px}.welcomeCard h3{margin-top:18px}}
     @media(max-width:600px){.welcome{margin-top:0}.welcomeHero{gap:26px;border-radius:20px}.welcomeHeading,.welcomeNote{align-items:flex-start;flex-direction:column}.welcomeHeading{margin-top:32px}.welcomeNote button{width:100%}}
 
+  .historyHero{background:linear-gradient(125deg,#142d46,#24566b 65%,#326d71);color:#fff;border:0}
+  .historyHero p{color:#d8e9ec;max-width:760px}.historyHero .workspaceBadge{background:#ffffff24;color:#fff}
+  .historyLayout{display:grid;grid-template-columns:270px minmax(0,1fr);gap:18px;align-items:start}
+  .historyTimeline{display:grid;gap:8px}.historyWeek{width:100%;text-align:left;padding:14px;border:1px solid var(--border,#ddd);border-radius:12px;background:transparent;color:inherit;cursor:pointer}
+  .historyWeek.active{border-color:#b78a24;background:rgba(224,181,70,.12);box-shadow:inset 3px 0 #c99a2e}
+  .historyWeek b,.historyWeek small{display:block}.historyWeek small{margin-top:5px;opacity:.72}
+  .historyMetrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:12px}
+  .historyMetric{padding:16px;border:1px solid var(--border,#ddd);border-radius:14px;background:rgba(170,170,170,.05)}
+  .historyMetric strong{font-size:27px;display:block;margin:6px 0}.historyMetric small{opacity:.7}
+  .historyRaw{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+  .historyRaw .tableWrap{max-height:430px;overflow:auto}.historyRaw td,.historyRaw th{white-space:nowrap}
+  .historyChanged{background:rgba(235,178,54,.22)}.historyAdded{background:rgba(70,170,126,.15)}.historyRemoved{background:rgba(223,98,98,.13)}
+  .historyLegend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;opacity:.8;margin:10px 0}
+  .historyNotice{padding:12px 14px;border-radius:10px;background:rgba(232,179,62,.13);margin:12px 0}
+  @media(max-width:850px){.historyLayout,.historyRaw{grid-template-columns:1fr}}
   </style>
 </head>
 <body data-workspace="medicare">
@@ -6553,7 +6575,7 @@ const navSets={
       ['More',[['copilot','DART Copilot'],['profile','Profile'],['settings','Settings']]]
     ],
   medicaid:[['Overview',[['medicaid-home','Dashboard'],['medicaid-heatmap','US Heatmap'],['medicaid-exec','Executive Brief']]],['States',[['medicaid-states','State Explorer'],['medicaid-compare','Compare States'],['medicaid-analytics','Analytics']]],['Intelligence',[['medicaid-ai','AI Insights'],['medicaid-chat','CMS Q&A']]],['Claims',[['medicaid-claims','Claims Analysis'],['medicaid-optimize','Optimize Spending'],['medicaid-methodology','Methodology']]],['More',[['profile','Profile'],['settings','Settings']]]],
-  byo:[['Workspace',[['byo-home','DIY Home'],['byo-library','Dataset Library'],['byo-lab','Upload Data'],['byo-raw','Raw Data Editor'],['byo-email','Email Alerts']]],['Analyze',[['byo-reconcile','Reconciliation Studio'],['byo-compare','Compare Lab'],['byo-quality','Schema & Quality'],['byo-preview','Data Explorer']]],['AI',[['byo-ai','AI Analyst']]],['Output',[['byo-export','Export Center']]],['More',[['profile','Profile'],['settings','Settings']]]],
+  byo:[['Workspace',[['byo-home','DIY Home'],['byo-library','Dataset Library'],['byo-lab','Upload Data'],['byo-raw','Raw Data Editor'],['byo-email','Email Alerts']]],['Analyze',[['byo-history','Weekly Dataset History'],['byo-reconcile','Reconciliation Studio'],['byo-compare','Compare Lab'],['byo-quality','Schema & Quality'],['byo-preview','Data Explorer']]],['AI',[['byo-ai','AI Analyst']]],['Output',[['byo-export','Export Center']]],['More',[['profile','Profile'],['settings','Settings']]]],
 };
 const workspaceLabels={medicare:'Medicare',medicaid:'Medicaid',byo:'Build Your Own'};
 const workspaceHomes={medicare:'home',medicaid:'medicaid-home',byo:'byo-home'};
@@ -8916,6 +8938,60 @@ function closeByoRecAiModal(){
   render();
 }
 
+function historyDate(value){return value?new Date(value).toLocaleDateString(undefined,{timeZone:'UTC',year:'numeric',month:'short',day:'numeric'}):'—';}
+function historyTable(rows,columns,side){
+  if(!rows.length)return '<div class="empty">No rows to display.</div>';
+  return `<div class="tableWrap"><table class="table"><thead><tr><th>Status</th>${columns.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>{
+    const data=r[side], cls=r.status==='Added'?'historyAdded':r.status==='Removed'?'historyRemoved':'';
+    return `<tr class="${cls}"><td>${esc(r.status)}</td>${columns.map(c=>`<td class="${r.fields.includes(c)?'historyChanged':''}">${data?esc(data[c]===null||data[c]===undefined?'—':data[c]):'—'}</td>`).join('')}</tr>`;
+  }).join('')}</tbody></table></div>`;
+}
+async function selectHistoryDataset(value){state.historyDataset=value;state.historySnapshot=null;state.historyOnlyChanges=false;state.historyOffset=0;await render();}
+async function selectHistoryWeek(id){state.historySnapshot=Number(id);state.historyOffset=0;await render();}
+async function historyPageOffset(offset){state.historyOffset=Math.max(0,offset);await render();}
+async function saveHistorySchedule(event){
+  event.preventDefault();
+  try{
+    await postJson('/api/byo/history/schedule',{dataset:state.historyDataset,key:document.getElementById('historyKey').value,start:document.getElementById('historyStart').value});
+    state.historySnapshot=null;toast('Weekly schedule saved and baseline captured');await render();
+  }catch(err){toast('Schedule could not be saved: '+String(err.message||err));}
+}
+async function pauseHistorySchedule(){
+  try{await postJson('/api/byo/history/pause',{dataset:state.historyDataset});toast('Schedule paused; history retained');await render();}
+  catch(err){toast('Could not pause schedule: '+String(err.message||err));}
+}
+function historyPage(info,data){
+  const dataset=state.historyDataset||'', demo=dataset==='__demo_claims__', schedule=data?.schedule;
+  const options=(info.datasets||[]).filter(d=>d.status==='Ready').map(d=>`<option value="${esc(d.name)}" ${dataset===d.name?'selected':''}>${esc(d.name)}</option>`).join('');
+  const picker=`<div class="panel"><div class="field"><label for="historyDataset">Choose a dataset to explore</label><select id="historyDataset" onchange="selectHistoryDataset(this.value)"><option value="">Select a dataset...</option><option value="__demo_claims__" ${demo?'selected':''}>Medicare Claims — sample history (4 weeks)</option>${options}</select></div></div>`;
+  let content='';
+  if(dataset&&data){
+    const columns=data.dataset_columns||[];
+    const today=new Date().toISOString().slice(0,10);
+    const schedulePanel=demo?`<div class="historyNotice"><b>Illustrative demo data.</b> These four synthetic snapshots are not live Medicare data and are not scheduled.</div>`:
+      `<div class="panel"><h3>Weekly refresh</h3><p class="muted">A baseline is captured when you save. The first refresh runs at 00:00 UTC on the selected date, then every 7 days, using the saved local dataset. The server must be running; missed weeks cannot be recreated.</p>
+      ${schedule?`<p><b>Next refresh:</b> ${esc(historyDate(schedule.next_run))} UTC · <b>Identity:</b> ${esc(schedule.key_column)}</p>${schedule.error?`<div class="historyNotice"><b>Last refresh failed:</b> ${esc(schedule.error)}. The worker will retry.</div>`:''}`:''}
+      <form onsubmit="saveHistorySchedule(event)"><div class="grid grid2"><div class="field"><label for="historyKey">Unique row / claim ID</label><select id="historyKey" required>${columns.map(c=>`<option value="${esc(c)}" ${c===(schedule?.key_column||data.identity_column||columns.find(x=>x.toLowerCase()==='claim id')||columns[0])?'selected':''}>${esc(c)}</option>`).join('')}</select></div><div class="field"><label for="historyStart">First refresh date (UTC)</label><input id="historyStart" type="date" min="${today}" value="${schedule?esc(schedule.next_run.slice(0,10)):today}" required></div></div><br><button class="btn" type="submit">${schedule?'Update schedule':'Capture baseline & schedule'}</button> ${schedule?'<button class="btn ghost" type="button" onclick="pauseHistorySchedule()">Pause schedule</button>':''}</form><p class="muted">The identity must be unique and non-empty in every snapshot; it cannot change after history is created. Pausing keeps existing history.</p></div>`;
+    const timeline=(data.timeline||[]).slice().reverse().map((w,i)=>`<button class="historyWeek ${w.id===data.selected?'active':''}" onclick="selectHistoryWeek(${Number(w.id)})"><b>${i===0?'Latest · ':''}${esc(historyDate(w.captured_at))}</b><small>${w.summary?`${intFmt(w.summary.changed_values)} values changed · +${intFmt(w.summary.added)} / −${intFmt(w.summary.removed)} rows`:'Baseline snapshot'}</small></button>`).join('');
+    let detail='<div class="panel workspaceEmpty"><h3>No snapshots yet</h3><p class="muted">Save a schedule to capture the first baseline.</p></div>';
+    if(data.selected&&!data.comparison){
+      const base=(data.baseline_rows||[]).map(r=>({status:'Baseline',fields:[],after:r}));
+      detail=`<div class="panel"><h3>Baseline · ${esc(historyDate(data.after_date))}</h3><p class="muted">The first snapshot has no earlier week to compare. Showing up to 100 rows.</p>${historyTable(base,data.columns,'after')}</div>`;
+    }else if(data.comparison){
+      const c=data.comparison, rows=c.details;
+      const metrics=[['Changed columns',c.changed_columns,'Fields with changed values'],['Changed values',c.changed_values,'On matched rows'],['New rows / claims',c.added,'New unique identities'],['Removed rows',c.removed,'No longer present'],['New nulls',c.new_nulls,'Including new rows'],['New invalid',c.new_invalid,'Claims checks only']];
+      detail=`<div class="panel"><div class="medSectionHead"><div><h3>Week-over-week summary</h3><p class="muted">${esc(historyDate(data.before_date))} → ${esc(historyDate(data.after_date))} · ${intFmt(c.row_count)} current rows · ${intFmt(c.changed_rows)} matched rows changed</p></div></div><div class="historyMetrics">${metrics.map(m=>`<div class="historyMetric"><small>${esc(m[0])}</small><strong>${intFmt(m[1])}</strong><small>${esc(m[2])}</small></div>`).join('')}</div>
+      <p class="muted">Schema: ${c.added_columns.length?'Added '+esc(c.added_columns.join(', ')):'No added columns'}; ${c.removed_columns.length?'removed '+esc(c.removed_columns.join(', ')):'no removed columns'}. Invalid checks flag negative/non-numeric claim payments, malformed claim dates, and reversed service dates; they are not a complete claims validation.</p></div><br>
+      <div class="panel"><div class="medSectionHead"><div><h3>Raw data · before & after</h3><p class="muted">Rows align by identity. Highlighted cells changed; green and red rows were added or removed.</p></div><label><input type="checkbox" ${state.historyOnlyChanges?'checked':''} onchange="state.historyOnlyChanges=this.checked;state.historyOffset=0;render()"> Changes only</label></div>
+      <div class="historyLegend"><span>🟨 Changed value</span><span>🟩 New row</span><span>🟥 Removed row</span><span>— Null or not present</span></div>
+      <div class="historyLegend"><button class="btn ghost small" ${c.offset===0?'disabled':''} onclick="historyPageOffset(${Math.max(0,c.offset-50)})">Previous</button><span>Showing ${c.details_total?c.offset+1:0}–${Math.min(c.offset+50,c.details_total)} of ${intFmt(c.details_total)} identities</span><button class="btn ghost small" ${c.offset+50>=c.details_total?'disabled':''} onclick="historyPageOffset(${c.offset+50})">Next</button></div>
+      <div class="historyRaw"><div><h4>Before · ${esc(historyDate(data.before_date))}</h4>${historyTable(rows,data.columns,'before')}</div><div><h4>After · ${esc(historyDate(data.after_date))}</h4>${historyTable(rows,data.columns,'after')}</div></div></div>`;
+    }
+    content=`<br>${schedulePanel}<br><div class="historyLayout"><div class="panel"><h3>Snapshot timeline</h3><p class="muted">Select a week to explore its changes.</p><div class="historyTimeline">${timeline||'<div class="empty">No snapshots yet.</div>'}</div></div><div>${detail}</div></div>`;
+  }
+  return `<div class="hero historyHero"><span class="workspaceBadge">Build Your Own · Analyze</span><h1>Weekly Dataset History</h1><p>Follow your data over time. Explore new claims, quality changes, and the exact values behind each weekly refresh.</p></div>${picker}${content}`;
+}
+
 async function renderByo(meta,info){
   ensureByoSelections(info);
   state.byoInfo=info;
@@ -8949,9 +9025,13 @@ async function renderByo(meta,info){
       toast('Reconciliation failed: '+String(err.message||err).slice(0,160));
     }
   }
-  let rawInfo=null,emailInfo=null;
+  let rawInfo=null,emailInfo=null,historyInfo=null;
   if(state.page==='byo-raw'&&state.byoEditFile)rawInfo=await api(`/api/byo/raw-data?filename=${encodeURIComponent(state.byoEditFile)}&search=${encodeURIComponent(state.byoRawSearch)}&offset=${state.byoRawOffset}&limit=${state.byoRawLimit}`);
   if(state.page==='byo-email')emailInfo=await api(`/api/byo/email-agent?filename=${encodeURIComponent(state.byoEmailFile||'')}`);
+  if(state.page==='byo-history'&&state.historyDataset){
+    try{historyInfo=await api(`/api/byo/history?dataset=${encodeURIComponent(state.historyDataset)}&offset=${state.historyOffset||0}&changed_only=${!!state.historyOnlyChanges}${state.historySnapshot?`&snapshot=${state.historySnapshot}`:''}`);}
+    catch(err){toast('Could not load history: '+String(err.message||err));}
+  }
   let html='';
   const noFiles=`<div class="panel workspaceEmpty"><h3>No saved DIY datasets yet</h3><p class="muted">Upload CSV/XLSX files. DART will save them under <span class="byoStoragePath">${esc(info.storage_path||'Data/DIY')}</span> and keep them available after restart.</p><button class="btn" onclick="showPage('byo-lab')">Upload datasets</button></div>`;
   const needPair=(info.dataset_count||0)<1?noFiles:`<div class="byoEmptyPair"><h3>${(info.dataset_count||0)===1?'One more dataset needed':'Select two datasets'}</h3><p class="muted">${(info.dataset_count||0)===1?'Upload another CSV/XLSX file, then choose a pair.':'Choose two different saved datasets above to run this analysis.'}</p><button class="btn secondary" onclick="showPage('byo-library')">Open Dataset Library</button></div>`;
@@ -8963,6 +9043,8 @@ async function renderByo(meta,info){
     html=`<div class="hero"><span class="workspaceBadge">Persistent library</span><h1>Dataset Library</h1><p>Choose, download, export, or delete the files saved in your repo. Every ready file is also available to the BYO Raw Data Editor and Email Alerts pages.</p><div class="heroActions"><button class="btn" onclick="showPage('byo-lab')">Upload more files</button><button class="btn secondary" onclick="showPage('byo-raw')">Edit a file</button><button class="btn ghost" onclick="showPage('byo-email')">Configure alerts</button></div></div><div class="byoLibraryGrid"><div class="panel"><h3>${intFmt(info.dataset_count||0)} saved datasets</h3>${byoLibraryCards(info)}</div><div>${byoPairPicker(info)}</div></div>`;
   }else if(state.page==='byo-reconcile'){
     html=`<div class="hero"><span class="workspaceBadge">Universal Reconciliation & Value Diff</span><h1>Reconciliation Studio</h1><p>Perform interactive record-level matching, value discrepancy diffing, live tolerance tuning, and systematic drift discovery across any two datasets.</p><div class="heroActions"><button class="btn" type="button" onclick="askByoRecAiDiagnosis()">🤖 AI Diagnosis</button><a class="btn secondary" href="/download/byo-reconcile-csv?left=${encodeURIComponent(state.byoLeft)}&right=${encodeURIComponent(state.byoRight)}&left_keys=${encodeURIComponent((state.byoRecLeftKeys||[]).join(','))}&right_keys=${encodeURIComponent((state.byoRecRightKeys||[]).join(','))}&partition=all&numeric_tolerance=${encodeURIComponent(state.byoRecTol||0)}&tolerance_mode=${encodeURIComponent(state.byoRecTolMode||'absolute')}">Export Reconciled CSV</a><a class="btn ghost" href="/download/byo-reconcile-csv?left=${encodeURIComponent(state.byoLeft)}&right=${encodeURIComponent(state.byoRight)}&left_keys=${encodeURIComponent((state.byoRecLeftKeys||[]).join(','))}&right_keys=${encodeURIComponent((state.byoRecRightKeys||[]).join(','))}&partition=discrepancy&numeric_tolerance=${encodeURIComponent(state.byoRecTol||0)}&tolerance_mode=${encodeURIComponent(state.byoRecTolMode||'absolute')}">Export Discrepancies Only</a></div></div>${byoPairPicker(info)}${reconcileData?`<br>${byoReconcilePage(info,reconcileData)}`:`<br>${needPair}`}`;
+  }else if(state.page==='byo-history'){
+    html=historyPage(info,historyInfo);
   }else if(state.page==='byo-compare'){
     html=`<div class="hero"><span class="workspaceBadge">Dataset A ↔ Dataset B</span><h1>Compare Lab</h1><p>Run a structured comparison across two saved datasets: shape, schema, completeness, duplicate burden, shared fields, type mismatches, numeric distributions, and likely join keys.</p></div>${byoPairPicker(info)}${comparison?`<br>${compareOverview(comparison)}<br><div class="panel"><h3>Detailed field comparison</h3>${genericTable(comparison.column_comparison,'DIY detailed field comparison')}</div><br>${compareDeepDive(comparison)}`:`<br>${needPair}`}`;
   }else if(state.page==='byo-quality'){
@@ -9983,6 +10065,52 @@ def get_byo_workspace(request: Request) -> Dict[str, Any]:
     return byo_payload(username)
 
 
+@app.get("/api/byo/history")
+def get_byo_history(request: Request, dataset: str, snapshot: Optional[int] = None,
+                    offset: int = 0, changed_only: bool = False) -> Any:
+    username = get_session_user(request)
+    if not username:
+        return JSONResponse({"error": "Sign in to view dataset history."}, status_code=401)
+    try:
+        weekly_history.initialize(BYO_HISTORY_DB)
+        result = weekly_history.history(BYO_HISTORY_DB, username, dataset, snapshot, offset, changed_only)
+        if dataset != weekly_history.DEMO:
+            result["dataset_columns"] = [str(c) for c in _read_byo_dataset(_byo_path(dataset)).columns]
+        return result
+    except (ValueError, FileNotFoundError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/byo/history/schedule")
+async def schedule_byo_history(request: Request) -> Any:
+    username = get_session_user(request)
+    if not username:
+        return JSONResponse({"error": "Sign in to schedule dataset history."}, status_code=401)
+    payload = await request.json()
+    dataset = str(payload.get("dataset", ""))
+    try:
+        if dataset == weekly_history.DEMO or _safe_byo_filename(dataset) != dataset:
+            raise ValueError("Choose a saved dataset, not the sample.")
+        frame = _read_byo_dataset(_byo_path(dataset))
+        weekly_history.initialize(BYO_HISTORY_DB)
+        weekly_history.save_schedule(BYO_HISTORY_DB, username, dataset,
+                                     str(payload.get("key", "")), payload.get("start"), frame)
+        return {"status": "ok"}
+    except (ValueError, FileNotFoundError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/byo/history/pause")
+async def pause_byo_history(request: Request) -> Any:
+    username = get_session_user(request)
+    if not username:
+        return JSONResponse({"error": "Sign in to pause a schedule."}, status_code=401)
+    payload = await request.json()
+    with weekly_history.connect(BYO_HISTORY_DB) as conn:
+        conn.execute("DELETE FROM schedules WHERE owner=? AND dataset=?", (username, str(payload.get("dataset", ""))))
+    return {"status": "ok"}
+
+
 @app.get("/api/byo/dataset/{filename}")
 def get_byo_dataset(filename: str) -> Any:
     try:
@@ -10888,6 +11016,8 @@ def _start_background_email_agent() -> None:
         pass
     start_email_agent_scheduler()
     start_byo_email_agent_scheduler()
+    weekly_history.initialize(BYO_HISTORY_DB)
+    weekly_history.start_worker(BYO_HISTORY_DB, _read_byo_dataset)
 
 
 @app.get("/api/raw-data")
