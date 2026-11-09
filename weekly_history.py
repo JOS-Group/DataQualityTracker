@@ -43,6 +43,17 @@ def initialize(path):
             );
             CREATE INDEX IF NOT EXISTS snapshot_history
                 ON snapshots(owner, dataset, captured_at, id);
+            CREATE TABLE IF NOT EXISTS recipients (
+                owner TEXT NOT NULL, dataset TEXT NOT NULL, email TEXT NOT NULL COLLATE NOCASE,
+                PRIMARY KEY(owner, dataset, email)
+            );
+            CREATE TABLE IF NOT EXISTS email_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, dataset TEXT NOT NULL,
+                snapshot_id INTEGER NOT NULL, email TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0, next_attempt TEXT NOT NULL,
+                last_error TEXT NOT NULL DEFAULT '', sent_at TEXT,
+                UNIQUE(snapshot_id, email)
+            );
         """)
         # Seed once, without ever touching the user's dataset library.
         conn.execute("BEGIN IMMEDIATE")
@@ -148,7 +159,10 @@ def compare(before, after, key):
     old_columns, new_columns = set(before["columns"]), set(after["columns"])
     added, removed = new.keys() - old.keys(), old.keys() - new.keys()
     changed_fields, changed_values, new_nulls, new_invalid = set(), 0, 0, 0
+    field_counts = {}
     details = []
+    drilldowns = {name: [] for name in ("changed_columns", "changed_values", "added", "removed",
+                  "new_nulls", "new_invalid", "changed_rows", "resolved_nulls", "schema_changes")}
     for identity in sorted(old.keys() | new.keys()):
         a, b = old.get(identity), new.get(identity)
         fields = []
@@ -158,22 +172,43 @@ def compare(before, after, key):
                     fields.append(col)
                     changed_fields.add(col)
                     changed_values += 1
-            new_nulls += sum(b.get(c) is None and (c not in old_columns or a.get(c) is not None)
-                             for c in after["columns"])
-            new_invalid += len(invalid_cells(b) - invalid_cells(a))
-        elif b is not None:
-            new_nulls += sum(b.get(c) is None for c in after["columns"])
-            new_invalid += len(invalid_cells(b))
+                    field_counts[col] = field_counts.get(col, 0) + 1
+                    drilldowns["changed_values"].append({"identity": identity, "column": col, "before": a.get(col), "after": b.get(col)})
+                if col in new_columns and a.get(col) is None and b.get(col) is not None:
+                    drilldowns["resolved_nulls"].append({"identity": identity, "column": col, "before": None, "after": b.get(col)})
+        if b is not None:
+            nulls = [c for c in after["columns"] if b.get(c) is None and
+                     (a is None or c not in old_columns or a.get(c) is not None)]
+            invalid = invalid_cells(b) - (invalid_cells(a) if a is not None else set())
+            new_nulls += len(nulls)
+            new_invalid += len(invalid)
+            for col in nulls:
+                drilldowns["new_nulls"].append({"identity": identity, "column": col, "before": a.get(col) if a else None, "after": None})
+            for col in sorted(invalid):
+                drilldowns["new_invalid"].append({"identity": identity, "column": col, "before": a.get(col) if a else None, "after": b.get(col)})
         details.append({"id": identity, "status": "Added" if a is None else "Removed" if b is None else "Changed" if fields else "Unchanged",
                         "fields": fields, "before": a, "after": b})
+        if a is None:
+            drilldowns["added"].append({"identity": identity, "column": "Entire row", "before": None, "after": b})
+        elif b is None:
+            drilldowns["removed"].append({"identity": identity, "column": "Entire row", "before": a, "after": None})
+        elif fields:
+            drilldowns["changed_rows"].append({"identity": identity, "column": ", ".join(fields), "before": a, "after": b})
+    for column in sorted(changed_fields):
+        drilldowns["changed_columns"].append({"identity": f"{field_counts[column]} changed values", "column": column, "before": None, "after": None})
+    for col in sorted(new_columns - old_columns):
+        drilldowns["schema_changes"].append({"identity": "Added column", "column": col, "before": "Not present", "after": "Present"})
+    for col in sorted(old_columns - new_columns):
+        drilldowns["schema_changes"].append({"identity": "Removed column", "column": col, "before": "Present", "after": "Not present"})
     return {"added": len(added), "removed": len(removed), "changed_rows": sum(d["status"] == "Changed" for d in details),
             "changed_values": changed_values, "changed_columns": len(changed_fields),
             "added_columns": sorted(new_columns - old_columns), "removed_columns": sorted(old_columns - new_columns),
             "new_nulls": new_nulls, "new_invalid": new_invalid,
-            "row_count": len(new), "details": details}
+            "resolved_nulls": len(drilldowns["resolved_nulls"]), "schema_changes": len(drilldowns["schema_changes"]),
+            "row_count": len(new), "details": details, "drilldowns": drilldowns}
 
 
-def history(path, owner, dataset, selected=None, offset=0, changed_only=False):
+def history(path, owner, dataset, selected=None, offset=0, changed_only=False, metric="", metric_offset=0):
     actual_owner = DEMO if dataset == DEMO else owner
     with connect(path) as conn:
         schedule = conn.execute("SELECT key_column,next_run,error FROM schedules WHERE owner=? AND dataset=?",
@@ -186,7 +221,7 @@ def history(path, owner, dataset, selected=None, offset=0, changed_only=False):
     for i, snap in enumerate(snapshots):
         summary = compare(snapshots[i - 1]["data"], snap["data"], snap["key"]) if i else None
         if summary:
-            summary = {k: v for k, v in summary.items() if k != "details"}
+            summary = {k: v for k, v in summary.items() if k not in ("details", "drilldowns")}
         timeline.append({"id": snap["id"], "captured_at": snap["captured_at"], "summary": summary})
     if selected is not None and not any(s["id"] == selected for s in snapshots):
         raise ValueError("Snapshot not found for this dataset.")
@@ -194,7 +229,16 @@ def history(path, owner, dataset, selected=None, offset=0, changed_only=False):
     current = snapshots[index] if index >= 0 else None
     previous = snapshots[index - 1] if index > 0 else None
     comparison = compare(previous["data"], current["data"], current["key"]) if previous else None
+    metric_data = None
     if comparison:
+        drilldowns = comparison.pop("drilldowns")
+        if metric:
+            if metric not in drilldowns:
+                raise ValueError("Unknown summary metric.")
+            entries = drilldowns[metric]
+            metric_offset = max(0, metric_offset)
+            metric_data = {"metric": metric, "total": len(entries), "offset": metric_offset,
+                           "rows": entries[metric_offset:metric_offset + 50]}
         details = comparison["details"]
         if changed_only:
             details = [row for row in details if row["status"] != "Unchanged"]
@@ -207,12 +251,79 @@ def history(path, owner, dataset, selected=None, offset=0, changed_only=False):
             "before_date": previous["captured_at"] if previous else None,
             "after_date": current["captured_at"] if current else None,
             "comparison": comparison,
+            "metric_data": metric_data,
             "columns": list(dict.fromkeys((previous["data"]["columns"] if previous else []) +
                                            (current["data"]["columns"] if current else []))),
             "baseline_rows": current["data"]["rows"][:100] if current and not previous else []}
 
 
-def run_due(path, loader, now=None):
+def recipients(path, owner, dataset):
+    with connect(path) as conn:
+        addresses = [row["email"] for row in conn.execute(
+            "SELECT email FROM recipients WHERE owner=? AND dataset=? ORDER BY email", (owner, dataset))]
+        latest = conn.execute("""SELECT status, last_error, sent_at, email FROM email_outbox
+                                WHERE owner=? AND dataset=? ORDER BY id DESC LIMIT 1""", (owner, dataset)).fetchone()
+        pending = conn.execute("""SELECT COUNT(*) FROM email_outbox WHERE owner=? AND dataset=?
+                                  AND status IN ('pending','sending')""", (owner, dataset)).fetchone()[0]
+        failed = conn.execute("""SELECT email, last_error FROM email_outbox WHERE owner=? AND dataset=?
+                                 AND status IN ('pending','sending') AND last_error!=''
+                                 ORDER BY id DESC LIMIT 1""", (owner, dataset)).fetchone()
+    return {"addresses": addresses, "latest": dict(latest) if latest else None,
+            "pending": pending, "failure": dict(failed) if failed else None}
+
+
+def add_recipient(path, owner, dataset, email):
+    with connect(path) as conn:
+        conn.execute("INSERT OR IGNORE INTO recipients(owner,dataset,email) VALUES(?,?,?)",
+                     (owner, dataset, email))
+
+
+def remove_recipient(path, owner, dataset, email):
+    with connect(path) as conn:
+        conn.execute("DELETE FROM recipients WHERE owner=? AND dataset=? AND email=?",
+                     (owner, dataset, email))
+        conn.execute("DELETE FROM email_outbox WHERE owner=? AND dataset=? AND email=? AND status IN ('pending','sending')",
+                     (owner, dataset, email))
+
+
+def deliver_pending(path, sender, now):
+    if sender is None:
+        return
+    with connect(path) as conn:
+        ids = [row["id"] for row in conn.execute(
+            "SELECT id FROM email_outbox WHERE status IN ('pending','sending') AND next_attempt<=? ORDER BY id",
+            (now.isoformat(),))]
+    for item_id in ids:
+        with connect(path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            item = conn.execute("SELECT * FROM email_outbox WHERE id=? AND status IN ('pending','sending') AND next_attempt<=?",
+                                (item_id, now.isoformat())).fetchone()
+            if not item:
+                continue
+            conn.execute("UPDATE email_outbox SET status='sending',next_attempt=?,attempts=attempts+1 WHERE id=?",
+                         ((now + timedelta(minutes=10)).isoformat(), item_id))
+        try:
+            with connect(path) as conn:
+                current = conn.execute("SELECT * FROM snapshots WHERE id=? AND owner=? AND dataset=?",
+                                       (item["snapshot_id"], item["owner"], item["dataset"])).fetchone()
+                previous = conn.execute("""SELECT * FROM snapshots WHERE owner=? AND dataset=? AND id<?
+                                           ORDER BY id DESC LIMIT 1""",
+                                        (item["owner"], item["dataset"], item["snapshot_id"])).fetchone()
+            if not current or not previous:
+                raise ValueError("The snapshots needed for this email no longer exist.")
+            summary = compare(json.loads(previous["data"]), json.loads(current["data"]), current["key_column"])
+            sender(item["email"], item["dataset"], previous["captured_at"], current["captured_at"], summary)
+            with connect(path) as conn:
+                conn.execute("UPDATE email_outbox SET status='sent',sent_at=?,last_error='' WHERE id=?",
+                             (datetime.now(timezone.utc).isoformat(), item_id))
+        except Exception as exc:
+            traceback.print_exc()
+            with connect(path) as conn:
+                conn.execute("UPDATE email_outbox SET status='pending',next_attempt=?,last_error=? WHERE id=?",
+                             ((now + timedelta(minutes=15)).isoformat(), str(exc), item_id))
+
+
+def run_due(path, loader, now=None, sender=None):
     now = now or datetime.now(timezone.utc)
     with connect(path) as conn:
         due = conn.execute("SELECT * FROM schedules WHERE next_run<=?", (now.isoformat(),)).fetchall()
@@ -226,8 +337,11 @@ def run_due(path, loader, now=None):
                 if not current or current["next_run"] > now.isoformat():
                     continue
                 data = frame_data(loader(current["dataset"]), current["key_column"])
-                conn.execute("INSERT INTO snapshots(owner,dataset,captured_at,key_column,data) VALUES(?,?,?,?,?)",
-                             (current["owner"], current["dataset"], now.isoformat(), current["key_column"], json.dumps(data)))
+                snapshot_id = conn.execute("INSERT INTO snapshots(owner,dataset,captured_at,key_column,data) VALUES(?,?,?,?,?)",
+                             (current["owner"], current["dataset"], now.isoformat(), current["key_column"], json.dumps(data))).lastrowid
+                conn.execute("""INSERT INTO email_outbox(owner,dataset,snapshot_id,email,next_attempt)
+                                SELECT owner,dataset,?,email,? FROM recipients WHERE owner=? AND dataset=?""",
+                             (snapshot_id, now.isoformat(), current["owner"], current["dataset"]))
                 next_run = datetime.fromisoformat(current["next_run"])
                 while next_run <= now:
                     next_run += timedelta(days=7)
@@ -238,9 +352,10 @@ def run_due(path, loader, now=None):
             with connect(path) as conn:
                 conn.execute("UPDATE schedules SET error=? WHERE owner=? AND dataset=?",
                              (str(exc), item["owner"], item["dataset"]))
+    deliver_pending(path, sender, now)
 
 
-def start_worker(path, loader):
+def start_worker(path, loader, sender=None):
     global _worker
     with _worker_lock:
         if _worker and _worker.is_alive():
@@ -248,7 +363,7 @@ def start_worker(path, loader):
         def loop():
             while True:
                 try:
-                    run_due(path, loader)
+                    run_due(path, loader, sender=sender)
                 except Exception:
                     traceback.print_exc()
                 threading.Event().wait(60)

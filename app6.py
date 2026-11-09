@@ -33,6 +33,9 @@ What is included in this update:
   captured immediately and refreshes run every seven days at 00:00 UTC. The server
   must be running; missed weeks are not fabricated. Set DART_BYO_HISTORY_DB to
   override data/byo_weekly_history.db. SQLite storage is local to the deployment.
+  Per-dataset recipients receive a summary and complete changed-row CSV using the
+  existing DART SMTP configuration. Failed reports are queued and retried; a crash
+  after SMTP acceptance can result in a duplicate email.
 - One Python file only: FastAPI backend + embedded HTML/CSS/JS frontend
 
 Prototype note:
@@ -3411,6 +3414,55 @@ def send_structured_email(template: Dict[str, Any], matches: pd.DataFrame, is_te
     return subject
 
 
+def send_weekly_history_email(recipient: str, dataset: str, before_date: str,
+                              after_date: str, summary: Dict[str, Any]) -> None:
+    recipients, invalid = validate_recipients(recipient)
+    if len(recipients) != 1 or invalid:
+        raise ValueError("A valid recipient email is required.")
+    cfg = smtp_settings()
+    issues = smtp_configuration_issues()
+    if issues:
+        raise RuntimeError("DART email is not configured: " + "; ".join(issues))
+    lines = [
+        f"Weekly dataset report: {dataset}",
+        f"Compared: {before_date} to {after_date} (UTC)",
+        f"Current rows: {summary['row_count']}",
+        f"Changed rows: {summary['changed_rows']}",
+        f"Changed columns: {summary['changed_columns']}",
+        f"Changed values: {summary['changed_values']}",
+        f"New rows: {summary['added']}; removed rows: {summary['removed']}",
+        f"New null cells: {summary['new_nulls']}; resolved null cells: {summary['resolved_nulls']}",
+        f"New invalid cells: {summary['new_invalid']}",
+        f"Added columns: {', '.join(summary['added_columns']) or 'none'}",
+        f"Removed columns: {', '.join(summary['removed_columns']) or 'none'}",
+        "",
+        "The attached CSV contains all added, removed, and changed rows, including before and after values.",
+        "Invalid checks cover negative or non-numeric claim payments, malformed claim dates, and reversed service dates only.",
+    ]
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    def csv_safe(value: Any) -> str:
+        text = str(value)
+        return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) or text.startswith(("\t", "\r")) else text
+    writer.writerow(["Identity", "Status", "Changed columns", "Before (JSON)", "After (JSON)"])
+    for row in summary["details"]:
+        if row["status"] != "Unchanged":
+            writer.writerow([csv_safe(row["id"]), row["status"], csv_safe(", ".join(row["fields"])),
+                             json.dumps(row["before"], ensure_ascii=False),
+                             json.dumps(row["after"], ensure_ascii=False)])
+    message = EmailMessage()
+    message["Subject"] = f"DART weekly dataset changes: {dataset}"
+    message["From"] = f"{cfg['from_name']} <{cfg['from_email']}>"
+    message["To"] = recipients[0]
+    message.set_content("\n".join(lines))
+    message.add_attachment(output.getvalue().encode("utf-8-sig"), maintype="text", subtype="csv",
+                           filename="dart_weekly_changes.csv")
+    with _authenticated_smtp_connection(cfg) as server:
+        refused = server.send_message(message)
+        if refused:
+            raise RuntimeError(f"SMTP refused delivery to {recipient}: {refused}")
+
+
 def establish_email_baseline(df: pd.DataFrame, template: Dict[str, Any]) -> Dict[str, Any]:
     path = write_email_snapshot(df, template)
     return {"status": "Baseline established", "snapshot": str(path), "rows": len(df)}
@@ -6438,15 +6490,26 @@ HTML = r'''
     @media(max-width:900px){.welcomeHero{grid-template-columns:1fr}.welcomeCompass{max-width:600px}.welcomeCards{grid-template-columns:1fr}.welcomeCard{padding:24px}.welcomeCard h3{margin-top:18px}}
     @media(max-width:600px){.welcome{margin-top:0}.welcomeHero{gap:26px;border-radius:20px}.welcomeHeading,.welcomeNote{align-items:flex-start;flex-direction:column}.welcomeHeading{margin-top:32px}.welcomeNote button{width:100%}}
 
-  .historyHero{background:linear-gradient(125deg,#142d46,#24566b 65%,#326d71);color:#fff;border:0}
-  .historyHero p{color:#d8e9ec;max-width:760px}.historyHero .workspaceBadge{background:#ffffff24;color:#fff}
+  .hero.historyHero,:root[data-theme="dark"] .hero.historyHero{background:linear-gradient(125deg,#142d46,#24566b 65%,#326d71)!important;border-color:#326d71!important;color:#fff}
+  .hero.historyHero h1,:root[data-theme="dark"] .hero.historyHero h1{color:#fff!important}
+  .hero.historyHero p,:root[data-theme="dark"] .hero.historyHero p{color:#e4f2f4!important;max-width:760px}
+  .hero.historyHero .workspaceBadge,:root[data-theme="dark"] .hero.historyHero .workspaceBadge{background:#f9e6ac!important;border-color:#f9e6ac!important;color:#332700!important}
+  .historyPicker{display:flex;align-items:center;gap:20px;flex-wrap:wrap;border-left:4px solid #c99a2e}
+  .historyPickerIntro{flex:1;min-width:220px}.historyPickerIntro h3{margin:0 0 5px}.historyPickerIntro p{margin:0}
+  .historyPicker .field{flex:1;min-width:250px;max-width:520px}
+  .historyPicker select{width:100%;min-height:52px;padding:12px 40px 12px 16px;border:1px solid #bba663;border-radius:12px;font-weight:700;font-size:.95rem;background-color:var(--panel);color:var(--text);cursor:pointer}
+  .historyPicker select:focus-visible,.historyMetric:focus-visible{outline:3px solid #c99a2e;outline-offset:3px}
   .historyLayout{display:grid;grid-template-columns:270px minmax(0,1fr);gap:18px;align-items:start}
   .historyTimeline{display:grid;gap:8px}.historyWeek{width:100%;text-align:left;padding:14px;border:1px solid var(--border,#ddd);border-radius:12px;background:transparent;color:inherit;cursor:pointer}
   .historyWeek.active{border-color:#b78a24;background:rgba(224,181,70,.12);box-shadow:inset 3px 0 #c99a2e}
   .historyWeek b,.historyWeek small{display:block}.historyWeek small{margin-top:5px;opacity:.72}
   .historyMetrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:12px}
-  .historyMetric{padding:16px;border:1px solid var(--border,#ddd);border-radius:14px;background:rgba(170,170,170,.05)}
+  .historyMetric{padding:16px;border:1px solid var(--line);border-radius:14px;background:rgba(170,170,170,.05);text-align:left;color:var(--text);cursor:pointer;font:inherit}
+  .historyMetric:hover,.historyMetric.active{border-color:#b78a24;background:rgba(224,181,70,.15)}
   .historyMetric strong{font-size:27px;display:block;margin:6px 0}.historyMetric small{opacity:.7}
+  .historyMetricHint{display:block;color:#9b741b;font-size:.72rem;font-weight:700;margin-top:8px}
+  .historyEmailList{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.historyEmailChip{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:999px;padding:5px 9px 5px 12px;font-size:.85rem}
+  .historyEmailChip button{border:0;background:transparent;color:inherit;cursor:pointer;font-size:1.1rem}
   .historyRaw{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
   .historyRaw .tableWrap{max-height:430px;overflow:auto}.historyRaw td,.historyRaw th{white-space:nowrap}
   .historyChanged{background:rgba(235,178,54,.22)}.historyAdded{background:rgba(70,170,126,.15)}.historyRemoved{background:rgba(223,98,98,.13)}
@@ -8946,9 +9009,38 @@ function historyTable(rows,columns,side){
     return `<tr class="${cls}"><td>${esc(r.status)}</td>${columns.map(c=>`<td class="${r.fields.includes(c)?'historyChanged':''}">${data?esc(data[c]===null||data[c]===undefined?'—':data[c]):'—'}</td>`).join('')}</tr>`;
   }).join('')}</tbody></table></div>`;
 }
-async function selectHistoryDataset(value){state.historyDataset=value;state.historySnapshot=null;state.historyOnlyChanges=false;state.historyOffset=0;await render();}
-async function selectHistoryWeek(id){state.historySnapshot=Number(id);state.historyOffset=0;await render();}
+async function selectHistoryDataset(value){state.historyDataset=value;state.historySnapshot=null;state.historyOnlyChanges=false;state.historyOffset=0;state.historyMetric='';state.historyMetricOffset=0;await render();}
+async function selectHistoryWeek(id){state.historySnapshot=Number(id);state.historyOffset=0;state.historyMetric='';state.historyMetricOffset=0;await render();}
 async function historyPageOffset(offset){state.historyOffset=Math.max(0,offset);await render();}
+async function selectHistoryMetric(metric){state.historyMetric=metric;state.historyMetricOffset=0;await render();document.getElementById('historyDrilldown')?.scrollIntoView({behavior:'smooth',block:'start'});}
+async function historyMetricPage(offset){state.historyMetricOffset=Math.max(0,offset);await render();}
+async function saveHistoryRecipient(event){
+  event.preventDefault();
+  try{await postJson('/api/byo/history/recipient',{dataset:state.historyDataset,email:document.getElementById('historyRecipient').value,action:'add'});toast('Recipient saved');await render();}
+  catch(err){toast('Could not save recipient: '+String(err.message||err));}
+}
+async function removeHistoryRecipient(button){
+  try{await postJson('/api/byo/history/recipient',{dataset:state.historyDataset,email:button.dataset.email,action:'remove'});toast('Recipient removed');await render();}
+  catch(err){toast('Could not remove recipient: '+String(err.message||err));}
+}
+function historyEmailPanel(data){
+  const email=data.email||{}, list=email.addresses||[], issues=data.smtp_issues||[];
+  return `<div class="panel"><div class="medSectionHead"><div><h3>Weekly email reports</h3><p class="muted">Each recipient receives a separate email after every successful scheduled refresh, including a CSV of all added, removed and changed rows.</p></div></div>
+  ${data.demo?'<div class="historyNotice">Sample history is not scheduled, so no automatic emails are sent for this demo.</div>':''}
+  ${issues.length?`<div class="historyNotice"><b>DART email is not ready:</b> ${esc(issues.join(' '))} Reports will remain queued and retry.</div>`:''}
+  ${email.failure?`<div class="historyNotice"><b>Delivery failed for ${esc(email.failure.email)}:</b> ${esc(email.failure.last_error)}. DART will retry.</div>`:''}
+  <form onsubmit="saveHistoryRecipient(event)"><div class="field"><label for="historyRecipient">Add an email recipient for this dataset</label><input id="historyRecipient" type="email" placeholder="name@organization.com" required></div><br><button class="btn secondary" type="submit">Save email</button></form>
+  <div class="historyEmailList">${list.map(address=>`<span class="historyEmailChip">${esc(address)}<button type="button" data-email="${esc(address)}" onclick="removeHistoryRecipient(this)" aria-label="Remove ${esc(address)}">×</button></span>`).join('')||'<span class="muted">No recipients saved yet.</span>'}</div>
+  <p class="muted">${email.pending?`${intFmt(email.pending)} report(s) queued. `:''}${email.latest?.sent_at?`Last delivery: ${esc(historyDate(email.latest.sent_at))} UTC to ${esc(email.latest.email)}. `:''}Emails contain dataset values. Only add authorized recipients. Removing an address cancels its pending reports; a delivery already in progress may still complete.</p></div>`;
+}
+function historyDrilldown(data,metrics){
+  const drill=data.metric_data;if(!drill)return '';
+  const name=metrics.find(m=>m[0]===drill.metric)?.[1]||drill.metric;
+  const val=v=>v===null||v===undefined?'—':typeof v==='object'?JSON.stringify(v):String(v);
+  return `<div class="panel" id="historyDrilldown"><div class="medSectionHead"><div><h3>${esc(name)} · details</h3><p class="muted">Showing the underlying data for this summary, across the full dataset.</p></div><button class="btn ghost small" onclick="selectHistoryMetric('')">Close</button></div>
+  ${drill.rows.length?`<div class="tableWrap"><table class="table"><thead><tr><th>Identity / result</th><th>Column</th><th>Before</th><th>After</th></tr></thead><tbody>${drill.rows.map(r=>`<tr><td>${esc(r.identity)}</td><td>${esc(r.column)}</td><td>${esc(val(r.before))}</td><td>${esc(val(r.after))}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No items for this metric in this comparison.</div>'}
+  <div class="historyLegend"><button class="btn ghost small" ${drill.offset===0?'disabled':''} onclick="historyMetricPage(${Math.max(0,drill.offset-50)})">Previous</button><span>Showing ${drill.total?drill.offset+1:0}–${Math.min(drill.offset+50,drill.total)} of ${intFmt(drill.total)}</span><button class="btn ghost small" ${drill.offset+50>=drill.total?'disabled':''} onclick="historyMetricPage(${drill.offset+50})">Next</button></div></div><br>`;
+}
 async function saveHistorySchedule(event){
   event.preventDefault();
   try{
@@ -8963,7 +9055,7 @@ async function pauseHistorySchedule(){
 function historyPage(info,data){
   const dataset=state.historyDataset||'', demo=dataset==='__demo_claims__', schedule=data?.schedule;
   const options=(info.datasets||[]).filter(d=>d.status==='Ready').map(d=>`<option value="${esc(d.name)}" ${dataset===d.name?'selected':''}>${esc(d.name)}</option>`).join('');
-  const picker=`<div class="panel"><div class="field"><label for="historyDataset">Choose a dataset to explore</label><select id="historyDataset" onchange="selectHistoryDataset(this.value)"><option value="">Select a dataset...</option><option value="__demo_claims__" ${demo?'selected':''}>Medicare Claims — sample history (4 weeks)</option>${options}</select></div></div>`;
+  const picker=`<div class="panel historyPicker"><div class="historyPickerIntro"><h3>Explore your dataset history</h3><p class="muted">Choose a saved dataset or try the four-week sample.</p></div><div class="field"><label for="historyDataset">Dataset</label><select id="historyDataset" onchange="selectHistoryDataset(this.value)"><option value="">Select a dataset...</option><optgroup label="Demo"><option value="__demo_claims__" ${demo?'selected':''}>Medicare Claims — sample history (4 weeks)</option></optgroup><optgroup label="Your saved datasets">${options}</optgroup></select></div></div>`;
   let content='';
   if(dataset&&data){
     const columns=data.dataset_columns||[];
@@ -8979,15 +9071,15 @@ function historyPage(info,data){
       detail=`<div class="panel"><h3>Baseline · ${esc(historyDate(data.after_date))}</h3><p class="muted">The first snapshot has no earlier week to compare. Showing up to 100 rows.</p>${historyTable(base,data.columns,'after')}</div>`;
     }else if(data.comparison){
       const c=data.comparison, rows=c.details;
-      const metrics=[['Changed columns',c.changed_columns,'Fields with changed values'],['Changed values',c.changed_values,'On matched rows'],['New rows / claims',c.added,'New unique identities'],['Removed rows',c.removed,'No longer present'],['New nulls',c.new_nulls,'Including new rows'],['New invalid',c.new_invalid,'Claims checks only']];
-      detail=`<div class="panel"><div class="medSectionHead"><div><h3>Week-over-week summary</h3><p class="muted">${esc(historyDate(data.before_date))} → ${esc(historyDate(data.after_date))} · ${intFmt(c.row_count)} current rows · ${intFmt(c.changed_rows)} matched rows changed</p></div></div><div class="historyMetrics">${metrics.map(m=>`<div class="historyMetric"><small>${esc(m[0])}</small><strong>${intFmt(m[1])}</strong><small>${esc(m[2])}</small></div>`).join('')}</div>
-      <p class="muted">Schema: ${c.added_columns.length?'Added '+esc(c.added_columns.join(', ')):'No added columns'}; ${c.removed_columns.length?'removed '+esc(c.removed_columns.join(', ')):'no removed columns'}. Invalid checks flag negative/non-numeric claim payments, malformed claim dates, and reversed service dates; they are not a complete claims validation.</p></div><br>
+      const metrics=[['changed_columns','Changed columns',c.changed_columns,'Fields with changed values'],['changed_values','Changed values',c.changed_values,'On matched rows'],['changed_rows','Changed rows',c.changed_rows,'Matched identities'],['added','New rows / claims',c.added,'New unique identities'],['removed','Removed rows',c.removed,'No longer present'],['new_nulls','New nulls',c.new_nulls,'Including new rows'],['resolved_nulls','Resolved nulls',c.resolved_nulls,'On matched rows'],['new_invalid','New invalid',c.new_invalid,'Claims checks only'],['schema_changes','Schema changes',c.schema_changes,'Added or removed fields']];
+      detail=`<div class="panel"><div class="medSectionHead"><div><h3>Week-over-week summary</h3><p class="muted">${esc(historyDate(data.before_date))} → ${esc(historyDate(data.after_date))} · ${intFmt(c.row_count)} current rows. Select a metric to inspect its data.</p></div></div><div class="historyMetrics">${metrics.map(m=>`<button type="button" class="historyMetric ${state.historyMetric===m[0]?'active':''}" aria-pressed="${state.historyMetric===m[0]}" onclick="selectHistoryMetric('${m[0]}')"><small>${esc(m[1])}</small><strong>${intFmt(m[2])}</strong><small>${esc(m[3])}</small><span class="historyMetricHint">View details →</span></button>`).join('')}</div>
+      <p class="muted">Schema: ${c.added_columns.length?'Added '+esc(c.added_columns.join(', ')):'No added columns'}; ${c.removed_columns.length?'removed '+esc(c.removed_columns.join(', ')):'no removed columns'}. Invalid checks flag negative/non-numeric claim payments, malformed claim dates, and reversed service dates; they are not a complete claims validation.</p></div><br>${historyDrilldown(data,metrics)}${historyEmailPanel(data)}<br>
       <div class="panel"><div class="medSectionHead"><div><h3>Raw data · before & after</h3><p class="muted">Rows align by identity. Highlighted cells changed; green and red rows were added or removed.</p></div><label><input type="checkbox" ${state.historyOnlyChanges?'checked':''} onchange="state.historyOnlyChanges=this.checked;state.historyOffset=0;render()"> Changes only</label></div>
       <div class="historyLegend"><span>🟨 Changed value</span><span>🟩 New row</span><span>🟥 Removed row</span><span>— Null or not present</span></div>
       <div class="historyLegend"><button class="btn ghost small" ${c.offset===0?'disabled':''} onclick="historyPageOffset(${Math.max(0,c.offset-50)})">Previous</button><span>Showing ${c.details_total?c.offset+1:0}–${Math.min(c.offset+50,c.details_total)} of ${intFmt(c.details_total)} identities</span><button class="btn ghost small" ${c.offset+50>=c.details_total?'disabled':''} onclick="historyPageOffset(${c.offset+50})">Next</button></div>
       <div class="historyRaw"><div><h4>Before · ${esc(historyDate(data.before_date))}</h4>${historyTable(rows,data.columns,'before')}</div><div><h4>After · ${esc(historyDate(data.after_date))}</h4>${historyTable(rows,data.columns,'after')}</div></div></div>`;
     }
-    content=`<br>${schedulePanel}<br><div class="historyLayout"><div class="panel"><h3>Snapshot timeline</h3><p class="muted">Select a week to explore its changes.</p><div class="historyTimeline">${timeline||'<div class="empty">No snapshots yet.</div>'}</div></div><div>${detail}</div></div>`;
+    content=`<br>${schedulePanel}<br><div class="historyLayout"><div class="panel"><h3>Snapshot timeline</h3><p class="muted">Select a week to explore its changes.</p><div class="historyTimeline">${timeline||'<div class="empty">No snapshots yet.</div>'}</div></div><div>${detail}${data.comparison?'':`<br>${historyEmailPanel(data)}`}</div></div>`;
   }
   return `<div class="hero historyHero"><span class="workspaceBadge">Build Your Own · Analyze</span><h1>Weekly Dataset History</h1><p>Follow your data over time. Explore new claims, quality changes, and the exact values behind each weekly refresh.</p></div>${picker}${content}`;
 }
@@ -9029,7 +9121,7 @@ async function renderByo(meta,info){
   if(state.page==='byo-raw'&&state.byoEditFile)rawInfo=await api(`/api/byo/raw-data?filename=${encodeURIComponent(state.byoEditFile)}&search=${encodeURIComponent(state.byoRawSearch)}&offset=${state.byoRawOffset}&limit=${state.byoRawLimit}`);
   if(state.page==='byo-email')emailInfo=await api(`/api/byo/email-agent?filename=${encodeURIComponent(state.byoEmailFile||'')}`);
   if(state.page==='byo-history'&&state.historyDataset){
-    try{historyInfo=await api(`/api/byo/history?dataset=${encodeURIComponent(state.historyDataset)}&offset=${state.historyOffset||0}&changed_only=${!!state.historyOnlyChanges}${state.historySnapshot?`&snapshot=${state.historySnapshot}`:''}`);}
+    try{historyInfo=await api(`/api/byo/history?dataset=${encodeURIComponent(state.historyDataset)}&offset=${state.historyOffset||0}&changed_only=${!!state.historyOnlyChanges}&metric=${encodeURIComponent(state.historyMetric||'')}&metric_offset=${state.historyMetricOffset||0}${state.historySnapshot?`&snapshot=${state.historySnapshot}`:''}`);}
     catch(err){toast('Could not load history: '+String(err.message||err));}
   }
   let html='';
@@ -10067,16 +10159,48 @@ def get_byo_workspace(request: Request) -> Dict[str, Any]:
 
 @app.get("/api/byo/history")
 def get_byo_history(request: Request, dataset: str, snapshot: Optional[int] = None,
-                    offset: int = 0, changed_only: bool = False) -> Any:
+                    offset: int = 0, changed_only: bool = False, metric: str = "",
+                    metric_offset: int = 0) -> Any:
     username = get_session_user(request)
     if not username:
         return JSONResponse({"error": "Sign in to view dataset history."}, status_code=401)
     try:
         weekly_history.initialize(BYO_HISTORY_DB)
-        result = weekly_history.history(BYO_HISTORY_DB, username, dataset, snapshot, offset, changed_only)
+        result = weekly_history.history(BYO_HISTORY_DB, username, dataset, snapshot, offset, changed_only,
+                                        metric, metric_offset)
+        result["email"] = weekly_history.recipients(BYO_HISTORY_DB, username, dataset)
+        result["smtp_issues"] = smtp_configuration_issues()
         if dataset != weekly_history.DEMO:
             result["dataset_columns"] = [str(c) for c in _read_byo_dataset(_byo_path(dataset)).columns]
         return result
+    except (ValueError, FileNotFoundError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/byo/history/recipient")
+async def update_byo_history_recipient(request: Request) -> Any:
+    username = get_session_user(request)
+    if not username:
+        return JSONResponse({"error": "Sign in to manage report recipients."}, status_code=401)
+    payload = await request.json()
+    dataset = str(payload.get("dataset", ""))
+    action = str(payload.get("action", "add"))
+    addresses, invalid = validate_recipients(payload.get("email", ""))
+    try:
+        if dataset != weekly_history.DEMO:
+            if _safe_byo_filename(dataset) != dataset:
+                raise ValueError("Choose a saved dataset.")
+            _byo_path(dataset)
+        if action not in ("add", "remove"):
+            raise ValueError("Unknown recipient action.")
+        if len(addresses) != 1 or invalid:
+            raise ValueError("Enter one valid email address.")
+        weekly_history.initialize(BYO_HISTORY_DB)
+        if action == "add":
+            weekly_history.add_recipient(BYO_HISTORY_DB, username, dataset, addresses[0])
+        else:
+            weekly_history.remove_recipient(BYO_HISTORY_DB, username, dataset, addresses[0])
+        return weekly_history.recipients(BYO_HISTORY_DB, username, dataset)
     except (ValueError, FileNotFoundError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -11017,7 +11141,7 @@ def _start_background_email_agent() -> None:
     start_email_agent_scheduler()
     start_byo_email_agent_scheduler()
     weekly_history.initialize(BYO_HISTORY_DB)
-    weekly_history.start_worker(BYO_HISTORY_DB, _read_byo_dataset)
+    weekly_history.start_worker(BYO_HISTORY_DB, _read_byo_dataset, send_weekly_history_email)
 
 
 @app.get("/api/raw-data")

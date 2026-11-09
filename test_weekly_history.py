@@ -81,6 +81,55 @@ class WeeklyHistoryTests(unittest.TestCase):
         self.assertEqual(len(page["comparison"]["details"]), 20)
         self.assertEqual(len(history.history(self.path, "a", "file.csv", changed_only=True)["comparison"]["details"]), 0)
 
+    def test_summary_drilldowns_match_counts(self):
+        data = history.history(self.path, "user", history.DEMO)
+        snapshot = data["timeline"][2]["id"]
+        expected = {"changed_columns": 2, "changed_values": 2, "changed_rows": 2,
+                    "added": 1, "removed": 0, "new_nulls": 2, "new_invalid": 1,
+                    "resolved_nulls": 0, "schema_changes": 0}
+        for metric, count in expected.items():
+            result = history.history(self.path, "user", history.DEMO, snapshot, metric=metric)
+            self.assertEqual(result["comparison"][metric], count)
+            self.assertEqual(result["metric_data"]["total"], count)
+            self.assertEqual(len(result["metric_data"]["rows"]), count)
+        invalid = history.history(self.path, "user", history.DEMO, snapshot, metric="new_invalid")
+        self.assertEqual(invalid["metric_data"]["rows"][0]["column"], "Bene Pmt Amt")
+        self.assertEqual(invalid["metric_data"]["rows"][0]["after"], -25)
+        with self.assertRaisesRegex(ValueError, "Unknown summary metric"):
+            history.history(self.path, "user", history.DEMO, snapshot, metric="missing")
+
+    def test_emails_queue_on_refresh_retry_and_are_scoped(self):
+        today = datetime.now(timezone.utc).date()
+        now = datetime.combine(today, datetime.min.time(), timezone.utc) + timedelta(hours=1)
+        frame = pd.DataFrame([{"id": "1", "value": "before"}])
+        history.save_schedule(self.path, "alice", "file.csv", "id", today.isoformat(), frame)
+        history.add_recipient(self.path, "alice", "file.csv", "one@domain.test")
+        history.add_recipient(self.path, "alice", "file.csv", "ONE@domain.test")
+        history.add_recipient(self.path, "alice", "file.csv", "two@domain.test")
+        history.add_recipient(self.path, "bob", "file.csv", "other@domain.test")
+        history.add_recipient(self.path, "alice", "other.csv", "other@domain.test")
+        self.assertEqual(len(history.recipients(self.path, "alice", "file.csv")["addresses"]), 2)
+        changed = pd.DataFrame([{"id": "1", "value": "after"}, {"id": "2", "value": None}])
+        calls = []
+        def failing(email, dataset, before, after, summary):
+            calls.append(email)
+            raise RuntimeError("SMTP unavailable")
+        history.run_due(self.path, lambda _: changed, now, failing)
+        status = history.recipients(self.path, "alice", "file.csv")
+        self.assertEqual(status["pending"], 2)
+        self.assertIn("SMTP unavailable", status["failure"]["last_error"])
+        self.assertEqual(len(history.history(self.path, "alice", "file.csv")["timeline"]), 2)
+        history.remove_recipient(self.path, "alice", "file.csv", "two@domain.test")
+        delivered = []
+        def sender(email, dataset, before, after, summary):
+            delivered.append((email, dataset, summary["changed_values"], summary["added"]))
+        history.run_due(self.path, lambda _: changed, now + timedelta(minutes=16), sender)
+        self.assertEqual(delivered, [("one@domain.test", "file.csv", 1, 1)])
+        self.assertEqual(history.recipients(self.path, "alice", "file.csv")["pending"], 0)
+        history.run_due(self.path, lambda _: changed, now + timedelta(minutes=17), sender)
+        self.assertEqual(len(delivered), 1)
+        self.assertEqual(history.recipients(self.path, "bob", "file.csv")["pending"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
