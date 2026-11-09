@@ -1741,12 +1741,16 @@ def pull_byo_metadata_from_s3(bucket: Optional[str] = None, username: Optional[s
     try:
         client = _get_s3_client_for_user(username=username)
 
-        # 1. Pull S3 sources metadata
+        # 1. Pull S3 sources metadata (only restore sources missing locally; a stale copy must not
+        #    overwrite the live ETag/size, or every poll would re-download an unchanged file)
         try:
             resp = client.get_object(Bucket=eff_bucket, Key=".dart_metadata/byo_s3_sources.json")
             raw_sources = json.loads(resp["Body"].read().decode("utf-8"))
+            local_sources = load_byo_s3_sources()
             if isinstance(raw_sources, dict):
                 for ds_name, sinfo in raw_sources.items():
+                    if ds_name in local_sources:
+                        continue
                     if isinstance(sinfo, dict) and sinfo.get("bucket") and sinfo.get("key"):
                         save_byo_s3_source(
                             dataset_name=ds_name,
