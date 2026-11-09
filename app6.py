@@ -1741,16 +1741,12 @@ def pull_byo_metadata_from_s3(bucket: Optional[str] = None, username: Optional[s
     try:
         client = _get_s3_client_for_user(username=username)
 
-        # 1. Pull S3 sources metadata (only restore sources missing locally; a stale copy must not
-        #    overwrite the live ETag/size, or every poll would re-download an unchanged file)
+        # 1. Pull S3 sources metadata
         try:
             resp = client.get_object(Bucket=eff_bucket, Key=".dart_metadata/byo_s3_sources.json")
             raw_sources = json.loads(resp["Body"].read().decode("utf-8"))
-            local_sources = load_byo_s3_sources()
             if isinstance(raw_sources, dict):
                 for ds_name, sinfo in raw_sources.items():
-                    if ds_name in local_sources:
-                        continue
                     if isinstance(sinfo, dict) and sinfo.get("bucket") and sinfo.get("key"):
                         save_byo_s3_source(
                             dataset_name=ds_name,
@@ -4530,134 +4526,6 @@ def compare_byo_datasets(left_name: str, right_name: str, include_previews: bool
     }
 
 
-def _byo_relationship_analysis(
-    left: pd.DataFrame,
-    right: pd.DataFrame,
-    key_index: Optional[int] = None,
-    dimension: Optional[Dict[str, str]] = None,
-    measure: Optional[Dict[str, str]] = None,
-) -> Dict[str, Any]:
-    def field_words(name: str) -> str:
-        return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name).lower()
-
-    def identifier(name: str) -> bool:
-        return bool(re.search(r"(^|[^a-z])(id|key|identifier|npi|code)([^a-z]|$)", field_words(name)))
-
-    pairs = _byo_common_pairs(left, right)
-    if not pairs:
-        return {"keys": [], "message": "No shared column names are available for matching records."}
-    if key_index is None:
-        def key_score(index: int) -> Tuple[int, int, float, float]:
-            a, b = pairs[index]
-            overlap = _series_overlap_stats(left[a], right[b])
-            shared = int(overlap["Shared distinct"])
-            uniqueness = min(
-                left[a].nunique(dropna=True) / max(int(left[a].notna().sum()), 1),
-                right[b].nunique(dropna=True) / max(int(right[b].notna().sum()), 1),
-            )
-            hint = int(identifier(a))
-            return (int(shared > 0), hint, uniqueness, min(overlap["A values found in B %"], overlap["B values found in A %"]))
-        key_index = max(range(len(pairs)), key=key_score)
-    if not isinstance(key_index, int) or key_index < 0 or key_index >= len(pairs):
-        raise ValueError("Choose a valid shared matching field.")
-    key_a, key_b = pairs[key_index]
-    lk = left[key_a].map(_normalize_compare_value)
-    rk = right[key_b].map(_normalize_compare_value)
-    left_present = lk.ne("")
-    right_present = rk.ne("")
-    left_duplicate = left_present & lk.duplicated(keep=False)
-    right_duplicate = right_present & rk.duplicated(keep=False)
-    left_keys = set(lk[left_present])
-    right_keys = set(rk[right_present])
-    shared = left_keys & right_keys
-    unique_left = left.loc[left_present & ~left_duplicate].copy()
-    unique_right = right.loc[right_present & ~right_duplicate].copy()
-    unique_left.index = lk[left_present & ~left_duplicate]
-    unique_right.index = rk[right_present & ~right_duplicate]
-    matched_keys = unique_left.index.intersection(unique_right.index, sort=False)
-    matched_left = unique_left.loc[matched_keys]
-    matched_right = unique_right.loc[matched_keys]
-
-    fields = []
-    for col_a, col_b in pairs:
-        if (col_a, col_b) == (key_a, key_b):
-            continue
-        a = matched_left[col_a].map(_normalize_compare_value)
-        b = matched_right[col_b].map(_normalize_compare_value)
-        comparable = a.ne("") | b.ne("")
-        compared = int(comparable.sum())
-        different = int((a.ne(b) & comparable).sum())
-        if compared:
-            fields.append({"field_a": col_a, "field_b": col_b, "compared": compared, "different": different, "percent": round(100 * different / compared, 2)})
-    fields.sort(key=lambda item: (-item["percent"], -item["different"], item["field_a"]))
-
-    dimensions: List[Dict[str, str]] = []
-    measures: List[Dict[str, str]] = []
-    for side, frame, key in (("A", left, key_a), ("B", right, key_b)):
-        for col in frame.columns:
-            if col == key:
-                continue
-            series = frame[col]
-            clean = series.dropna().map(_normalize_compare_value)
-            distinct = clean[clean.ne("")].nunique()
-            option = {"side": side, "column": str(col)}
-            if 1 <= distinct <= 30:
-                dimensions.append(option)
-            if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
-                measures.append(option)
-    if dimension is not None and dimension not in dimensions:
-        raise ValueError("Choose an available category field.")
-    if dimension is None:
-        usable = [d for d in dimensions if any(m["side"] != d["side"] for m in measures)] or dimensions
-        dimension = min(usable, key=lambda d: (
-            identifier(d["column"]) or bool(re.search(r"(^|[^a-z])(date|dt)([^a-z]|$)", field_words(d["column"]))),
-            pd.api.types.is_numeric_dtype((left if d["side"] == "A" else right)[d["column"]]),
-        )) if usable else None
-    available_measures = [m for m in measures if dimension and m["side"] != dimension["side"]]
-    if measure is not None and measure not in available_measures:
-        raise ValueError("Choose a numeric measure from the other dataset.")
-    if measure is None and available_measures:
-        measure = min(available_measures, key=lambda m: identifier(m["column"]))
-
-    groups: List[Dict[str, Any]] = []
-    if dimension and len(matched_keys):
-        category_frame = matched_left if dimension["side"] == "A" else matched_right
-        categories = category_frame[dimension["column"]].map(_normalize_compare_value)
-        data = pd.DataFrame({"category": categories, "missing": categories.eq("")}, index=matched_keys)
-        if measure:
-            measure_frame = matched_left if measure["side"] == "A" else matched_right
-            data["measure"] = pd.to_numeric(measure_frame[measure["column"]], errors="coerce").replace([np.inf, -np.inf], np.nan)
-        grouped = data.groupby(["missing", "category"], sort=False, dropna=False)
-        for (missing, category), group in grouped:
-            value_count = int(group["measure"].notna().sum()) if measure else 0
-            mean = float(group["measure"].mean()) if value_count else None
-            groups.append({"label": "(Missing)" if missing else str(category), "missing": bool(missing), "records": int(len(group)), "measure_count": value_count, "mean": round(mean, 4) if mean is not None and np.isfinite(mean) else None})
-        groups.sort(key=lambda item: (-item["records"], item["missing"], item["label"]))
-        groups = groups[:10]
-
-    return {
-        "keys": [{"a": a, "b": b} for a, b in pairs],
-        "key_index": key_index,
-        "coverage": {
-            "shared_distinct": len(shared),
-            "only_a": len(left_keys - right_keys),
-            "only_b": len(right_keys - left_keys),
-            "unique_matched": len(matched_keys),
-            "ambiguous_shared": len(shared - set(matched_keys)),
-            "missing_rows_a": int((~left_present).sum()),
-            "missing_rows_b": int((~right_present).sum()),
-            "duplicate_rows_a": int(left_duplicate.sum()),
-            "duplicate_rows_b": int(right_duplicate.sum()),
-        },
-        "disagreements": fields[:10],
-        "dimensions": dimensions,
-        "dimension": dimension,
-        "measures": available_measures,
-        "measure": measure,
-        "groups": groups,
-    }
-
-
 def reconcile_byo_datasets(
     left_name: str,
     right_name: str,
@@ -6515,7 +6383,6 @@ HTML = r'''
     :root[data-theme="dark"] .confidentialityCheckWrap label{color:#f4e4aa}
     .confidentialityActions{display:flex;justify-content:flex-end;align-items:center;gap:12px}
     .confidentialityActions .btn:disabled{opacity:.45;cursor:not-allowed;box-shadow:none!important}
-
     .welcome{max-width:1380px;margin:12px auto 50px}
     .welcomeHero{position:relative;overflow:hidden;display:grid;grid-template-columns:minmax(0,1.35fr) minmax(260px,.65fr);gap:40px;align-items:center;padding:clamp(30px,5vw,68px);border:1px solid #55451e;border-radius:28px;background:radial-gradient(circle at 88% 12%,rgba(216,181,83,.19),transparent 36%),linear-gradient(125deg,#111c2c,#172638 58%,#25312d);box-shadow:0 24px 60px rgba(21,29,39,.2);color:#fff}
     .welcomeHero:after{content:"";position:absolute;width:420px;height:420px;right:-175px;bottom:-250px;border:1px solid rgba(232,204,126,.25);border-radius:50%;box-shadow:0 0 0 45px rgba(232,204,126,.04),0 0 0 90px rgba(232,204,126,.03);pointer-events:none}
@@ -6561,33 +6428,9 @@ HTML = r'''
     :root[data-theme="dark"] .welcomeCard button{background:#29333b;border-color:#566064;color:#fff}
     :root[data-theme="dark"] .welcomeCard button:hover,:root[data-theme="dark"] .welcomeCard button:focus-visible{background:#e7ca7b;color:#172638}
     body[data-page="welcome"] .assistantBubbleHost{display:none}
-    .relationshipLab{display:grid;gap:18px;margin:24px 0}
-    .relationshipIntro{display:flex;justify-content:space-between;align-items:end;gap:20px}
-    .relationshipIntro h2{margin:5px 0;font-size:1.55rem}
-    .relationshipIntro p,.relationshipPanel p{color:var(--muted);font-size:.87rem;line-height:1.55}
-    .relationshipBadge{color:#94701c;font-size:.7rem;font-weight:900;letter-spacing:.12em;text-transform:uppercase}
-    .relationshipControls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
-    .relationshipControls .field{min-width:0}
-    .relationshipGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
-    .relationshipPanel{min-width:0}
-    .relationshipPanel h3{margin:0 0 6px}
-    .relationshipBig{display:flex;align-items:baseline;gap:10px;margin:18px 0 12px}
-    .relationshipBig strong{font-size:2rem;color:var(--text)}
-    .relationshipBig span{font-size:.84rem;color:var(--muted)}
-    .relationshipStack{display:flex;height:18px;overflow:hidden;border-radius:20px;background:var(--panel2)}
-    .relationshipStack span{min-width:0}
-    .relationshipLegend{display:flex;flex-wrap:wrap;gap:10px 18px;margin:13px 0;color:var(--muted);font-size:.8rem}
-    .relationshipLegend i{display:inline-block;width:10px;height:10px;margin-right:6px;border-radius:3px}
-    .relationshipRows{display:grid;gap:14px;margin-top:18px}
-    .relationshipRowTop{display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;font-size:.82rem}
-    .relationshipRowTop span:first-child{min-width:0;overflow-wrap:anywhere}
-    .relationshipRowTop strong{flex:none}
-    .relationshipTrack{height:9px;border-radius:10px;background:var(--panel2);overflow:hidden}
-    .relationshipBar{height:100%;border-radius:10px;background:linear-gradient(90deg,#bd8e24,#e7c86d)}
-    .relationshipDetail{margin-top:5px;color:var(--muted);font-size:.76rem}
-    @media(max-width:800px){.relationshipGrid,.relationshipControls{grid-template-columns:1fr}.relationshipIntro{align-items:flex-start;flex-direction:column}}
     @media(max-width:900px){.welcomeHero{grid-template-columns:1fr}.welcomeCompass{max-width:600px}.welcomeCards{grid-template-columns:1fr}.welcomeCard{padding:24px}.welcomeCard h3{margin-top:18px}}
     @media(max-width:600px){.welcome{margin-top:0}.welcomeHero{gap:26px;border-radius:20px}.welcomeHeading,.welcomeNote{align-items:flex-start;flex-direction:column}.welcomeHeading{margin-top:32px}.welcomeNote button{width:100%}}
+
   </style>
 </head>
 <body data-workspace="medicare">
@@ -6724,7 +6567,7 @@ function personaLandingOptions(selected='auto'){if(!state.meta?.persona)selected
 
 const filterPages=new Set(['home','briefing','explorer','catalog','briefbuilder','riskcenter','insights','scorecards','actioncenter','governance']);
 const defaultChatHistories={medicare:{activeId:'general',sessions:[{id:'general',title:'DART Copilot',messages:[]}]},medicaid:{activeId:'medicaid',sessions:[{id:'medicaid',title:'CMS Q&A',messages:[]}]},byo:{activeId:'byo',sessions:[{id:'byo',title:'AI Analyst',messages:[]}]} };const persistedChatHistories=(()=>{try{const raw=sessionStorage.getItem('dart_chat_histories_v1');if(!raw)return null;const parsed=JSON.parse(raw);return parsed&&typeof parsed==='object'?parsed:null;}catch(_err){return null;}})();
-let state={workspace:sessionStorage.getItem('dart_workspace')||'medicare',page:sessionStorage.getItem('dart_page')||'home',priorityQueueLimit:10,filters:{streams:null,classes:null,tiers:null,reasons:null,min_rate:0,min_impact:0,min_unmatched:0,actions_only:false,search:'',custom_filters:[]},meta:null,emailEditingId:null,rawSearch:'',rawOffset:0,rawLimit:75,emailAgent:null,rawData:null,byoLeft:sessionStorage.getItem('dart_byo_left')||'',byoRight:sessionStorage.getItem('dart_byo_right')||'',byoEditFile:sessionStorage.getItem('dart_byo_edit_file')||'',byoEmailFile:sessionStorage.getItem('dart_byo_email_file')||'',byoRawSearch:'',byoRawOffset:0,byoRawLimit:75,byoRawData:null,byoEmailEditingId:null,byoEmailAgent:null,byoCompare:null,byoChat:null,byoRecLeftKeys:null,byoRecRightKeys:null,byoRecCaseSens:false,byoRecTrim:true,byoRecStripZeros:false,byoRecTol:0.0,byoRecTolMode:'absolute',byoRecFilter:'all',byoRecSearch:'',byoRecColFilter:'',byoRecOffset:0,byoRecLimit:50,byoRecData:null,byoRecModalRow:null,byoRecAiDiagnosis:null,medicaidStateId:1,medicaidStateStatus:'',medicaidStateType:'',medicaidIssueType:'',medicaidMinTotal:3,medicaidHeatMetric:'quality_score',medicaidHeatStatus:'',medicaidHeatType:'',medicaidHeatSelectedId:0,medicaidHeatRows:[],medicaidStateReturnPage:'medicaid-states',medicaidIssueLabels:null,medicaidChat:[],chatHistories:{...defaultChatHistories,...(persistedChatHistories||{})},assistantBubbleOpen:false};
+let state={workspace:sessionStorage.getItem('dart_workspace')||'medicare',page:'home',priorityQueueLimit:10,filters:{streams:null,classes:null,tiers:null,reasons:null,min_rate:0,min_impact:0,min_unmatched:0,actions_only:false,search:'',custom_filters:[]},meta:null,emailEditingId:null,rawSearch:'',rawOffset:0,rawLimit:75,emailAgent:null,rawData:null,byoLeft:sessionStorage.getItem('dart_byo_left')||'',byoRight:sessionStorage.getItem('dart_byo_right')||'',byoEditFile:sessionStorage.getItem('dart_byo_edit_file')||'',byoEmailFile:sessionStorage.getItem('dart_byo_email_file')||'',byoRawSearch:'',byoRawOffset:0,byoRawLimit:75,byoRawData:null,byoEmailEditingId:null,byoEmailAgent:null,byoCompare:null,byoChat:null,byoRecLeftKeys:null,byoRecRightKeys:null,byoRecCaseSens:false,byoRecTrim:true,byoRecStripZeros:false,byoRecTol:0.0,byoRecTolMode:'absolute',byoRecFilter:'all',byoRecSearch:'',byoRecColFilter:'',byoRecOffset:0,byoRecLimit:50,byoRecData:null,byoRecModalRow:null,byoRecAiDiagnosis:null,medicaidStateId:1,medicaidStateStatus:'',medicaidStateType:'',medicaidIssueType:'',medicaidMinTotal:3,medicaidHeatMetric:'quality_score',medicaidHeatStatus:'',medicaidHeatType:'',medicaidHeatSelectedId:0,medicaidHeatRows:[],medicaidStateReturnPage:'medicaid-states',medicaidIssueLabels:null,medicaidChat:[],chatHistories:{...defaultChatHistories,...(persistedChatHistories||{})},assistantBubbleOpen:false};
 let modalState={key:null,title:'',items:[],selected:[]};
 function esc(v){return String(v??'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));}
 function mdInline(v){
@@ -6832,12 +6675,52 @@ async function boot(){
     state.page=p.landing_page||workspaceHomes[state.workspace]||'home';
   }else{
     state.workspace=sessionStorage.getItem('dart_workspace')||p.preferred_workspace||'medicare';
-    state.page=sessionStorage.getItem('dart_page')||workspaceHomes[state.workspace]||'home';
+    state.page=workspaceHomes[state.workspace]||'home';
   }
   sessionStorage.setItem('dart_workspace',state.workspace);
-  sessionStorage.setItem('dart_page',state.page);
   setNav();
   await render();
+}
+function welcomePage(){
+  return `<div class="welcome page-enter">
+    <div class="welcomeHero">
+      <div>
+        <span class="welcomeEyebrow">Data assurance, made clearer</span>
+        <h1>Better data starts with <span>the right perspective.</span></h1>
+        <p>Welcome to DART, your home for exploring data quality, understanding risk, and turning findings into action. Choose the workspace that fits the question you want to answer.</p>
+        <div class="welcomeHeroActions"><a href="#welcome-workspaces">Explore the workspaces <span aria-hidden="true">&nbsp;↓</span></a><button type="button" onclick="showPage('settings')">Set my preferences</button></div>
+      </div>
+      <div class="welcomeCompass">
+        <div class="welcomeCompassTitle">A simple way to get started</div>
+        <h2>One platform. Three perspectives.</h2>
+        <div class="welcomeStep"><span class="welcomeStepNumber">01</span><span><b>Choose your focus</b><br>Pick the workspace that matches your data.</span></div>
+        <div class="welcomeStep"><span class="welcomeStepNumber">02</span><span><b>Explore the evidence</b><br>Move from the big picture to the details.</span></div>
+        <div class="welcomeStep"><span class="welcomeStepNumber">03</span><span><b>Take the next step</b><br>Investigate, communicate, and act with context.</span></div>
+      </div>
+    </div>
+    <div class="welcomeHeading" id="welcome-workspaces"><div><span class="welcomeEyebrow">Find your starting point</span><h2>Choose your workspace</h2></div><p>Each workspace is designed for a different kind of investigation. You can switch between them at any time.</p></div>
+    <div class="welcomeCards">
+      <article class="welcomeCard">
+        <div class="welcomeCardTop"><span class="welcomeIcon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 20V10m8 10V4m8 16v-7M2 20h20"/><path d="m3 7 6-3 5 4 6-3"/></svg></span><span class="welcomeCardTag">Reconciliation</span></div>
+        <h3>Medicare</h3><p>Understand how well your Medicare data reconciles, where mismatches occur, and which issues deserve attention first.</p>
+        <ul><li>Explore match rates and reconciliation risk</li><li>Trace findings to fields, mappings, and reports</li><li>Track remediation and monitor data changes</li></ul>
+        <button type="button" onclick="switchWorkspace('medicare')">Open Medicare <span aria-hidden="true">→</span></button>
+      </article>
+      <article class="welcomeCard">
+        <div class="welcomeCardTop"><span class="welcomeIcon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 21s7-3.5 7-10V5l-7-3-7 3v6c0 6.5 7 10 7 10Z"/><path d="M9 11h6m-3-3v6"/></svg></span><span class="welcomeCardTag">State intelligence</span></div>
+        <h3>Medicaid</h3><p>Explore Medicaid data quality across states, compare performance, and investigate claims and program-level patterns.</p>
+        <ul><li>Explore state dashboards and the US heatmap</li><li>Compare states and examine quality indicators</li><li>Review claims analysis and executive insights</li></ul>
+        <button type="button" onclick="switchWorkspace('medicaid')">Open Medicaid <span aria-hidden="true">→</span></button>
+      </article>
+      <article class="welcomeCard">
+        <div class="welcomeCardTop"><span class="welcomeIcon" aria-hidden="true"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/></svg></span><span class="welcomeCardTag">Your data</span></div>
+        <h3>Build Your Own</h3><p>Bring your own datasets into a flexible workspace to explore their structure, compare two files, and investigate differences.</p>
+        <ul><li>Upload and organize your own datasets</li><li>Compare schemas, records, and data quality</li><li>Ask questions and export your findings</li></ul>
+        <button type="button" onclick="switchWorkspace('byo')">Open Build Your Own <span aria-hidden="true">→</span></button>
+      </article>
+    </div>
+    <div class="welcomeNote"><div><b>Make DART yours</b><p>Choose a preferred workspace and start page in Settings, or return here from the workspace menu whenever you need a fresh starting point.</p></div><button class="btn secondary" type="button" onclick="showPage('settings')">Open settings</button></div>
+  </div>`;
 }
 function sectionShell(items,content){return `<div class="pageShell"><aside class="sectionRail"><div class="railTitle">On this page</div>${items.map(x=>`<a href="#${x[0]}">${x[1]}</a>`).join('')}</aside><div>${content}</div></div>`;}
 function section(id,title,content){return `<section class="sectionBlock" id="${id}"><div class="sectionTitle"><h2>${title}</h2></div>${content}</section>`;}
@@ -7076,7 +6959,7 @@ function showSettingsTab(tabName){
   setNav();
   render();
 }
-async function showPage(id){state.page=id;sessionStorage.setItem('dart_page',id);setNav();await render();}
+async function showPage(id){state.page=id;setNav();await render();}
 function filterLabel(key){const arr=state.filters[key];if(arr===null||arr===undefined)return 'All values';if(!arr.length)return 'No values';return arr.length===1?arr[0]:`${arr.length} selected`;}
 function openFilterModal(key,title,items){modalState={key,title,items:[...items],selected:[...(state.filters[key]||items)]};modalTitle.textContent=title;modalSub.textContent='Search and select values. Leave everything selected to include all values.';modalSearch.value='';filterModal.style.display='flex';renderModalOptions();}
 function closeFilterModal(){filterModal.style.display='none';}
@@ -7097,7 +6980,7 @@ async function getData(){return postJson('/api/view',state.filters);}
 function closeMetricModal(){if(typeof metricModal!=='undefined'&&metricModal)metricModal.style.display='none';if(typeof metricModalBody!=='undefined'&&metricModalBody)metricModalBody.innerHTML='';streamModalState=null;}
 function keyActivate(event,fn){if(event.key==='Enter'||event.key===' '){event.preventDefault();fn();}}
 
-var METRIC_HELP={
+const METRIC_HELP={
   'health score':'Event-weighted reconciliation quality across the current Medicare scope. Higher-volume fields influence this score more, so it is the strongest single executive quality signal; higher is better.',
   'risk score':'Average impact score across the current scope. Impact combines mismatch severity with reconciliation volume, so higher values indicate greater potential operational or reporting risk.',
   'critical items':'Count of fields currently classified in the Critical risk tier based on DART impact-score thresholds.',
@@ -7220,7 +7103,7 @@ function openLocalDrill(title,subtitle,rows){streamModalState=null;metricModalTi
 function metricCard(label,value,sub,kind,extraClass=''){const action=()=>openMetricDrill(kind,label);return `<div class="panel metric metricClickable ${extraClass}" role="button" tabindex="0" onclick="openMetricDrill('${kind}','${esc(label)}')" onkeydown="keyActivate(event,()=>openMetricDrill('${kind}','${esc(label)}'))"><div class="label">${esc(label)}</div><div class="value" title="${esc(value)}">${value}</div><div class="sub">${esc(sub)}</div></div>`;}
 function metrics(s){return `<div class="grid grid4">${metricCard('Health score',s.health_score,'Event-weighted quality','health','health')}${metricCard('Critical items',s.critical,'Highest risk tier','critical')}${metricCard('Actionable items',s.actions,'Require review, change, or remediation','open-issues')}${metricCard('Unmatched volume',s.unmatched,'Current scope','unmatched','unmatchedMetric')}</div>`;}
 function miniDeck(s){return '';}
-var streamModalState=null;
+let streamModalState=null;
 async function openStreamDetails(stream){try{metricModalTitle.textContent=`${stream} stream details`;metricModalSub.textContent='Loading stream metrics and underlying data…';metricModalBody.innerHTML='<div class="empty">Loading stream data…</div>';metricModal.style.display='flex';const result=await postJson('/api/stream-detail/'+encodeURIComponent(stream),state.filters);streamModalState={data:result,tab:'overview'};metricModalSub.textContent=`${intFmt(result.total)} field${Number(result.total)===1?'':'s'} in ${stream} under the current filters${result.truncated?' · large tables are truncated':''}.`;renderStreamModal();}catch(err){metricModalSub.textContent='Could not load stream details.';metricModalBody.innerHTML=`<div class="empty">${esc(err.message||err)}</div>`;}}
 function setStreamTab(tab){if(!streamModalState)return;streamModalState.tab=tab;renderStreamModal();}
 function streamTabs(active){const tabs=[['overview','Overview'],['fields','Fields'],['risk','Risk'],['unmatched','Unmatched'],['classifications','Classifications'],['remediation','Remediation'],['mapping','Mapping & impact']];return `<div class="modalTabs" role="tablist">${tabs.map(([id,label])=>`<button class="modalTab ${active===id?'active':''}" type="button" onclick="setStreamTab('${id}')">${label}</button>`).join('')}</div>`;}
@@ -8431,12 +8314,10 @@ async function importByoFromSharePoint(){
   }catch(err){toast('SharePoint import failed: '+String(err.message||err).slice(0,200));}
 }
 function saveByoSelection(){sessionStorage.setItem('dart_byo_left',state.byoLeft||'');sessionStorage.setItem('dart_byo_right',state.byoRight||'');}
-var byoRelationshipSelection={key_index:null,dimension:null,measure:null};
-var byoRelationshipData=null;
 function ensureByoSelections(info){const names=(info.datasets||[]).filter(x=>x.status==='Ready').map(x=>x.name);if(state.byoLeft&&!names.includes(state.byoLeft))state.byoLeft='';if(state.byoRight&&!names.includes(state.byoRight))state.byoRight='';if(!state.byoLeft&&names.length)state.byoLeft=names[0];if(!state.byoRight&&names.length>1)state.byoRight=names.find(x=>x!==state.byoLeft)||'';if(state.byoRight===state.byoLeft)state.byoRight=names.find(x=>x!==state.byoLeft)||'';if(state.byoEditFile&&!names.includes(state.byoEditFile))state.byoEditFile='';if(state.byoEmailFile&&!names.includes(state.byoEmailFile))state.byoEmailFile='';if(!state.byoEditFile&&names.length)state.byoEditFile=names[0];if(!state.byoEmailFile&&names.length)state.byoEmailFile=state.byoEditFile||names[0];saveByoSelection();sessionStorage.setItem('dart_byo_edit_file',state.byoEditFile||'');sessionStorage.setItem('dart_byo_email_file',state.byoEmailFile||'');}
 function byoPairReady(){return Boolean(state.byoLeft&&state.byoRight&&state.byoLeft!==state.byoRight);}
-async function setByoSelection(side,value){if(side==='left')state.byoLeft=value;else state.byoRight=value;if(state.byoLeft===state.byoRight){if(side==='left')state.byoRight='';else state.byoLeft='';}state.byoCompare=null;state.byoChat=null;byoRelationshipSelection={key_index:null,dimension:null,measure:null};byoRelationshipData=null;saveByoSelection();await render();}
-async function swapByoSelection(){const a=state.byoLeft;state.byoLeft=state.byoRight;state.byoRight=a;state.byoCompare=null;state.byoChat=null;byoRelationshipSelection={key_index:null,dimension:null,measure:null};byoRelationshipData=null;saveByoSelection();await render();}
+async function setByoSelection(side,value){if(side==='left')state.byoLeft=value;else state.byoRight=value;if(state.byoLeft===state.byoRight){if(side==='left')state.byoRight='';else state.byoLeft='';}state.byoCompare=null;state.byoChat=null;saveByoSelection();await render();}
+async function swapByoSelection(){const a=state.byoLeft;state.byoLeft=state.byoRight;state.byoRight=a;state.byoCompare=null;state.byoChat=null;saveByoSelection();await render();}
 function autoSelectByoPair(){const ready=(state.byoInfo?.datasets||[]).filter(x=>x.status==='Ready');if(ready.length>=2){state.byoLeft=ready[0].name;state.byoRight=ready[1].name;state.byoCompare=null;state.byoChat=null;saveByoSelection();toast(`Selected pair: ${ready[0].name} ↔ ${ready[1].name}`);render();}else{toast('Upload at least 2 datasets to auto-pair');}}
 function clearByoPair(){state.byoLeft='';state.byoRight='';state.byoCompare=null;state.byoChat=null;saveByoSelection();render();}
 function byoDatasetOptions(info,selected,exclude=''){return `<option value="">Choose a saved dataset…</option>${(info.datasets||[]).filter(x=>x.status==='Ready'&&x.name!==exclude).map(x=>{const isXlsx=x.name.toLowerCase().endsWith('.xlsx')||x.name.toLowerCase().endsWith('.xlsm')||x.name.toLowerCase().endsWith('.xls');const tag=isXlsx?'📊 [XLSX]':'📄 [CSV]';const s3Tag=x.s3_source?' 🪣 (S3)':'';return `<option value="${esc(x.name)}" ${x.name===selected?'selected':''}>${tag}${s3Tag} ${esc(x.name)} — ${intFmt(x.rows)} rows · ${intFmt(x.columns)} cols · ${esc(x.size_mb)} MB</option>`;}).join('')}`;}
@@ -8459,27 +8340,6 @@ function compareOverview(c){return `${compareSummaryCards(c)}<br><div class="gri
 function compareQuality(c){return `<div class="byoSplitTables"><div class="panel"><div class="byoDatasetHead"><h3>Dataset A quality</h3><span class="pill Stable">${esc(c.left.source)}</span></div>${byoStats(c.left,'Dataset A')}<br>${genericTable(c.left.quality,'Dataset A quality')}</div><div class="panel"><div class="byoDatasetHead"><h3>Dataset B quality</h3><span class="pill Stable">${esc(c.right.source)}</span></div>${byoStats(c.right,'Dataset B')}<br>${genericTable(c.right.quality,'Dataset B quality')}</div></div><br><div class="panel"><h3>Shared-column quality comparison</h3>${genericTable(c.column_comparison,'DIY shared column quality comparison')}</div>`;}
 function compareExplorer(c){return `<div class="byoSplitTables"><div class="panel"><div class="byoDatasetHead"><h3>Dataset A preview</h3><a class="btn secondary small" href="/download/byo-csv/${encodeURIComponent(c.left.source)}">Full CSV</a></div>${genericTable(c.left.preview,'Dataset A preview')}</div><div class="panel"><div class="byoDatasetHead"><h3>Dataset B preview</h3><a class="btn secondary small" href="/download/byo-csv/${encodeURIComponent(c.right.source)}">Full CSV</a></div>${genericTable(c.right.preview,'Dataset B preview')}</div></div>`;}
 function compareDeepDive(c){return `<div class="grid grid2"><div class="panel"><h3>Common columns</h3>${genericTable(c.common_columns,'DIY common columns')}</div><div class="panel"><h3>Columns unique to each dataset</h3><div class="byoSplitTables byoUniqueTables"><div class="byoCompactTable">${genericTable(c.only_left,'Columns only in Dataset A')}</div><div class="byoCompactTable">${genericTable(c.only_right,'Columns only in Dataset B')}</div></div></div></div><br><div class="panel"><h3>Numeric field comparison</h3><p class="muted">Side-by-side means, medians, ranges, and mean deltas for shared numeric columns.</p>${genericTable(c.numeric_comparison,'DIY numeric comparison')}</div>`;}
-function relationshipOptionLabel(option){return `Dataset ${option.side} · ${option.column}`;}
-function relationshipOptions(options,selected){return options.map((o,i)=>`<option value="${i}" ${selected&&o.side===selected.side&&o.column===selected.column?'selected':''}>${esc(relationshipOptionLabel(o))}</option>`).join('');}
-async function changeRelationship(kind,value){
-  if(kind==='key'){byoRelationshipSelection={key_index:Number(value),dimension:null,measure:null};}
-  else if(kind==='dimension'){byoRelationshipSelection.dimension=byoRelationshipData.dimensions[Number(value)];byoRelationshipSelection.measure=null;}
-  else{byoRelationshipSelection.measure=byoRelationshipData.measures[Number(value)];}
-  await render();
-}
-function relationshipLab(r){
-  if(!r.keys?.length)return `<section class="relationshipLab"><div class="panel"><h3>Relationship explorer</h3><p>${esc(r.message||'No matching field is available.')}</p></div></section>`;
-  const c=r.coverage,total=c.only_a+c.only_b+c.shared_distinct;
-  const width=n=>total?Math.max(0,100*n/total):0;
-  const maxGroup=Math.max(1,...r.groups.map(g=>g.records));
-  const fields=r.disagreements.length?r.disagreements.map(f=>`<div><div class="relationshipRowTop"><span>${esc(f.field_a)}${f.field_a!==f.field_b?' ↔ '+esc(f.field_b):''}</span><strong>${f.percent.toFixed(1)}%</strong></div><div class="relationshipTrack"><div class="relationshipBar" style="width:${f.percent}%"></div></div><div class="relationshipDetail">${intFmt(f.different)} different of ${intFmt(f.compared)} comparable pairs</div></div>`).join(''):'<div class="empty">No other shared fields with comparable values in uniquely matched records.</div>';
-  const groups=r.groups.length?r.groups.map(g=>`<div><div class="relationshipRowTop"><span>${esc(g.label)}</span><strong>${intFmt(g.records)} records</strong></div><div class="relationshipTrack"><div class="relationshipBar" style="width:${100*g.records/maxGroup}%"></div></div>${r.measure?`<div class="relationshipDetail">Average ${esc(r.measure.column)}: ${g.mean===null?'no numeric values':esc(g.mean.toLocaleString(undefined,{maximumFractionDigits:4}))} · ${intFmt(g.measure_count)} values</div>`:''}</div>`).join(''):'<div class="empty">No uniquely matched records or suitable category values to chart.</div>';
-  return `<section class="relationshipLab"><div class="relationshipIntro"><div><span class="relationshipBadge">New · Connected insights</span><h2>See how the datasets connect</h2><p>Explore record-level relationships, not just side-by-side file statistics. Choose the matching field and confirm it represents the same entity in both datasets.</p></div></div>
-    <div class="panel relationshipControls"><div class="field"><label for="relationshipKey">Matching field</label><select id="relationshipKey" onchange="changeRelationship('key',this.value)">${r.keys.map((k,i)=>`<option value="${i}" ${i===r.key_index?'selected':''}>${esc(k.a)}${k.a!==k.b?' ↔ '+esc(k.b):''}</option>`).join('')}</select></div><div class="field"><label for="relationshipDimension">Category field</label><select id="relationshipDimension" onchange="changeRelationship('dimension',this.value)" ${r.dimensions.length?'':'disabled'}>${r.dimensions.length?relationshipOptions(r.dimensions,r.dimension):'<option>No suitable categories</option>'}</select></div><div class="field"><label for="relationshipMeasure">Measure from the other dataset</label><select id="relationshipMeasure" onchange="changeRelationship('measure',this.value)" ${r.measures.length?'':'disabled'}>${r.measures.length?relationshipOptions(r.measures,r.measure):'<option>No numeric measure available</option>'}</select></div></div>
-    <div class="relationshipGrid"><div class="panel relationshipPanel"><h3>Matching field coverage</h3><p>Distinct nonblank values; shared values may still have duplicate records.</p><div class="relationshipBig"><strong>${intFmt(c.unique_matched)}</strong><span>unambiguous matched record pairs</span></div><div class="relationshipStack" role="img" aria-label="${intFmt(c.only_a)} only in A, ${intFmt(c.shared_distinct)} shared, ${intFmt(c.only_b)} only in B"><span style="width:${width(c.only_a)}%;background:#738caa"></span><span style="width:${width(c.shared_distinct)}%;background:#c9a13f"></span><span style="width:${width(c.only_b)}%;background:#6b9b8e"></span></div><div class="relationshipLegend"><span><i style="background:#738caa"></i>Only A: ${intFmt(c.only_a)}</span><span><i style="background:#c9a13f"></i>Shared: ${intFmt(c.shared_distinct)}</span><span><i style="background:#6b9b8e"></i>Only B: ${intFmt(c.only_b)}</span></div><p>${intFmt(c.ambiguous_shared)} shared values excluded from record analysis because a key repeats. Blank key rows: A ${intFmt(c.missing_rows_a)}, B ${intFmt(c.missing_rows_b)}. Duplicate-key rows: A ${intFmt(c.duplicate_rows_a)}, B ${intFmt(c.duplicate_rows_b)}.</p></div>
-    <div class="panel relationshipPanel"><h3>Matched-field disagreements</h3><p>Top 10 shared fields ranked by difference rate among uniquely matched records. Whitespace is normalized; two blanks are excluded, one blank counts as different.</p><div class="relationshipRows">${fields}</div></div>
-    <div class="panel relationshipPanel" style="grid-column:1 / -1"><h3>Matched records by category</h3><p>Top 10 categories by record count${r.measure?`, with the average ${esc(r.measure.column)} from Dataset ${esc(r.measure.side)} for each group`:''}. Only one-to-one matched keys are included; blank categories are shown separately.</p><div class="relationshipRows">${groups}</div></div></div></section>`;
-}
 function byoAiStatus(info){return `<span class="aiStatus ${info.ai_configured?'on':'off'}">● ${info.ai_configured?'AI connected · '+esc(info.ai_model):'Local analysis · Groq client unavailable'}</span>`;}
 async function getByoChat(){if(!byoPairReady())return {chat:[],ai_configured:false};try{return await api(`/api/byo/chat?left=${encodeURIComponent(state.byoLeft)}&right=${encodeURIComponent(state.byoRight)}`);}catch{return {chat:[],ai_configured:false};}}
 async function askByoAI(prefill=''){
@@ -9064,15 +8924,6 @@ async function renderByo(meta,info){
     try{comparison=await postJson('/api/byo/compare',{left:state.byoLeft,right:state.byoRight});state.byoCompare=comparison;}
     catch(err){state.byoCompare=null;toast('Comparison failed: '+String(err.message||err).slice(0,160));}
   }
-  let relationshipError='';
-  if(state.page==='byo-compare'&&comparison){
-    try{
-      byoRelationshipData=await postJson('/api/byo/relationships',{left:state.byoLeft,right:state.byoRight,...byoRelationshipSelection});
-    }catch(err){
-      byoRelationshipData=null;
-      relationshipError=String(err.message||err);
-    }
-  }
   let reconcileData=null;
   if(byoPairReady()&&state.page==='byo-reconcile'){
     try{
@@ -9113,7 +8964,7 @@ async function renderByo(meta,info){
   }else if(state.page==='byo-reconcile'){
     html=`<div class="hero"><span class="workspaceBadge">Universal Reconciliation & Value Diff</span><h1>Reconciliation Studio</h1><p>Perform interactive record-level matching, value discrepancy diffing, live tolerance tuning, and systematic drift discovery across any two datasets.</p><div class="heroActions"><button class="btn" type="button" onclick="askByoRecAiDiagnosis()">🤖 AI Diagnosis</button><a class="btn secondary" href="/download/byo-reconcile-csv?left=${encodeURIComponent(state.byoLeft)}&right=${encodeURIComponent(state.byoRight)}&left_keys=${encodeURIComponent((state.byoRecLeftKeys||[]).join(','))}&right_keys=${encodeURIComponent((state.byoRecRightKeys||[]).join(','))}&partition=all&numeric_tolerance=${encodeURIComponent(state.byoRecTol||0)}&tolerance_mode=${encodeURIComponent(state.byoRecTolMode||'absolute')}">Export Reconciled CSV</a><a class="btn ghost" href="/download/byo-reconcile-csv?left=${encodeURIComponent(state.byoLeft)}&right=${encodeURIComponent(state.byoRight)}&left_keys=${encodeURIComponent((state.byoRecLeftKeys||[]).join(','))}&right_keys=${encodeURIComponent((state.byoRecRightKeys||[]).join(','))}&partition=discrepancy&numeric_tolerance=${encodeURIComponent(state.byoRecTol||0)}&tolerance_mode=${encodeURIComponent(state.byoRecTolMode||'absolute')}">Export Discrepancies Only</a></div></div>${byoPairPicker(info)}${reconcileData?`<br>${byoReconcilePage(info,reconcileData)}`:`<br>${needPair}`}`;
   }else if(state.page==='byo-compare'){
-    html=`<div class="hero"><span class="workspaceBadge">Dataset A ↔ Dataset B</span><h1>Compare Lab</h1><p>Explore how your datasets connect, investigate matched records, and compare their schema, quality, and numeric fields.</p></div>${byoPairPicker(info)}${comparison?`${relationshipError?`<div class="panel"><h3>Relationship analysis unavailable</h3><p>${esc(relationshipError)}</p></div>`:relationshipLab(byoRelationshipData)}<br>${compareOverview(comparison)}<br><div class="panel"><h3>Detailed field comparison</h3>${genericTable(comparison.column_comparison,'DIY detailed field comparison')}</div><br>${compareDeepDive(comparison)}`:`<br>${needPair}`}`;
+    html=`<div class="hero"><span class="workspaceBadge">Dataset A ↔ Dataset B</span><h1>Compare Lab</h1><p>Run a structured comparison across two saved datasets: shape, schema, completeness, duplicate burden, shared fields, type mismatches, numeric distributions, and likely join keys.</p></div>${byoPairPicker(info)}${comparison?`<br>${compareOverview(comparison)}<br><div class="panel"><h3>Detailed field comparison</h3>${genericTable(comparison.column_comparison,'DIY detailed field comparison')}</div><br>${compareDeepDive(comparison)}`:`<br>${needPair}`}`;
   }else if(state.page==='byo-quality'){
     html=`<div class="hero"><h1>Schema & Quality</h1><p>Compare column completeness, distinctness, duplicates, inferred data types, and schema exceptions across the selected pair.</p></div>${byoPairPicker(info)}${comparison?`<br>${compareQuality(comparison)}`:`<br>${needPair}`}`;
   }else if(state.page==='byo-preview'){
@@ -9133,777 +8984,6 @@ async function renderByo(meta,info){
 function genericTable(rows,exportName=''){if(!rows||!rows.length)return '<div class="empty">No rows available.</div>';const cols=Object.keys(rows[0]);return `<div class="exportTableBlock">${exportBar(exportName,rows.length)}<div class="tableWrap"><table class="table"><thead><tr>${cols.map((c,i)=>`<th class="sortable" onclick="sortTable(this,${i})" title="Click to sort by ${esc(c)}">${esc(c)}<span class="sortIcon">&#x2195;</span></th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(c=>{let v=r[c];const rawVal=v===null||v===undefined?'':String(v);const num=Number(v);const isNum=rawVal!==''&&!isNaN(num);return `<td data-val="${isNum?num:esc(rawVal)}" title="${esc(rawVal)}">${esc(rawVal)}</td>`;}).join('')}</tr>`).join('')}</tbody></table></div></div>`;}
 
 function kanban(rows){const lanes=['Open','In progress','Blocked','Resolved'];return `<div class="kanban">${lanes.map(l=>`<div class="lane"><h4>${l}</h4>${(rows||[]).filter(r=>r.Status===l).map(r=>`<div class="task"><b>${esc(r.Field)}</b><br><span class="muted">${esc(r.Stream)} · ${esc(r.Priority||'')}</span><br>${esc(r.Owner||'Unassigned')}<br><span class="muted">${esc(r.Note||'')}</span></div>`).join('')||'<div class="muted">No items</div>'}</div>`).join('')}</div>`;}
-function welcomePage(){
-  return `<div class="welcome page-enter">
-    <div class="welcomeHero">
-      <div>
-        <span class="welcomeEyebrow">Data assurance, made clearer</span>
-        <h1>Better data starts with <span>the right perspective.</span></h1>
-        <p>Welcome to DART, your home for exploring data quality, understanding risk, and turning findings into action. Choose the workspace that fits the question you want to answer.</p>
-        <div class="welcomeHeroActions"><a href="#welcome-workspaces">Explore the workspaces <span aria-hidden="true">&nbsp;↓</span></a><button type="button" onclick="showPage('settings')">Set my preferences</button></div>
-      </div>
-      <div class="welcomeCompass">
-        <div class="welcomeCompassTitle">A simple way to get started</div>
-        <h2>One platform. Three perspectives.</h2>
-        <div class="welcomeStep"><span class="welcomeStepNumber">01</span><span><b>Choose your focus</b><br>Pick the workspace that matches your data.</span></div>
-        <div class="welcomeStep"><span class="welcomeStepNumber">02</span><span><b>Explore the evidence</b><br>Move from the big picture to the details.</span></div>
-        <div class="welcomeStep"><span class="welcomeStepNumber">03</span><span><b>Take the next step</b><br>Investigate, communicate, and act with context.</span></div>
-      </div>
-    </div>
-    <div class="welcomeHeading" id="welcome-workspaces"><div><span class="welcomeEyebrow">Find your starting point</span><h2>Choose your workspace</h2></div><p>Each workspace is designed for a different kind of investigation. You can switch between them at any time.</p></div>
-    <div class="welcomeCards">
-      <article class="welcomeCard">
-        <div class="welcomeCardTop"><span class="welcomeIcon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 20V10m8 10V4m8 16v-7M2 20h20"/><path d="m3 7 6-3 5 4 6-3"/></svg></span><span class="welcomeCardTag">Reconciliation</span></div>
-        <h3>Medicare</h3><p>Understand how well your Medicare data reconciles, where mismatches occur, and which issues deserve attention first.</p>
-        <ul><li>Explore match rates and reconciliation risk</li><li>Trace findings to fields, mappings, and reports</li><li>Track remediation and monitor data changes</li></ul>
-        <button type="button" onclick="switchWorkspace('medicare')">Open Medicare <span aria-hidden="true">→</span></button>
-      </article>
-      <article class="welcomeCard">
-        <div class="welcomeCardTop"><span class="welcomeIcon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 21s7-3.5 7-10V5l-7-3-7 3v6c0 6.5 7 10 7 10Z"/><path d="M9 11h6m-3-3v6"/></svg></span><span class="welcomeCardTag">State intelligence</span></div>
-        <h3>Medicaid</h3><p>Explore Medicaid data quality across states, compare performance, and investigate claims and program-level patterns.</p>
-        <ul><li>Explore state dashboards and the US heatmap</li><li>Compare states and examine quality indicators</li><li>Review claims analysis and executive insights</li></ul>
-        <button type="button" onclick="switchWorkspace('medicaid')">Open Medicaid <span aria-hidden="true">→</span></button>
-      </article>
-      <article class="welcomeCard">
-        <div class="welcomeCardTop"><span class="welcomeIcon" aria-hidden="true"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/></svg></span><span class="welcomeCardTag">Your data</span></div>
-        <h3>Build Your Own</h3><p>Bring your own datasets into a flexible workspace to explore their structure, compare two files, and investigate differences.</p>
-        <ul><li>Upload and organize your own datasets</li><li>Compare schemas, records, and data quality</li><li>Ask questions and export your findings</li></ul>
-        <button type="button" onclick="switchWorkspace('byo')">Open Build Your Own <span aria-hidden="true">→</span></button>
-      </article>
-    </div>
-    <div class="welcomeNote"><div><b>Make DART yours</b><p>Choose a preferred workspace and start page in Settings, or return here from the workspace menu whenever you need a fresh starting point.</p></div><button class="btn secondary" type="button" onclick="showPage('settings')">Open settings</button></div>
-  </div>`;
-}
-function sectionShell(items,content){return `<div class="pageShell"><aside class="sectionRail"><div class="railTitle">On this page</div>${items.map(x=>`<a href="#${x[0]}">${x[1]}</a>`).join('')}</aside><div>${content}</div></div>`;}
-function section(id,title,content){return `<section class="sectionBlock" id="${id}"><div class="sectionTitle"><h2>${title}</h2></div>${content}</section>`;}
-function renderAuth(){document.body.dataset.workspace='auth';if(document.getElementById('workspaceSwitcher'))document.getElementById('workspaceSwitcher').style.display='none';document.getElementById('navlinks').innerHTML='';document.getElementById('footer').innerHTML='';document.getElementById('app').innerHTML=`<div class="hero"><h1>DART</h1><p><b>Data Assurance Reconciliation Tracker</b>. Sign in or create a local prototype account to save a profile in <code>dart_users.json</code>.</p></div><div class="grid grid2"><form class="panel" id="loginForm"><h2>Login</h2><div class="field"><label>Username</label><input id="loginUser" autocomplete="username"></div><div class="field"><label>Password</label><input id="loginPass" type="password" autocomplete="current-password"></div><br><button class="btn" type="submit">Login</button></form><form class="panel" id="signupForm"><h2>Create profile</h2><p class="muted">Saved to <code>dart_users.json</code> in the same folder as this app.</p><div class="field"><label>Username</label><input id="signupUser" autocomplete="username"></div><div class="field"><label>Password</label><input id="signupPass" type="password" autocomplete="new-password"></div><div class="field"><label>Display name</label><input id="signupName" placeholder="Nick Holmes"></div><div class="field"><label>Email</label><input id="signupEmail" placeholder="name@example.com"></div><div class="field"><label>Organization</label><input id="signupOrg" placeholder="Team or organization"></div><br><button class="btn" type="submit">Create profile</button></form></div>`;document.getElementById('loginForm').onsubmit=submitLogin;document.getElementById('signupForm').onsubmit=submitSignup;refreshThemeVisuals(document.getElementById('app'));}
-async function submitLogin(e){e.preventDefault();try{await postJson('/api/login',{username:document.getElementById('loginUser').value,password:document.getElementById('loginPass').value});sessionStorage.setItem('dart_fresh_login','1');sessionStorage.removeItem('dart_target_page');toast('Logged in');window.location.reload();}catch(err){console.error(err);toast('Login failed');}}
-async function submitSignup(e){e.preventDefault();try{await postJson('/api/signup',{username:document.getElementById('signupUser').value,password:document.getElementById('signupPass').value,display_name:document.getElementById('signupName').value,email:document.getElementById('signupEmail').value,organization:document.getElementById('signupOrg').value});sessionStorage.setItem('dart_fresh_login','1');toast('Profile created');window.location.reload();}catch(err){console.error(err);toast('Could not create profile');}}
-async function logoutUser(){await postJson('/api/logout',{});['dart_workspace','dart_target_page','dart_fresh_login','dart_byo_left','dart_byo_right'].forEach(k=>sessionStorage.removeItem(k));toast('Logged out');window.location.reload();}
-async function saveProfile(e){if(e)e.preventDefault();await postJson('/api/profile',{display_name:profileName.value,email:profileEmail.value,organization:profileOrg.value,role:profileRole.value,password:profilePass.value});toast('Profile saved');state.meta=await api('/api/meta');await render();}
-function renderOnboarding(){
-  document.body.dataset.workspace='onboarding';
-  if(document.getElementById('workspaceSwitcher'))document.getElementById('workspaceSwitcher').style.display='none';
-  document.getElementById('navlinks').innerHTML='';document.getElementById('footer').innerHTML='';
-  document.getElementById('app').innerHTML=`<div class="hero"><span class="workspaceBadge">One-time setup</span><h1>Build your DART workspace</h1><p>Your persona now controls where DART opens, which actions are emphasized, how much detail is surfaced, and how AI/briefing content is framed. No features are removed—you can still navigate anywhere.</p></div><form class="panel" id="personaForm"><h2>Personalize the experience</h2><div class="grid grid2"><div class="field"><label>Program</label><select id="program"><option>Medicare</option><option>Medicaid</option><option>Both</option><option>Other / General</option></select></div><div class="field"><label>Primary role</label><select id="role"><option>Executive / Leadership</option><option>Data / Analytics</option><option>Program / Policy</option><option>Operations</option><option>Quality / Compliance</option><option>IT / Engineering</option><option>Research</option><option>Other</option></select></div><div class="field"><label>Focus areas</label><input id="focus" value="Data quality, Claims, Reporting impact, AI insights"></div><div class="field"><label>Audience</label><select id="audience"><option>Leadership</option><option>Myself</option><option>Analysts</option><option>Program teams</option><option>Technical teams</option><option>External stakeholders</option></select></div><div class="field"><label>Detail level</label><select id="depth"><option>Executive</option><option selected>Balanced</option><option>Technical</option></select></div><div class="field"><label>First question</label><input id="first_question" placeholder="Which areas need the most attention?"></div><div class="field"><label>Preferred workspace</label><select id="preferred_workspace"><option value="medicare">Medicare</option><option value="medicaid">Medicaid</option><option value="byo">Build Your Own</option></select></div><div class="field"><label>Start page</label><select id="landing_page">${personaLandingOptions('auto')}</select><div class="personaPrefNote">Choose “Recommended for my role” and DART will pick the most useful start page automatically.</div></div></div><br><button class="btn" type="submit">Build Workspace</button></form>`;
-  document.getElementById('personaForm').onsubmit=savePersona;refreshThemeVisuals(document.getElementById('app'));
-}
-async function savePersona(e){
-  if(e)e.preventDefault();
-  const payload={program:document.getElementById('program').value,role:document.getElementById('role').value,audience:document.getElementById('audience').value,depth:document.getElementById('depth').value,focus:document.getElementById('focus').value.split(',').map(x=>x.trim()).filter(Boolean),geography:['National'],first_question:document.getElementById('first_question').value,preferred_workspace:document.getElementById('preferred_workspace').value,landing_page:document.getElementById('landing_page').value};
-  try{
-    const saved=await postJson('/api/persona',payload);
-    state.meta=await api('/api/meta');
-    state.workspace=saved.preferred_workspace||state.meta.persona?.preferred_workspace||'medicare';
-    state.page=saved.landing_page||state.meta.persona?.landing_page||workspaceHomes[state.workspace]||'home';
-    sessionStorage.setItem('dart_workspace',state.workspace);
-    toast('Workspace created');
-    setNav();
-    await render();
-  }catch(err){console.error(err);toast('Could not save workspace');}
-}
-async function saveSettings(e){
-  if(e)e.preventDefault();
-  const payload={program:document.getElementById('setProgram').value,role:document.getElementById('setRole').value,audience:document.getElementById('setAudience').value,depth:document.getElementById('setDepth').value,focus:document.getElementById('setFocus').value.split(',').map(x=>x.trim()).filter(Boolean),geography:['National'],first_question:document.getElementById('setQuestion').value,preferred_workspace:document.getElementById('setPreferredWorkspace').value,landing_page:document.getElementById('setLandingPage').value};
-  await postJson('/api/persona',payload);toast('Persona and startup preferences saved');state.meta=await api('/api/meta');await render();
-}
-async function showPage(id){state.page=id;sessionStorage.setItem('dart_page',id);setNav();await render();}
-function filterLabel(key){const arr=state.filters[key];if(arr===null||arr===undefined)return 'All values';if(!arr.length)return 'No values';return arr.length===1?arr[0]:`${arr.length} selected`;}
-function openFilterModal(key,title,items){modalState={key,title,items:[...items],selected:[...(state.filters[key]||items)]};modalTitle.textContent=title;modalSub.textContent='Search and select values. Leave everything selected to include all values.';modalSearch.value='';filterModal.style.display='flex';renderModalOptions();}
-function closeFilterModal(){filterModal.style.display='none';}
-function visibleModalItems(){const q=modalSearch.value.toLowerCase().trim();return modalState.items.filter(x=>String(x).toLowerCase().includes(q));}
-function safeArg(v){return String(v).replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
-function renderModalOptions(){const visible=visibleModalItems();modalOptions.innerHTML=visible.map(x=>`<label class="chip"><input type="checkbox" data-val="${esc(x)}" ${modalState.selected.includes(x)?'checked':''} onchange="toggleModalValue('${safeArg(x)}',this.checked)"><span>${esc(x)}</span></label>`).join('')||'<div class="empty">No matching values.</div>';}
-function toggleModalValue(v,on){if(on&&!modalState.selected.includes(v))modalState.selected.push(v);if(!on)modalState.selected=modalState.selected.filter(x=>x!==v);}
-function modalSelectAll(on){const visible=visibleModalItems();if(on){visible.forEach(v=>{if(!modalState.selected.includes(v))modalState.selected.push(v);});}else{modalState.selected=modalState.selected.filter(v=>!visible.includes(v));}renderModalOptions();}
-function applyFilterModal(){const all=modalState.items;const sel=modalState.selected;if(sel.length===0){state.filters[modalState.key]=[];}else if(sel.length===all.length){state.filters[modalState.key]=null;}else{state.filters[modalState.key]=sel;}closeFilterModal();render();}
-function clearCurrentFilter(){state.filters[modalState.key]=null;closeFilterModal();render();}
-function removeCustomFilter(i){state.filters.custom_filters.splice(i,1);render();}
-function addCustomFilter(){const field=customField.value;const op=customOp.value;const value=customValue.value.trim();if(!field||!value){toast('Choose a field and value');return;}state.filters.custom_filters=state.filters.custom_filters||[];state.filters.custom_filters.push({field,op,value});customValue.value='';render();}
-function activeFilterTags(){const tags=[];[['streams','Streams'],['classes','Classification'],['tiers','Risk tier'],['reasons','Drivers']].forEach(([k,l])=>{const v=state.filters[k];if(v&&v.length)tags.push(`<span class="filterTag">${l}: ${esc(v.join(', '))}<button onclick="state.filters.${k}=null;render()">x</button></span>`);});(state.filters.custom_filters||[]).forEach((f,i)=>tags.push(`<span class="filterTag">${esc(f.field)} ${esc(f.op)} ${esc(f.value)}<button onclick="removeCustomFilter(${i})">x</button></span>`));return tags.length?`<div class="activeFilters">${tags.join('')}</div>`:'';}
-function filterBar(meta){if(!filterPages.has(state.page))return '';const cols=(meta.columns_list||[]).map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');return `<details class="panel filters" style="margin-bottom:16px"><summary>Data scope and filters <span class="navNote">Click a filter to open a searchable selector. Add custom field filters below.</span></summary><div class="filterGrid"><div class="field"><label>Search everything</label><input id="search" placeholder="Table, field, stream, system, recommendation" value="${esc(state.filters.search)}"></div><div class="filterPicker"><label>Streams</label><button class="btn filterButton" onclick='openFilterModal("streams","Streams",${JSON.stringify(meta.streams)})'><span>${esc(filterLabel('streams'))}</span><span class="filterCount">Choose values ▾</span></button></div><div class="filterPicker"><label>Classification</label><button class="btn filterButton" onclick='openFilterModal("classes","Classification",${JSON.stringify(meta.classes)})'><span>${esc(filterLabel('classes'))}</span><span class="filterCount">Choose values ▾</span></button></div><div class="filterPicker"><label>Risk tier</label><button class="btn filterButton" onclick='openFilterModal("tiers","Risk tier",${JSON.stringify(meta.tiers)})'><span>${esc(filterLabel('tiers'))}</span><span class="filterCount">Choose values ▾</span></button></div><div class="filterPicker"><label>Drivers</label><button class="btn filterButton" onclick='openFilterModal("reasons","Drivers",${JSON.stringify(meta.reasons)})'><span>${esc(filterLabel('reasons'))}</span><span class="filterCount">Choose values ▾</span></button></div></div><div class="advancedGrid"><div class="field"><label>Custom field</label><select id="customField">${cols}</select></div><div class="field"><label>Operator</label><select id="customOp"><option value="contains">contains</option><option value="equals">equals</option><option value="not_equals">does not equal</option><option value="starts_with">starts with</option><option value="ends_with">ends with</option><option value="gt">greater than</option><option value="gte">greater than or equal</option><option value="lt">less than</option><option value="lte">less than or equal</option></select></div><div class="field"><label>Value</label><input id="customValue" placeholder="Value to filter on"></div><button class="btn" onclick="addCustomFilter()">Add custom filter</button></div><div class="advancedGrid"><div class="field"><label>Min match %</label><input id="minRate" type="range" min="0" max="100" value="${state.filters.min_rate*100}" oninput="minRateLabel.textContent=this.value+'%'"><div class="rangeLine">Current: <span id="minRateLabel">${state.filters.min_rate*100}%</span></div></div><div class="field"><label>Min impact</label><input id="minImpact" type="number" min="0" value="${state.filters.min_impact||0}"></div><div class="field"><label>Min unmatched</label><input id="minUnmatched" type="number" min="0" value="${state.filters.min_unmatched||0}"></div><div class="field"><label>View</label><select id="actionsOnly"><option value="false">All rows</option><option value="true" ${state.filters.actions_only?'selected':''}>Needs action only</option></select></div></div><br><button class="btn" onclick="readFilters();render()">Apply filters</button> <button class="btn secondary" onclick="resetFilters()">Reset filters</button>${activeFilterTags()}</details>`;}
-function readFilters(){state.filters.min_rate=Number(minRate.value||0)/100;state.filters.min_impact=Number(minImpact.value||0);state.filters.min_unmatched=Number(minUnmatched.value||0);state.filters.actions_only=actionsOnly.value==='true';state.filters.search=search.value;state.filters.custom_filters=state.filters.custom_filters||[];}
-async function resetFilters(){state.filters={streams:null,classes:null,tiers:null,reasons:null,min_rate:0,min_impact:0,min_unmatched:0,actions_only:false,search:'',custom_filters:[]};await render();}
-async function getData(){return postJson('/api/view',state.filters);}
-function closeMetricModal(){if(typeof metricModal!=='undefined'&&metricModal)metricModal.style.display='none';if(typeof metricModalBody!=='undefined'&&metricModalBody)metricModalBody.innerHTML='';streamModalState=null;}
-function keyActivate(event,fn){if(event.key==='Enter'||event.key===' '){event.preventDefault();fn();}}
-
-var METRIC_HELP={
-  'health score':'Event-weighted reconciliation quality across the current Medicare scope. Higher-volume fields influence this score more, so it is the strongest single executive quality signal; higher is better.',
-  'risk score':'Average impact score across the current scope. Impact combines mismatch severity with reconciliation volume, so higher values indicate greater potential operational or reporting risk.',
-  'critical items':'Count of fields currently classified in the Critical risk tier based on DART impact-score thresholds.',
-  'open issues':'Items that still require attention. In Medicare this means findings needing review/change; in Medicaid it means quality issues whose status is still open.',
-  'unmatched volume':'Total claim or event volume that did not reconcile between the compared source and target fields in the current scope.',
-  'affected reports':'Distinct downstream reports mapped or estimated to be exposed to the current reconciliation findings.',
-  'weighted quality signal':'Matched volume divided by total matched plus unmatched volume. High-volume fields carry more weight than low-volume fields; higher is better.',
-  'elevated or critical risk fields':'Number of fields whose calculated impact places them in either the Elevated or Critical DART risk tier.',
-  'reports that may need review':'Count of downstream reports associated with current findings and therefore candidates for validation after remediation.',
-  'volume-weighted match':'Matched claims divided by total reconciliation volume for this stream. This prevents tiny fields from influencing the result as much as high-volume fields.',
-  'weighted match':'Matched claims divided by matched plus unmatched claims for the current stream and filters; higher is better.',
-  'average field match':'Simple average of field-level match percentages in the stream. Every comparable field contributes equally regardless of volume.',
-  'field average':'Simple mean of match rates across comparable fields. Unlike weighted match, each field has equal influence.',
-  'fields':'Number of reconciliation fields represented in the current stream or filtered scope.',
-  'not matched':'Total unmatched claim/event count for the stream. This is volume, not the number of fields.',
-  'avg impact':'Mean DART impact score across fields in the stream. Higher values indicate a more consequential mismatch profile.',
-  'critical':'Number of fields or records currently in the highest DART risk tier.',
-  'total issues':'All Medicaid quality issue records in the current national, state, or filtered scope regardless of status.',
-  'total quality issues':'All Medicaid claim-quality issues represented in the current claims-analysis scope.',
-  'resolved':'Issues or workflow items whose remediation status is complete/resolved.',
-  'open':'Issues or workflow items that remain active and require remediation or review.',
-  'cancelled':'Issues closed without being recorded as successfully resolved.',
-  'states':'Number of state Medicaid programs represented in the current nationwide workspace.',
-  'quality grade':'Prototype state quality grade derived from the state quality/composite scoring logic. It is a decision-support indicator, not an official CMS rating.',
-  'quality score':'Composite state quality score used for Medicaid comparison and heatmap ranking. It reflects resolution, backlog/cancellation behavior, and sample confidence; higher is better.',
-  'duplicate rate':'Estimated duplicate-claim rate for the selected state based on the prototype claims-quality model; lower is better.',
-  'us dup rank':'Nationwide rank for duplicate-claim rate. Rank #1 is the lowest/best duplicate rate, so lower rank numbers are better.',
-  'issue types':'Number of distinct CMS quality issue categories represented in the current data.',
-  'states analyzed':'Number of states that meet the current sample-size threshold and are included in the analysis.',
-  'states with data':'Number of states with issue records available under the current filters.',
-  'avg success':'Average share of issues resolved across the included state programs; higher is better.',
-  'avg confidence':'Average sample-size confidence used by the Medicaid comparison model. Larger underlying issue samples generally produce higher confidence.',
-  'minimum sample':'Minimum number of issues a state must have to be included in the current comparison or insight analysis.',
-  'avg backlog':'Average share of issues still open across included states. Lower is generally better.',
-  'avg quality':'Average composite Medicaid quality score across the states included in the current executive scope.',
-  'coverage':'Share of state programs meeting the current analysis threshold and therefore represented in the executive metrics.',
-  'success rate':'Percentage of issues in scope that are resolved successfully; higher is better.',
-  'resolution rate':'Resolved issues divided by total issues in the selected scope; higher is better.',
-  'backlog rate':'Percentage of issues that remain open in the selected scope; lower is generally better.',
-  'cancellation rate':'Percentage of issues closed as cancelled rather than resolved.',
-  'cancel rate':'Percentage of issues closed as cancelled rather than successfully resolved.',
-  'resolved issues':'Count of issue records currently marked resolved in the selected heatmap/state scope.',
-  'cancelled issues':'Count of issue records currently marked cancelled in the selected heatmap/state scope.',
-  'monitoring agents':'Number of registered Medicaid monitoring subscriptions configured to watch quality conditions.',
-  'modeled exposure':'Planning estimate of financial exposure produced by the prototype issue-volume and cost-multiplier model. It is not an audited recovery amount.',
-  'priority opportunities':'Number of state-and-issue-type combinations surfaced as the strongest modeled remediation opportunities.',
-  'top opportunity':'State associated with the highest-ranked modeled optimization opportunity in the current scope.',
-  'top modeled risk':'Largest modeled money-at-risk value among the current opportunities. It is a prioritization proxy rather than an audited loss estimate.',
-  'open quality issues':'Count of Medicaid quality issues that remain open and make up the current remediation backlog.',
-  'rows':'Number of data records in the selected dataset.',
-  'columns':'Number of fields detected in the selected dataset.',
-  'completeness':'Percentage of all dataset cells that contain a non-missing value; higher generally indicates better data completeness.',
-  'missing cells':'Total blank/null cells across all rows and columns in the selected dataset.',
-  'duplicate rows':'Count of rows that exactly duplicate another row across the full set of dataset columns.',
-  'numeric fields':'Number of columns detected as numeric and therefore available for quantitative profiling/comparison.',
-  'saved datasets':'Number of reusable CSV/XLSX files currently stored in the Build Your Own persistent dataset library.',
-  'rows available':'Total number of rows across all saved Build Your Own datasets.',
-  'storage':'Repo-relative folder where Build Your Own dataset files are persisted between app restarts.',
-  'ai analyst':'Connection status for the Build Your Own grounded AI analyst. Connected means the configured Groq/OpenAI-compatible model is available.',
-  'shared columns':'Number of column names present in both selected datasets.',
-  'type mismatches':'Shared columns whose inferred data type differs between Dataset A and Dataset B.',
-  'row difference b − a':'Dataset B row count minus Dataset A row count. Positive means B has more rows; negative means A has more.',
-  'completeness delta':'Dataset B completeness minus Dataset A completeness, expressed in percentage points. Positive means B is more complete.',
-  'controls':'Number of saved governance controls in the DART control register.',
-  'active':'Governance controls currently marked Active and therefore in operation.',
-  'mappings':'Number of saved source-to-target lineage mappings in the DART mapping catalog.',
-  'issues':'Number of saved remediation workflow items available to the Governance/Remediation workflow.',
-  'watcher':'Current background Email Agent watcher state. A healthy/running state means DART is periodically checking enabled automations for workbook changes.',
-  'check interval':'How often the Email Agent watcher checks the source workbook for qualifying changes.',
-  'email delivery':'Whether SMTP delivery is configured and ready for Email Agent notifications.',
-  'raw rows':'Number of source workbook data rows currently available to the Raw Data Editor.',
-  'raw columns':'Number of editable source workbook columns detected by the Raw Data Editor.',
-  'last saved':'Most recent modified timestamp reported for the source workbook.',
-  'stream scorecard':'Executive summary for one reconciliation stream. Volume-weighted match weights fields by claim volume; Average field match gives each comparable field equal weight; Fields counts mapped fields; Not matched is unmatched claim/event volume; Critical counts highest-tier fields; Avg impact is the mean DART impact score.'
-};
-function normalizeMetricLabel(v){return String(v||'').trim().toLowerCase().replace(/\s+/g,' ');}
-function metricHelpLabel(host){
-  if(host.classList.contains('scorecard'))return 'Stream scorecard';
-  if(host.classList.contains('metric'))return host.querySelector('.label')?.textContent||'';
-  if(host.classList.contains('medKpi'))return host.querySelector('.label')?.textContent||'';
-  if(host.classList.contains('statusCard'))return host.querySelector('.muted')?.textContent||'';
-  if(host.classList.contains('streamStat'))return host.querySelector('.k')?.textContent||'';
-  if(host.classList.contains('compareMetric'))return host.querySelector('.k')?.textContent||'';
-  if(host.classList.contains('medHeatMiniKpi'))return host.querySelector('span')?.textContent||'';
-  if(host.classList.contains('miniCard'))return host.querySelector('span')?.textContent||'';
-  return '';
-}
-function metricHelpDescription(label,host){
-  const key=normalizeMetricLabel(label);
-  if(key==='open'&&state.page==='actioncenter')return 'Number of saved remediation workflow items currently in Open status.';
-  if(key==='in progress')return 'Number of saved remediation workflow items actively being worked but not yet resolved.';
-  if(key==='blocked')return 'Number of saved remediation workflow items that cannot progress until a dependency, decision, or data issue is cleared.';
-  if(key==='resolved'&&state.page==='actioncenter')return 'Number of saved remediation workflow items marked Resolved.';
-  if(key==='workbook'&&state.page==='emailagent')return 'Whether the Excel workbook monitored by the Email Agent is currently available at the configured source path.';
-  if(key==='workbook'&&state.page==='raweditor')return 'The source Excel workbook currently opened by the Raw Data Editor for cell-level writeback.';
-  if(METRIC_HELP[key])return METRIC_HELP[key];
-  const sub=host.querySelector('.sub')?.textContent||host.querySelector('.muted')?.textContent||'';
-  return `Shows ${label} for the current page and active filters.${sub?` The card's secondary note (“${sub.trim()}”) gives the local context for how the value is being reported.`:''}`;
-}
-function decorateMetricHelp(root=document){
-  if(!root||!root.querySelectorAll)return;
-  const selector='.metric,.miniCard,.medKpi,.statusCard,.streamStat,.compareMetric,.medHeatMiniKpi,.scorecard';
-  root.querySelectorAll(selector).forEach(host=>{
-    if(host.querySelector(':scope > .metricInfoWrap'))return;
-    const label=metricHelpLabel(host).trim();if(!label)return;
-    host.classList.add('metricHelpHost');
-    const wrap=document.createElement('span');wrap.className='metricInfoWrap';
-    const icon=document.createElement('span');icon.className='metricInfoButton';icon.tabIndex=0;icon.setAttribute('role','button');icon.setAttribute('aria-label',`About ${label}`);icon.textContent='i';
-    const tip=document.createElement('span');tip.className='metricInfoTooltip';tip.setAttribute('role','tooltip');
-    const title=document.createElement('b');title.textContent=label;
-    const body=document.createElement('span');body.textContent=metricHelpDescription(label,host);
-    tip.append(title,body);wrap.append(icon,tip);host.appendChild(wrap);
-    const stop=e=>{e.stopPropagation();if(e.type==='click')e.preventDefault();};
-    icon.addEventListener('click',stop);icon.addEventListener('mousedown',stop);icon.addEventListener('pointerdown',stop);
-    icon.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();}});
-  });
-}
-async function openMetricDrill(kind,title){try{streamModalState=null;metricModalTitle.textContent=title;metricModalSub.textContent='Loading rows behind this metric…';metricModalBody.innerHTML='<div class="empty">Loading data…</div>';metricModal.style.display='flex';const result=await postJson('/api/drilldown/'+encodeURIComponent(kind),state.filters);metricModalSub.textContent=`${intFmt(result.total)} row${Number(result.total)===1?'':'s'} in the current filtered scope${result.truncated?' · showing the first '+intFmt(result.rows.length):''}.`;metricModalBody.innerHTML=table(result.rows,true,title);}catch(err){metricModalSub.textContent='Could not load metric details.';metricModalBody.innerHTML=`<div class="empty">${esc(err.message||err)}</div>`;}}
-function openLocalDrill(title,subtitle,rows){streamModalState=null;metricModalTitle.textContent=title;metricModalSub.textContent=subtitle||`${intFmt((rows||[]).length)} record${(rows||[]).length===1?'':'s'}.`;metricModalBody.innerHTML=simpleTable(rows||[],title);metricModal.style.display='flex';}
-function metricCard(label,value,sub,kind,extraClass=''){const action=()=>openMetricDrill(kind,label);return `<div class="panel metric metricClickable ${extraClass}" role="button" tabindex="0" onclick="openMetricDrill('${kind}','${esc(label)}')" onkeydown="keyActivate(event,()=>openMetricDrill('${kind}','${esc(label)}'))"><div class="label">${esc(label)}</div><div class="value" title="${esc(value)}">${value}</div><div class="sub">${esc(sub)}</div></div>`;}
-function metrics(s){return `<div class="grid grid4">${metricCard('Health score',s.health_score,'Event-weighted quality','health','health')}${metricCard('Critical items',s.critical,'Highest risk tier','critical')}${metricCard('Actionable items',s.actions,'Require review, change, or remediation','open-issues')}${metricCard('Unmatched volume',s.unmatched,'Current scope','unmatched','unmatchedMetric')}</div>`;}
-function miniDeck(s){return '';}
-var streamModalState=null;
-async function openStreamDetails(stream){try{metricModalTitle.textContent=`${stream} stream details`;metricModalSub.textContent='Loading stream metrics and underlying data…';metricModalBody.innerHTML='<div class="empty">Loading stream data…</div>';metricModal.style.display='flex';const result=await postJson('/api/stream-detail/'+encodeURIComponent(stream),state.filters);streamModalState={data:result,tab:'overview'};metricModalSub.textContent=`${intFmt(result.total)} field${Number(result.total)===1?'':'s'} in ${stream} under the current filters${result.truncated?' · large tables are truncated':''}.`;renderStreamModal();}catch(err){metricModalSub.textContent='Could not load stream details.';metricModalBody.innerHTML=`<div class="empty">${esc(err.message||err)}</div>`;}}
-function setStreamTab(tab){if(!streamModalState)return;streamModalState.tab=tab;renderStreamModal();}
-function streamTabs(active){const tabs=[['overview','Overview'],['fields','Fields'],['risk','Risk'],['unmatched','Unmatched'],['classifications','Classifications'],['remediation','Remediation'],['mapping','Mapping & impact']];return `<div class="modalTabs" role="tablist">${tabs.map(([id,label])=>`<button class="modalTab ${active===id?'active':''}" type="button" onclick="setStreamTab('${id}')">${label}</button>`).join('')}</div>`;}
-function streamOverview(s){return `<div class="streamOverviewGrid"><div class="streamStat"><div class="k">Weighted match</div><div class="v">${s.weighted_rate}</div></div><div class="streamStat"><div class="k">Field average</div><div class="v">${s.field_average}</div></div><div class="streamStat"><div class="k">Fields</div><div class="v">${intFmt(s.rows)}</div></div><div class="streamStat"><div class="k">Unmatched volume</div><div class="v">${s.unmatched}</div></div><div class="streamStat"><div class="k">Critical</div><div class="v">${s.critical}</div></div><div class="streamStat"><div class="k">Risk score</div><div class="v">${s.risk_score}</div></div></div>`;}
-function renderStreamModal(){if(!streamModalState)return;const d=streamModalState.data;const tab=streamModalState.tab;const stream=d.stream||'stream';let body='';if(tab==='overview'){body=`${streamOverview(d.summary)}<div class="grid grid2"><div class="panel"><h3>Risk tier mix</h3>${simpleTable(d.risk_summary,stream+' risk tier mix')}</div><div class="panel"><h3>Classification mix</h3>${simpleTable(d.classification_summary,stream+' classification mix')}</div></div><div class="modalSection"><h3>Highest-impact fields</h3>${table((d.rows||[]).slice(0,25),true,stream+' highest-impact fields')}</div>`;}else if(tab==='fields'){body=`<div class="modalSection"><h3>All fields in this stream</h3>${table(d.rows,false,stream+' all fields')}</div>`;}else if(tab==='risk'){body=`<div class="modalSection"><h3>Critical and elevated fields</h3>${table(d.risk_rows,true,stream+' risk fields')}</div>`;}else if(tab==='unmatched'){body=`<div class="modalSection"><h3>Fields with unmatched volume</h3>${table(d.unmatched_rows,true,stream+' unmatched fields')}</div>`;}else if(tab==='classifications'){body=`<div class="grid grid2"><div class="panel"><h3>Classification counts</h3>${simpleTable(d.classification_summary,stream+' classification counts')}</div><div class="panel"><h3>Risk tier counts</h3>${simpleTable(d.risk_summary,stream+' risk tier counts')}</div></div><div class="modalSection"><h3>Field-level classification data</h3>${table(d.rows,true,stream+' field classifications')}</div>`;}else if(tab==='remediation'){body=`<div class="modalSection"><h3>Fields needing change or review</h3>${table(d.remediation_rows,true,stream+' remediation fields')}</div><div class="modalSection"><h3>Saved workflow issues for this stream</h3>${simpleTable(d.workflow_issues,stream+' workflow issues')}</div>`;}else if(tab==='mapping'){body=`<div class="modalSection"><h3>Saved lineage mappings</h3>${simpleTable(d.mappings,stream+' lineage mappings')}</div><div class="modalSection"><h3>Saved report / KPI impacts</h3>${simpleTable(d.impacts,stream+' report KPI impacts')}</div>`;}metricModalBody.innerHTML=streamTabs(tab)+body;decorateMetricHelp(metricModalBody);}
-function safeFilename(name){return String(name||'dart-export').trim().replace(/[^a-z0-9._-]+/gi,'_').replace(/^_+|_+$/g,'')||'dart-export';}
-function csvCell(v){const s=String(v??'').replace(/\r?\n/g,' ');return '"'+s.replace(/"/g,'""')+'"';}
-function exportRenderedTable(button,filename){const block=button.closest('.exportTableBlock');const tbl=block?.querySelector('table');if(!tbl){toast('No table data to export');return;}const lines=[...tbl.querySelectorAll('tr')].map(tr=>[...tr.children].map(cell=>csvCell(cell.innerText.trim())).join(','));const blob=new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=safeFilename(filename)+'.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),500);toast('CSV exported');}
-function exportBar(exportName,rowCount){return exportName?`<div class="exportTableBar"><span class="modalDataNote">${intFmt(rowCount)} row${Number(rowCount)===1?'':'s'}</span><button class="btn secondary small" type="button" onclick="exportRenderedTable(this,'${safeArg(exportName)}')">Export CSV</button></div>`:'';}
-function table(rows,limitCols=false,exportName=''){if(!rows||!rows.length)return '<div class="empty">No rows match the current selection.</div>';const cols=limitCols?['Stream','NCH Target Column','MatchRate','NotMatchedClaims','RiskTier','ImpactScore','Recommendation']:['Stream','NCH Target Table','NCH Target Column','SS Table','SS Column','MatchedClaims','NotMatchedClaims','MatchRate','Classification','RiskTier','ImpactScore','Sub-Classification','Disposition','Recommendation'];return `<div class="exportTableBlock">${exportBar(exportName,rows.length)}<div class="tableWrap"><table class="table"><thead><tr>${cols.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(c=>{let v=r[c];if(c==='MatchRate')return `<td><div>${pctNum(v)}</div><div class="bar"><span style="width:${Math.max(0,Math.min(100,Number(v||0)*100))}%"></span></div></td>`;if(c==='RiskTier')return `<td><span class="pill ${esc(v)}">${esc(v)}</span></td>`;return `<td>${esc(v)}</td>`}).join('')}</tr>`).join('')}</tbody></table></div></div>`;}
-function simpleTable(rows,exportName=''){if(!rows||!rows.length)return '<div class="empty">Nothing saved yet. Starter examples will appear where helpful.</div>';const cols=Object.keys(rows[0]);return `<div class="exportTableBlock">${exportBar(exportName,rows.length)}<div class="tableWrap"><table class="table"><thead><tr>${cols.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(c=>`<td>${esc(r[c])}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div>`;}
-function cards(items){return items.map(r=>`<div class="insight"><b>${esc(r.Stream)} · ${esc(r['NCH Target Column'])}</b><br><span class="muted">${pctNum(r.MatchRate)} match · ${intFmt(r.NotMatchedClaims)} unmatched · ${esc(r.RiskTier)} risk · impact ${esc(r.ImpactScore)}</span><br>${esc(r.Recommendation)}</div>`).join('<br>')||'<div class="empty">No priority findings in the current scope.</div>';}
-function runInjectedScripts(root){root.querySelectorAll('script').forEach(oldScript=>{const newScript=document.createElement('script');Array.from(oldScript.attributes).forEach(attr=>newScript.setAttribute(attr.name,attr.value));newScript.textContent=oldScript.textContent;oldScript.parentNode.replaceChild(newScript,oldScript);});if(window.Plotly){setTimeout(()=>{root.querySelectorAll('.plotly-graph-div').forEach(g=>{try{Plotly.Plots.resize(g);}catch(err){console.warn('Plotly resize skipped',err);}});applyPlotlyTheme(root);},75);}else{syncThemeSwitch();}}
-function executiveBrief(data,meta){const s=data.summary;const p=meta.persona||{};const top=(s.top_actions||[]).slice(0,6).map((r,i)=>`${i+1}. ${r.Stream} · ${r['NCH Target Column']} | ${pctNum(r.MatchRate)} match | ${intFmt(r.NotMatchedClaims)} unmatched | ${r.RiskTier} | impact ${r.ImpactScore}`).join('\n')||'No priority findings in the current scope.';return `Executive Brief\n\nAudience: ${p.audience||'Leadership'}\nProgram: ${p.program||'Not specified'}\nRole lens: ${p.role||'Not specified'}\n\nExecutive Risk Rating\n- Health score: ${s.health_score}\n- Risk score: ${s.risk_score}\n- Critical items: ${s.critical}\n- Open actions: ${s.actions}\n- Affected reports: ${s.affected_reports}\n\nOverall Data Quality\n- Field average: ${s.field_average}\n- Event-weighted match: ${s.weighted_rate}\n- Unmatched volume: ${s.unmatched}\n\nPriority Findings\n${top}\n\nDecision Support Recommendations\n1. Validate highest-impact mappings first.\n2. Confirm lineage for affected fields and downstream reports.\n3. Assign owners for critical and elevated items in the Remediation Center.\n4. Use Impact Explorer for fields that support executive KPIs.\n5. Review Governance Center controls for ownership and evidence.\n\nDecision Required\nConfirm whether critical mappings should be prioritized for remediation in the next review cycle.`}
-function aiInsights(data){const s=data.summary;const t=s.top_actions||[];const top=t[0]||{};const second=t[1]||{};const stream=(s.stream_summary||[])[0]||{};return [{title:'Highest priority risk',body:top.Stream?`${top.Stream} · ${top['NCH Target Column']} has ${pctNum(top.MatchRate)} match with ${intFmt(top.NotMatchedClaims)} unmatched claims.`:'No priority risk in current scope.',action:'Validate mapping and lineage for this field.'},{title:'Largest contributor by stream',body:stream.Stream?`${stream.Stream} contributes the largest unmatched volume in the current scope.`:'No stream summary available.',action:'Review stream-level scorecard and issue queue.'},{title:'Next best action',body:second.Stream?`After the top risk, review ${second.Stream} · ${second['NCH Target Column']} because it also appears in the priority queue.`:'Create an issue only if a priority finding appears.',action:'Use the Remediation Center to assign an owner and status.'},{title:'Governance angle',body:`Current health score is ${s.health_score}, with ${s.actions} action candidates and ${s.affected_reports} affected reports.`,action:'Use Governance Center to capture owners, controls, and evidence.'}]}
-function insightsHtml(items){return `<div class="grid grid4">${items.map(x=>`<div class="panel"><h3>${esc(x.title)}</h3><p>${esc(x.body)}</p><p class="muted"><b>Recommendation:</b> ${esc(x.action)}</p></div>`).join('')}</div>`}
-function scorecards(rows){return `<div class="grid grid3">${rows.map(r=>`<div class="panel scorecard scorecardClickable" role="button" tabindex="0" onclick="openStreamDetails('${safeArg(r.Stream)}')" onkeydown="keyActivate(event,()=>openStreamDetails('${safeArg(r.Stream)}'))"><h2>${esc(r.Stream)}</h2><p class="muted">Stream scorecard</p><div class="scoreLine"><span>Volume-weighted match</span><b>${pctNum(r.WeightedMatch)}</b></div><div class="scoreLine"><span>Average field match</span><b>${pctNum(r.AverageMatch)}</b></div><div class="scoreLine"><span>Fields</span><b>${intFmt(r.Fields)}</b></div><div class="scoreLine"><span>Not matched</span><b>${intFmt(r.NotMatched)}</b></div><div class="scoreLine"><span>Critical</span><b>${intFmt(r.Critical)}</b></div><div class="scoreLine"><span>Avg impact</span><b>${Number(r.AverageImpact||0).toFixed(2)}</b></div></div>`).join('')}</div>`}
-function metricExplanations(){return `<div class="grid grid3 explain"><div class="panel"><h3>Health score</h3><p><b>What it means:</b> Event-weighted match quality across the current filtered scope.</p><p><b>How to use it:</b> Use it as the executive quality signal because higher-volume fields influence it more.</p></div><div class="panel"><h3>Field average</h3><p><b>What it means:</b> Average match rate across comparable fields, treating each field equally.</p><p><b>How to use it:</b> Good for breadth. It can hide volume concentration, so compare it with weighted match.</p></div><div class="panel"><h3>Weighted rate</h3><p><b>What it means:</b> Matched claims divided by total claims in scope.</p><p><b>How to use it:</b> Good for workload and business-volume weighting.</p></div><div class="panel"><h3>Risk score</h3><p><b>What it means:</b> Average impact score in the scope.</p><p><b>Formula:</b> (1 - Match Rate) x log(1 + Total Claims).</p></div><div class="panel"><h3>Risk tier</h3><p><b>What it means:</b> Stable, Watch, Elevated, or Critical based on impact score.</p><p><b>How to use it:</b> Sort remediation work by tier before drilling into drivers.</p></div><div class="panel"><h3>Affected reports</h3><p><b>What it means:</b> Reports/KPIs mapped in Impact Explorer or inferred from the current stream/report scope.</p><p><b>How to use it:</b> Converts technical variance into stakeholder impact.</p></div></div>`;}
-function lineageEditor(rows){return `<div class="panel"><h3>Add or update mapping</h3><div class="editRow"><input id="linId" placeholder="ID, leave blank for new"><input id="linStream" placeholder="Stream"><input id="linSourceTable" placeholder="Source table"><input id="linSourceField" placeholder="Source field"></div><div class="editRow"><input id="linTargetTable" placeholder="Target table"><input id="linTargetField" placeholder="Target field"><input id="linReport" placeholder="Report"><input id="linKPI" placeholder="KPI"></div><div class="editRow"><input id="linOwner" placeholder="Owner"><select id="linStatus"><option>Draft</option><option>Validated</option><option>Needs review</option><option>Retired</option></select><input id="linRiskTier" placeholder="Risk tier"><input id="linNotes" placeholder="Notes"></div><button class="btn" onclick="saveLineage()">Save mapping</button> <button class="btn secondary" onclick="seedLineage()">Seed from current data</button></div><br><div class="panel"><h3>Active mappings</h3>${editableLineageTable(rows)}</div>`;}
-function editableLineageTable(rows){if(!rows||!rows.length)return '<div class="empty">No mappings yet.</div>';const cols=['id','Stream','SourceTable','SourceField','TargetTable','TargetField','Report','KPI','Owner','Status','RiskTier','Notes'];return `<div class="tableWrap"><table class="table"><thead><tr>${cols.map(c=>`<th>${c}</th>`).join('')}<th>Actions</th></tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(c=>`<td>${esc(r[c])}</td>`).join('')}<td><button class="btn small secondary" onclick='loadLineage(${JSON.stringify(r).replace(/'/g,"'")})'>Edit</button> <button class="btn small ghost" onclick="deleteLineage('${esc(r.id)}')">Delete</button></td></tr>`).join('')}</tbody></table></div>`;}
-function loadLineage(r){linId.value=r.id||'';linStream.value=r.Stream||'';linSourceTable.value=r.SourceTable||'';linSourceField.value=r.SourceField||'';linTargetTable.value=r.TargetTable||'';linTargetField.value=r.TargetField||'';linReport.value=r.Report||'';linKPI.value=r.KPI||'';linOwner.value=r.Owner||'';linStatus.value=r.Status||'Draft';linRiskTier.value=r.RiskTier||'';linNotes.value=r.Notes||'';window.scrollTo({top:0,behavior:'smooth'});}
-async function saveLineage(){const payload={id:linId.value,Stream:linStream.value,SourceTable:linSourceTable.value,SourceField:linSourceField.value,TargetTable:linTargetTable.value,TargetField:linTargetField.value,Report:linReport.value,KPI:linKPI.value,Owner:linOwner.value,Status:linStatus.value,RiskTier:linRiskTier.value,Notes:linNotes.value};await postJson('/api/lineage',payload);toast('Mapping saved');await render();}
-async function deleteLineage(id){await del('/api/lineage/'+encodeURIComponent(id));toast('Mapping deleted');await render();}
-async function seedLineage(){await postJson('/api/seed-lineage',{});toast('Lineage seeded from current data');await render();}
-function impactEditor(rows, dataRows){return `<div class="grid grid2"><div class="panel"><h3>Map a field to a report/KPI</h3><div class="field"><label>Field</label><select id="impactField">${dataRows.map((r,i)=>`<option value="${i}">${esc(r.Stream)} · ${esc(r['NCH Target Column'])}</option>`).join('')}</select></div><div class="field"><label>Report / dashboard</label><input id="impactReport" placeholder="Claims Integrity Dashboard"></div><div class="field"><label>KPI</label><input id="impactKpi" placeholder="Match Rate, Paid Claims, Denials"></div><div class="field"><label>Business owner</label><input id="impactOwner" placeholder="Reporting"></div><div class="field"><label>Impact</label><select id="impactLevel"><option>Low</option><option>Moderate</option><option>High</option><option>Critical</option></select></div><div class="field"><label>Decision need</label><input id="impactDecision" placeholder="Confirm remediation priority"></div><br><button class="btn" onclick='addImpact(${JSON.stringify(dataRows).replace(/'/g,"'")})'>Map report impact</button></div><div class="panel"><h3>Saved impact map</h3>${simpleTable(rows)}</div></div>`;}
-function governanceEditor(rows){return `<div class="grid grid2"><div class="panel"><h3>Create governance control</h3><input id="govId" placeholder="ID, leave blank for new"><br><br><input id="govControl" placeholder="Control"><br><br><input id="govOwner" placeholder="Owner"><br><br><input id="govCadence" placeholder="Cadence"><br><br><select id="govStatus"><option>Draft</option><option>Planned</option><option>Active</option><option>Blocked</option><option>Retired</option></select><br><br><textarea id="govEvidence" placeholder="Evidence source or notes"></textarea><br><button class="btn" onclick="saveGovernance()">Save control</button></div><div class="panel"><h3>Governance controls</h3>${governanceTable(rows)}</div></div>`;}
-function governanceTable(rows){if(!rows||!rows.length)return '<div class="empty">No governance controls saved.</div>';const cols=['id','Control','Owner','Cadence','Status','Evidence'];return `<div class="tableWrap"><table class="table"><thead><tr>${cols.map(c=>`<th>${c}</th>`).join('')}<th>Actions</th></tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(c=>`<td>${esc(r[c])}</td>`).join('')}<td><button class="btn small secondary" onclick='loadGovernance(${JSON.stringify(r).replace(/'/g,"'")})'>Edit</button> <button class="btn small ghost" onclick="deleteGovernance('${esc(r.id)}')">Delete</button></td></tr>`).join('')}</tbody></table></div>`;}
-function loadGovernance(r){govId.value=r.id||'';govControl.value=r.Control||'';govOwner.value=r.Owner||'';govCadence.value=r.Cadence||'';govStatus.value=r.Status||'Draft';govEvidence.value=r.Evidence||'';}
-async function saveGovernance(){await postJson('/api/governance',{id:govId.value,Control:govControl.value,Owner:govOwner.value,Cadence:govCadence.value,Status:govStatus.value,Evidence:govEvidence.value});toast('Governance control saved');await render();}
-async function deleteGovernance(id){await del('/api/governance/'+encodeURIComponent(id));toast('Governance control deleted');await render();}
-function workspacePlaceholder(title,description,items=[]){return `<div class="hero"><span class="workspaceBadge">${esc(workspaceLabels[state.workspace]||'Workspace')}</span><h1>${esc(title)}</h1><p>${esc(description)}</p></div><div class="panel workspaceEmpty"><h3>Workspace is separated from Medicare data</h3><p class="muted">The current All Streams reconciliation workbook is treated as Medicare-only. No Medicare rows are reused here.</p>${items.length?`<div class="grid grid3">${items.map(x=>`<div class="miniCard"><b>${esc(x[0])}</b><span>${esc(x[1])}</span></div>`).join('')}</div>`:''}</div>`;}
-function renderSharedPage(meta){document.getElementById('footer').innerHTML=`DART ${esc(meta.version)} · ${esc(workspaceLabels[state.workspace]||'Workspace')} · FastAPI`;const html=state.page==='profile'?profilePage(meta):settingsPage(meta);const appEl=document.getElementById('app');appEl.innerHTML=html;runInjectedScripts(appEl);decorateMetricHelp(appEl);refreshThemeVisuals(appEl);ensureAssistantBubble();} 
-function workspaceChatMeta(key){
-  if(key==='medicaid')return {label:'CMS Q&A',subtitle:'Medicaid workspace',route:'medicaid-chat'};
-  if(key==='byo')return {label:'AI Analyst',subtitle:'Build Your Own',route:'byo-ai'};
-  return {label:'DART Copilot',subtitle:'Medicare workspace',route:'copilot'};
-}
-function getScopedHistory(key){
-  const store=state.chatHistories||{medicare:{activeId:'general',sessions:[{id:'general',title:'DART Copilot',messages:[]}]},medicaid:{activeId:'medicaid',sessions:[{id:'medicaid',title:'CMS Q&A',messages:[]}]},byo:{activeId:'byo',sessions:[{id:'byo',title:'AI Analyst',messages:[]}]} };
-  const bucket=store[key]||{activeId:'default',sessions:[{id:'default',title:workspaceChatMeta(key).label,messages:[]}]};
-  if(!bucket.sessions||!bucket.sessions.length){bucket.sessions=[{id:'default',title:workspaceChatMeta(key).label,messages:[]}];bucket.activeId='default';}
-  if(!bucket.sessions.find(s=>s.id===bucket.activeId)){bucket.activeId=bucket.sessions[0].id;}
-  store[key]=bucket;
-  return bucket;
-}
-function persistChatHistoryState(){
-  try{sessionStorage.setItem('dart_chat_histories_v1', JSON.stringify(state.chatHistories||{}));}catch(_err){}
-}
-function setPrimarySessionMessages(key,primaryId,messages){
-  // Only ever overwrites the single primary/default session, never whichever
-  // session happens to be active, so custom bubble conversations stay isolated.
-  const bucket=getScopedHistory(key);
-  const session=bucket.sessions.find(s=>s.id===primaryId);
-  if(!session)return;
-  session.messages = Array.isArray(messages) ? messages.map(m=>({role:m?.role||'assistant', content:String(m?.content??'')})) : [];
-  persistChatHistoryState();
-}
-function syncChatHistoryFromWorkspaceState(){
-  const medicareList=Array.isArray(state.meta?.chat)?state.meta.chat:[];
-  if(medicareList.length)setPrimarySessionMessages('medicare','general',medicareList);
-  if(Array.isArray(state.medicaidChat)&&state.medicaidChat.length)setPrimarySessionMessages('medicaid','medicaid',state.medicaidChat);
-  if(Array.isArray(state.byoChat)&&state.byoChat.length)setPrimarySessionMessages('byo','byo',state.byoChat);
-}
-function assistantBubbleWorkspaceKey(){
-  if(state.workspace==='medicaid')return 'medicaid';
-  if(state.workspace==='byo')return 'byo';
-  return 'medicare';
-}
-function toggleAssistantBubble(forceOpen){
-  const host=document.getElementById('assistantBubbleHost');
-  if(!host)return;
-  const panel=host.querySelector('.assistantBubblePanel');
-  const shouldOpen=typeof forceOpen==='boolean'?forceOpen:!panel || panel.style.display==='none';
-  if(panel){panel.style.display=shouldOpen?'block':'none';}
-  state.assistantBubbleOpen=shouldOpen;
-  const launcher=host.querySelector('.assistantBubbleLauncher');
-  if(shouldOpen&&launcher){launcher.classList.remove('throwDart');void launcher.offsetWidth;launcher.classList.add('throwDart');}
-}
-function ensureAssistantBubble(){
-  let host=document.getElementById('assistantBubbleHost');
-  if(!host){
-    host=document.createElement('div');
-    host.id='assistantBubbleHost';
-    host.className='assistantBubbleHost';
-    document.body.appendChild(host);
-  }
-  const key=assistantBubbleWorkspaceKey();
-  const info=workspaceChatMeta(key);
-  const bucket=getScopedHistory(key);
-  const active=bucket.sessions.find(s=>s.id===bucket.activeId) || bucket.sessions[0];
-  const messages=active?.messages||[];
-  const list=messages.length ? messages.map(m=>`<div class="assistantBubbleMessage ${m.role==='user'?'user':'assistant'}"><span class="assistantBubbleMessageRole">${m.role==='user'?'You':'AI'}</span><div class="assistantBubbleMessageBody">${m.role==='assistant'?renderMarkdown(m.content):esc(m.content)}</div></div>`).join('') : '<div class="assistantBubbleEmpty">No messages in this conversation yet. Ask a question below to get started.</div>';
-  const historyItems=bucket.sessions.map(s=>`<div class="historyItem ${s.id===bucket.activeId?'active':''}">
-        <button type="button" class="historyItemLabel" onclick="selectAssistantChat('${key}','${esc(s.id)}')">${esc(s.title)}</button>
-        <button type="button" class="historyItemIcon" title="Rename conversation" onclick="renameAssistantChat(event,'${key}','${esc(s.id)}')">✎</button>
-        <button type="button" class="historyItemIcon" title="Delete conversation" onclick="deleteAssistantChat(event,'${key}','${esc(s.id)}')">🗑</button>
-      </div>`).join('');
-  const datasetBar=key!=='byo' ? '' : `<div class="assistantBubbleDatasetBar">
-        <select class="assistantBubbleDatasetSelect" onchange="setByoSelection('left',this.value)">${byoDatasetOptions(state.byoInfo||{datasets:[]},state.byoLeft,state.byoRight)}</select>
-        <span class="assistantBubbleDatasetVs">vs</span>
-        <select class="assistantBubbleDatasetSelect" onchange="setByoSelection('right',this.value)">${byoDatasetOptions(state.byoInfo||{datasets:[]},state.byoRight,state.byoLeft)}</select>
-      </div>`;
-  host.innerHTML=`<div class="assistantBubblePanel" ${state.assistantBubbleOpen===false?'style="display:none"':''}>
-      <div class="assistantBubbleHeader">
-        <div class="assistantBubbleHeaderText"><span class="assistantBubbleCompact">${esc(info.label)}</span><span class="assistantBubbleSubtitle">${esc(info.subtitle)}</span></div>
-        <button type="button" aria-label="Close assistant" onclick="toggleAssistantBubble(false)">×</button>
-      </div>
-      <div class="assistantBubbleHistoryBar">
-        <div class="assistantBubbleHistorySelect" id="assistantBubbleHistorySelect">
-          <button type="button" class="assistantBubbleHistoryCurrent" onclick="toggleAssistantHistoryMenu(event)">
-            <span class="historyDot"></span><span class="historyTitle">${esc(active?.title||'Conversation')}</span><span class="historyChevron">▾</span>
-          </button>
-          <div class="assistantBubbleHistoryMenu">${historyItems}</div>
-        </div>
-        <button type="button" class="assistantBubbleNewChat" onclick="createAssistantChat('${key}')">+ New</button>
-      </div>
-      ${datasetBar}
-      <div class="assistantBubbleMessages">${list}</div>
-      <div class="assistantBubbleComposer">
-        <textarea id="assistantBubblePrompt" placeholder="Ask the ${esc(info.label)} assistant…"></textarea>
-        <button type="button" onclick="sendWorkspaceBubblePrompt('${key}')">Send</button>
-      </div>
-    </div>
-    <button class="assistantBubbleLauncher" type="button" onclick="toggleAssistantBubble()" aria-label="Open workspace AI assistant">
-      <svg class="dartboardIcon" viewBox="0 0 48 48" width="34" height="34" aria-hidden="true"><circle cx="24" cy="24" r="22" fill="#fdf6e3" stroke="#1a1a1a" stroke-width="2"/><circle cx="24" cy="24" r="17.5" fill="#c0392b"/><circle cx="24" cy="24" r="12.5" fill="#fdf6e3"/><circle cx="24" cy="24" r="7.5" fill="#c0392b"/><circle cx="24" cy="24" r="3" fill="#1a1a1a"/></svg>
-      <svg class="dartArrow" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><line x1="3" y1="3" x2="15" y2="15" stroke="#24324a" stroke-width="2.4" stroke-linecap="round"/><polygon points="21,21 12,21 21,12" fill="#e0473f"/><path d="M3 3 L7 3 M3 3 L3 7" stroke="#e0473f" stroke-width="2" stroke-linecap="round"/></svg>
-    </button>`;
-  const panel=host.querySelector('.assistantBubblePanel');
-  if(panel && !state.assistantBubbleOpen && !panel.style.display){panel.style.display='block';}
-  const promptEl=document.getElementById('assistantBubblePrompt');
-  if(promptEl && promptEl.value){promptEl.focus();}
-}
-function toggleAssistantHistoryMenu(e){
-  e.stopPropagation();
-  const wrap=document.getElementById('assistantBubbleHistorySelect');
-  if(wrap)wrap.classList.toggle('open');
-}
-function closeAssistantHistoryMenu(){
-  const wrap=document.getElementById('assistantBubbleHistorySelect');
-  if(wrap)wrap.classList.remove('open');
-}
-function selectAssistantChat(key,id){
-  const bucket=getScopedHistory(key);
-  bucket.activeId=id;
-  persistChatHistoryState();
-  ensureAssistantBubble();
-}
-async function createAssistantChat(key){
-  const bucket=getScopedHistory(key);
-  const info=workspaceChatMeta(key);
-  const id=key+'-'+Date.now();
-  bucket.sessions.push({id,title:`${info.label} ${bucket.sessions.length+1}`,messages:[]});
-  bucket.activeId=id;
-  persistChatHistoryState();
-  ensureAssistantBubble();
-  // Clear the corresponding server-side conversation memory so a "new" chat
-  // does not inherit context from an older, unrelated conversation.
-  try{
-    if(key==='medicare')await postJson('/api/copilot/reset',{});
-    else if(key==='byo')await postJson('/api/byo/chat/reset',{});
-  }catch(_err){/* non-fatal: worst case the model sees stale context on the next reply */}
-}
-function renameAssistantChat(e,key,id){
-  e.stopPropagation();
-  const bucket=getScopedHistory(key);
-  const session=bucket.sessions.find(s=>s.id===id);
-  if(!session)return;
-  const next=prompt('Rename conversation',session.title);
-  if(next===null)return;
-  const trimmed=next.trim();
-  if(!trimmed)return;
-  session.title=trimmed.slice(0,60);
-  persistChatHistoryState();
-  ensureAssistantBubble();
-}
-function deleteAssistantChat(e,key,id){
-  e.stopPropagation();
-  const bucket=getScopedHistory(key);
-  if(bucket.sessions.length<=1){toast('Keep at least one conversation per workspace');return;}
-  if(!confirm('Delete this conversation?'))return;
-  bucket.sessions=bucket.sessions.filter(s=>s.id!==id);
-  if(bucket.activeId===id)bucket.activeId=bucket.sessions[0].id;
-  persistChatHistoryState();
-  ensureAssistantBubble();
-}
-async function sendWorkspaceBubblePrompt(key){
-  const input=document.getElementById('assistantBubblePrompt');
-  const prompt=(input?.value||'').trim();
-  if(!prompt)return;
-  const bucket=getScopedHistory(key);
-  // Capture the exact conversation the question was asked in. Every later
-  // write looks this session back up by id, so switching or creating
-  // conversations while a reply is in flight can never misfile the answer.
-  const sessionId=bucket.activeId;
-  const session=bucket.sessions.find(s=>s.id===sessionId);
-  if(!session)return;
-  session.messages.push({role:'user',content:prompt});
-  if(input)input.value='';
-  persistChatHistoryState();
-  ensureAssistantBubble();
-  const appendReply=(content)=>{
-    const target=getScopedHistory(key).sessions.find(s=>s.id===sessionId);
-    if(target)target.messages.push({role:'assistant',content:String(content??'')});
-    persistChatHistoryState();
-    ensureAssistantBubble();
-  };
-  try{
-    if(key==='medicaid'){
-      const result=await postJson('/api/medicaid/ai-chat',{question:prompt});
-      let content=result.answer||'I could not generate an answer from the current data.';
-      if(result.details?.length)content+='\n\n'+result.details.map(x=>'- '+x).join('\n');
-      appendReply(content);
-    }else if(key==='byo'){
-      if(!byoPairReady()){appendReply('Select two Build Your Own datasets before asking the AI analyst.');return;}
-      const r=await postJson('/api/byo/chat',{prompt,left:state.byoLeft,right:state.byoRight});
-      appendReply(r.answer||'I could not generate an answer from the selected dataset context.');
-    }else{
-      const r=await postJson('/api/copilot',{prompt,filters:state.filters});
-      appendReply(r.answer||'I could not generate an answer from the current context.');
-    }
-  }catch(err){
-    appendReply(`I could not reach the AI service. ${err?.message||String(err)}`);
-  }
-}
-function medMoney(v){const n=Number(v||0),a=Math.abs(n),sign=n<0?'-':'';if(a>=1e9)return `${sign}$${(a/1e9).toFixed(2)}B`;if(a>=1e6)return `${sign}$${(a/1e6).toFixed(2)}M`;if(a>=1e3)return `${sign}$${(a/1e3).toFixed(1)}K`;return `${sign}$${a.toLocaleString(undefined,{maximumFractionDigits:0})}`;}
-function medIssueLabel(id){return state.medicaidIssueLabels?.[id]||String(id||'').replaceAll('_',' ').replace(/\b\w/g,m=>m.toUpperCase());}
-function medIssueOptions(selected='',includeAll=true){const labels=state.medicaidIssueLabels||{};const ids=Object.keys(labels);return `${includeAll?`<option value="">All issue types</option>`:''}${ids.map(id=>`<option value="${esc(id)}" ${selected===id?'selected':''}>${esc(labels[id])}</option>`).join('')}`;}
-function medKpis(items){return `<div class="grid grid5 medKpis">${items.map(([label,value,sub,cls=''])=>`<div class="panel medKpi ${cls}"><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="sub">${esc(sub||'')}</div></div>`).join('')}</div>`;}
-function medStatusPill(v){const s=String(v||'').toLowerCase();return `<span class="medStatus ${esc(s)}">${esc(s==='done'?'Resolved':s==='cancelled'?'Cancelled':'Open')}</span>`;}
-function medPriorityPill(v){return `<span class="medPriority ${esc(String(v||'').toLowerCase())}">${esc(v||'')}</span>`;}
-function medStateCard(s){const total=Number(s.total_issues||0),done=Number(s.done_issues||0),open=Number(s.open_issues||0);const rate=total?done/total*100:0;return `<button class="medStateCard" onclick="openMedicaidState(${Number(s.id)})"><div class="medStateTop"><b>${esc(s.name)}</b><span>${rate.toFixed(0)}% resolved</span></div><div class="medStateStats"><span><b>${intFmt(total)}</b>Total</span><span><b>${intFmt(open)}</b>Open</span><span><b>${intFmt(done)}</b>Resolved</span></div><div class="medProgress"><i style="width:${Math.max(0,Math.min(100,rate))}%"></i></div></button>`;}
-function medLeaderboard(rows){return `<div class="medLeaderboard">${(rows||[]).map((r,i)=>`<button onclick="openMedicaidState(${Number(r.id)})"><span class="medRank">${i+1}</span><span class="medLeadName"><b>${esc(r.state)}</b><small>${intFmt(r.total)} issues · ${r.confidence}% confidence</small></span><span class="medLeadScore">${Number(r.composite_score||0).toFixed(1)}</span></button>`).join('')}</div>`;}
-function openMedicaidState(id,returnPage='medicaid-states'){state.medicaidStateId=Number(id);state.medicaidStateReturnPage=returnPage||'medicaid-states';state.page='medicaid-state';render();}
-async function medUpdateIssue(id,stateId,status){await postJson(`/api/medicaid/issue/${id}/status`,{status});toast('Issue status updated');state.medicaidStateId=Number(stateId);await render();}
-async function medCreateIssue(event,stateId){event.preventDefault();const f=event.target;await postJson(`/api/medicaid/state/${stateId}/issue`,{title:f.querySelector('[name=title]').value,description:f.querySelector('[name=description]').value,status:f.querySelector('[name=status]').value,priority:f.querySelector('[name=priority]').value,issue_type:f.querySelector('[name=issue_type]').value});toast('Issue created');await render();}
-function medIssueTable(issues,stateId){if(!issues?.length)return '<div class="empty">No issues match the current filters.</div>';return `<div class="tableWrap"><table class="table medIssueTable"><thead><tr><th>Issue</th><th>Type</th><th>Status</th><th>Priority</th><th>Metric</th><th>Started</th><th>Days open</th><th>Tags</th><th>Action</th></tr></thead><tbody>${issues.map(i=>`<tr><td><b>${esc(i.title)}</b><div class="muted medDesc">${esc(i.description||'')}</div></td><td>${esc(medIssueLabel(i.issue_type))}</td><td>${medStatusPill(i.status)}</td><td>${medPriorityPill(i.priority)}</td><td>${i.metric_value===null||i.metric_value===undefined?'—':Number(i.metric_value).toLocaleString()}</td><td>${esc(i.start_date||'—')}</td><td>${i.days_open===null||i.days_open===undefined?'—':intFmt(i.days_open)}</td><td>${esc(i.tags||'—')}</td><td><select class="medInlineSelect" onchange="medUpdateIssue(${Number(i.id)},${Number(stateId)},this.value)"><option value="open" ${i.status==='open'?'selected':''}>Open</option><option value="done" ${i.status==='done'?'selected':''}>Resolved</option><option value="cancelled" ${i.status==='cancelled'?'selected':''}>Cancelled</option></select></td></tr>`).join('')}</tbody></table></div>`;}
-function medTopbar(title,sub,actions=''){return `<div class="hero medHero"><span class="workspaceBadge">Medicaid State Intelligence</span><h1>${esc(title)}</h1><p>${esc(sub)}</p>${actions?`<div class="heroActions">${actions}</div>`:''}</div>`;}
-function medDashboardPage(d,meta){state.medicaidIssueLabels=d.issue_labels||{};const t=d.totals||{};const actions=`<button class="btn" onclick="showPage('medicaid-states')">Explore states</button><button class="btn secondary" onclick="showPage('medicaid-heatmap')">Open US heatmap</button><button class="btn ghost" onclick="showPage('medicaid-ai')">AI insights</button>`;return `${medTopbar('Medicaid Quality Dashboard','Nationwide CMS claim-quality tracking across all 50 states with issue status, rankings, state drill-downs, and quarterly quality indicators.',actions)}${medKpis([['Total issues',intFmt(t.total),'Across all 50 states'],['Resolved',intFmt(t.done),`${Number(t.resolution_rate||0).toFixed(1)}% resolution rate`],['Open',intFmt(t.open),'Active quality backlog','warn'],['Cancelled',intFmt(t.cancelled),'Closed without resolution'],['States','50','Nationwide coverage']])}<br><div class="grid grid2 medDashboardGrid"><div class="panel"><div class="medSectionHead"><div><h3>National quality leaderboard</h3><p class="muted">Composite score combines resolution, cancellation, backlog, and sample confidence.</p></div><button class="btn ghost small" onclick="showPage('medicaid-compare')">Compare all</button></div>${medLeaderboard(d.leaderboard)}</div><div class="panel"><div class="medSectionHead"><div><h3>All state programs</h3><p class="muted">Open any state for its complete issue tracker and CMS quality summary.</p></div><input class="medStateSearch" placeholder="Filter states..." oninput="medFilterStateCards(this.value)"></div><div class="medStateGrid" id="medStateGrid">${(d.states||[]).map(medStateCard).join('')}</div></div></div><br>${personaLensPanel(meta)}`;}
-function medFilterStateCards(q){q=String(q||'').toLowerCase();document.querySelectorAll('#medStateGrid .medStateCard').forEach(x=>x.style.display=x.textContent.toLowerCase().includes(q)?'':'none');}
-function medStatesPage(d){state.medicaidIssueLabels=d.issue_labels||{};return `${medTopbar('State Explorer','Browse all 50 state Medicaid programs, review open/resolved issue volume, and drill into a state-level issue workspace.',`<a class="btn secondary" href="/download/medicaid/issues.csv">Export all issues</a><button class="btn ghost" onclick="showPage('medicaid-compare')">Compare states</button>`)}<div class="panel"><div class="medSectionHead"><div><h3>50-state issue tracker</h3><p class="muted">State cards are backed by the same seeded state/issue model used in the standalone application.</p></div><input class="medStateSearch" placeholder="Search state..." oninput="medFilterStateCards(this.value)"></div><div class="medStateGrid wide" id="medStateGrid">${(d.states||[]).map(medStateCard).join('')}</div></div>`;}
-function medStatePage(payload,summary){state.medicaidIssueLabels=payload.issue_labels||{};const s=payload.state,sm=payload.summary,dup=summary.duplicate_claims||{};const typeRows=Object.entries(summary.type_breakdown||{}).map(([id,v])=>({'Issue type':medIssueLabel(id),'Total':v.total,'Open':v.open_count,'Resolved':v.done_count,'Q1 2026 metric':v.current_metric??'—','US rank':summary.issue_type_rankings?.[id]??'—'}));return `${medTopbar(`${s.name} Medicaid Quality`,`State-specific CMS issue tracking, quality grade, nationwide rankings, and remediation workflow.`,`<button class="btn secondary" onclick="showPage('${state.medicaidStateReturnPage==='medicaid-heatmap'?'medicaid-heatmap':'medicaid-states'}')">${state.medicaidStateReturnPage==='medicaid-heatmap'?'Back to heatmap':'Back to states'}</button><a class="btn ghost" href="/download/medicaid/issues.csv?state=${encodeURIComponent(s.name)}">Export ${esc(s.code)} issues</a>`)}${medKpis([['Quality grade',esc(summary.quality_grade),'Prototype CMS quality grade'],['Total issues',intFmt(sm.total),'Current filtered state scope'],['Open',intFmt(sm.open),`${Number(sm.success_rate||0).toFixed(1)}% resolved`,'warn'],['Duplicate rate',`${Number(dup.rate||0).toFixed(2)}%`,`${Number(dup.vs_national||0)>=0?'+':''}${Number(dup.vs_national||0).toFixed(2)} vs national avg`],['US dup rank',`#${dup.rank||'—'}`,`of ${dup.total_states||50} · lower is better`]])}<br><div class="grid grid2"><div class="panel"><h3>Issue-type scorecard</h3>${genericTable(typeRows,`${s.name}_issue_type_scorecard`)}</div><div class="panel"><h3>Create a state issue</h3><p class="muted">Adds a custom issue directly to the Medicaid state database.</p><form onsubmit="medCreateIssue(event,${Number(s.id)})"><div class="field"><label>Title</label><input name="title" required placeholder="Describe the state issue"></div><div class="field"><label>Description</label><textarea name="description" rows="3" placeholder="Evidence, context, or remediation notes"></textarea></div><div class="grid grid3"><div class="field"><label>Status</label><select name="status"><option value="open">Open</option><option value="done">Resolved</option><option value="cancelled">Cancelled</option></select></div><div class="field"><label>Priority</label><select name="priority"><option>low</option><option selected>medium</option><option>high</option></select></div><div class="field"><label>Issue type</label><select name="issue_type">${medIssueOptions('',false)}<option value="general">General</option></select></div></div><br><button class="btn" type="submit">Create issue</button></form></div></div><br><div class="panel"><div class="medSectionHead"><div><h3>${esc(s.name)} issue register</h3><p class="muted">Change issue status inline. Updates persist in the Medicaid SQLite workspace.</p></div><div class="heroActions"><select class="medInlineSelect" onchange="state.medicaidStateStatus=this.value;render()"><option value="" ${!state.medicaidStateStatus?'selected':''}>All statuses</option><option value="open" ${state.medicaidStateStatus==='open'?'selected':''}>Open</option><option value="done" ${state.medicaidStateStatus==='done'?'selected':''}>Resolved</option><option value="cancelled" ${state.medicaidStateStatus==='cancelled'?'selected':''}>Cancelled</option></select><select class="medInlineSelect" onchange="state.medicaidStateType=this.value;render()">${medIssueOptions(state.medicaidStateType||'',true)}</select></div></div>${medIssueTable(payload.issues,s.id)}</div>`;}
-function medComparePage(d){state.medicaidIssueLabels=d.issue_labels||state.medicaidIssueLabels||{};const rows=(d.rows||[]).sort((a,b)=>b.composite_score-a.composite_score);const display=rows.map((r,i)=>({'Rank':i+1,'State':r.state,'Total':r.total,'Resolved':r.successful,'Open':r.open,'Cancelled':r.cancelled,'Success %':`${r.success_rate}%`,'Backlog %':`${r.backlog_rate}%`,'Confidence %':`${r.confidence}%`,'Composite':r.composite_score}));const ids='medCompareChart';const script=`<scr${''}ipt>(function(){const rows=${JSON.stringify(rows)};if(!window.Plotly)return;Plotly.newPlot('${ids}',[{type:'bar',x:rows.slice(0,15).map(r=>r.state),y:rows.slice(0,15).map(r=>r.composite_score),text:rows.slice(0,15).map(r=>r.composite_score.toFixed(1)),textposition:'outside',hovertemplate:'%{x}<br>Quality score %{y:.1f}<extra></extra>'}],{margin:{l:45,r:20,t:20,b:90},paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{color:'#fff7d1'},xaxis:{tickangle:-40},yaxis:{range:[0,100],title:'Composite score'}},{responsive:true,displayModeBar:false});})();</scr${''}ipt>`;return `${medTopbar('Compare States','Benchmark Medicaid quality outcomes across states using the standalone app’s success, backlog, cancellation, confidence, and composite-score logic.',`<a class="btn ghost" href="/download/medicaid/issues.csv${state.medicaidIssueType?`?issue_type=${encodeURIComponent(state.medicaidIssueType)}`:''}">Export issues</a>`)}<div class="panel"><div class="filterGrid" style="grid-template-columns:1fr 180px auto"><div class="field"><label>Issue type</label><select onchange="state.medicaidIssueType=this.value;render()">${medIssueOptions(state.medicaidIssueType||'',true)}</select></div><div class="field"><label>Minimum sample</label><input type="number" min="0" value="${Number(state.medicaidMinTotal||0)}" onchange="state.medicaidMinTotal=Number(this.value||0);render()"></div><button class="btn secondary" style="align-self:end" onclick="state.medicaidIssueType='';state.medicaidMinTotal=0;render()">Reset</button></div></div><br><div class="panel"><h3>Quality-score leaderboard</h3><div id="${ids}" class="medChart"></div>${script}</div><br><div class="panel"><h3>State comparison table</h3>${genericTable(display,'medicaid_state_comparison')}</div>`;}
-function medAnalyticsPage(a){state.medicaidIssueLabels=a.issue_labels||{};const s=a.stats||{};const total=Number(s.total_issues||0);const typeRows=(a.issue_type_stats||[]).map(x=>({'Issue type':medIssueLabel(x.issue_type),'Total':x.total,'Resolved':x.done,'Open':x.open,'Cancelled':x.cancelled,'Resolution %':`${x.total?x.done/x.total*100:0 .toFixed?.(1)}%`}));const risk=[];Object.entries(a.worst_states||{}).forEach(([it,rows])=>(rows||[]).forEach(r=>risk.push({'Issue type':medIssueLabel(it),'State':r.state_name,'Current metric':r.metric,'Open issues':r.open_issues,'Modeled money at risk':medMoney(r.money_at_risk)})));const chartRows=a.issue_type_stats||[];const script=`<scr${''}ipt>(function(){const rows=${JSON.stringify(chartRows)};if(!window.Plotly)return;Plotly.newPlot('medAnalyticsChart',[{type:'bar',name:'Resolved',x:rows.map(r=>r.issue_type.replaceAll('_',' ')),y:rows.map(r=>r.done)},{type:'bar',name:'Open',x:rows.map(r=>r.issue_type.replaceAll('_',' ')),y:rows.map(r=>r.open)},{type:'bar',name:'Cancelled',x:rows.map(r=>r.issue_type.replaceAll('_',' ')),y:rows.map(r=>r.cancelled)}],{barmode:'stack',margin:{l:45,r:20,t:20,b:125},paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{color:'#fff7d1'},xaxis:{tickangle:-35},legend:{orientation:'h',y:1.15}},{responsive:true,displayModeBar:false});})();</scr${''}ipt>`;return `${medTopbar('Analytics','System-wide issue analytics, tags, issue-type performance, and modeled financial exposure across Medicaid state programs.')} ${medKpis([['Total issues',intFmt(total),'All issue records'],['Resolved',intFmt(s.done),`${total?Number(s.done||0)/total*100:0 .toFixed?.(1)}% of total`],['Open',intFmt(s.open),'Current backlog','warn'],['Cancelled',intFmt(s.cancelled),'Closed without resolution'],['Issue types',intFmt(a.issue_type_stats?.length),'CMS quality categories']])}<br><div class="panel"><h3>Status mix by CMS issue type</h3><div id="medAnalyticsChart" class="medChart"></div>${script}</div><br><div class="grid grid2"><div class="panel"><h3>Issue-type performance</h3>${genericTable(typeRows,'medicaid_issue_type_analytics')}</div><div class="panel"><h3>Tag usage</h3>${genericTable((a.tag_stats||[]).map(x=>({'Tag':x.name,'Issues':x.count})),'medicaid_tag_usage')}</div></div><br><div class="panel"><h3>Highest modeled risk opportunities</h3><p class="muted">Uses the same deterministic cost multipliers represented by the standalone analytics logic. It is a prioritization proxy, not an audited recovery estimate.</p>${genericTable(risk.slice(0,25),'medicaid_modeled_risk')}</div>`;}
-function medInsightsPage(d){state.medicaidIssueLabels=state.medicaidIssueLabels||{};const m=d.meta||{};const cards=(d.insights||[]).map(x=>`<div class="panel medInsight ${esc(x.type)}"><span class="workspaceBadge">${esc(x.type.replaceAll('_',' '))}</span><h3>${esc(x.title)}</h3><p>${esc(x.description)}</p><div class="medRecommendation"><b>Recommended action</b><span>${esc(x.recommendation)}</span></div></div>`).join('');const rows=(d.data||[]).sort((a,b)=>b.composite_score-a.composite_score).slice(0,15).map((r,i)=>({'Rank':i+1,'State':r.state,'Quality score':r.composite_score,'Success %':`${r.success_rate}%`,'Backlog %':`${r.backlog_rate}%`,'Confidence %':`${r.confidence}%`,'Issues':r.total}));return `${medTopbar('AI Insights','Evidence-driven recommendations generated from the same deterministic state comparison model used by the standalone Medicaid app.',`<button class="btn secondary" onclick="showPage('medicaid-chat')">Open CMS Q&A</button>`)}<div class="panel"><div class="filterGrid" style="grid-template-columns:1fr 180px"><div class="field"><label>Issue type</label><select onchange="state.medicaidIssueType=this.value;render()">${medIssueOptions(state.medicaidIssueType||'',true)}</select></div><div class="field"><label>Minimum issues per state</label><input type="number" min="0" value="${Number(state.medicaidMinTotal||3)}" onchange="state.medicaidMinTotal=Number(this.value||3);render()"></div></div></div><br>${medKpis([['States analyzed',intFmt(m.states_analyzed),'Meet current sample threshold'],['States with data',intFmt(m.states_with_data),'Across current filter'],['Avg success',`${Number(m.avg_success_rate||0).toFixed(1)}%`,'Resolved share'],['Avg confidence',`${Number(m.avg_confidence||0).toFixed(1)}%`,'Sample-size confidence'],['Minimum sample',intFmt(m.min_total),'Issues per state']])}<br><div class="grid grid2">${cards}</div><br><div class="panel"><h3>Evidence table</h3>${genericTable(rows,'medicaid_ai_evidence')}</div>`;}
-function medChatPage(){const history=state.medicaidChat||[];return `${medTopbar('CMS Quality Q&A','Ask natural-language questions about state quality, duplicate claims, issue types, backlog, rankings, quarterly metrics, or modeled money at risk.')}<div class="grid grid2 medChatGrid"><div class="panel"><h3>Ask the Medicaid analyst</h3><div class="chat medChatHistory" id="medChatHistory">${history.length?history.map(m=>`<div class="bubble ${m.role==='user'?'user':'assistant'}">${m.role==='assistant'?renderMarkdown(m.content):esc(m.content)}</div>`).join(''):'<div class="empty">Ask a question to start the CMS quality conversation.</div>'}</div><br><div class="filterGrid" style="grid-template-columns:1fr auto"><input id="medChatPrompt" placeholder="Which states have the highest duplicate claim rates?" onkeydown="if(event.key==='Enter')askMedicaidChat()"><button class="btn" onclick="askMedicaidChat()">Ask</button></div></div><div class="panel"><h3>Suggested questions</h3><div class="medPromptList"><button onclick="askMedicaidChat('rank the states')">Rank the states</button><button onclick="askMedicaidChat('worst states for invalid diagnosis code')">Worst states for diagnosis-code issues</button><button onclick="askMedicaidChat('open issues in Texas')">Open issues in Texas</button><button onclick="askMedicaidChat('duplicate claim rate by state')">Duplicate claim rates</button><button onclick="askMedicaidChat('largest money at risk')">Largest modeled money at risk</button></div></div></div>`;}
-async function askMedicaidChat(prefill=''){const input=document.getElementById('medChatPrompt');const q=(prefill||input?.value||'').trim();if(!q)return;state.medicaidChat=state.medicaidChat||[];state.medicaidChat.push({role:'user',content:q});const result=await postJson('/api/medicaid/ai-chat',{question:q});let content=result.answer||'';if(result.details?.length)content+='\n\n'+result.details.map(x=>'- '+x).join('\n');state.medicaidChat.push({role:'assistant',content});await render();setTimeout(()=>document.getElementById('medChatHistory')?.scrollTo(0,999999),50);}
-function medExecPage(b){const k=b.kpis||{};const actions=b.actions_30_60_90||{};const top=(b.top_states||[]).map((r,i)=>({'Rank':i+1,'State':r.state,'Quality score':r.composite_score,'Success %':`${r.success_rate}%`,'Backlog %':`${r.backlog_rate}%`,'Confidence %':`${r.confidence}%`}));const watch=(b.watchlist||[]).map((r,i)=>({'Priority':i+1,'State':r.state,'Quality score':r.composite_score,'Backlog %':`${r.backlog_rate}%`,'Open':r.open,'Issues':r.total}));const actionCol=(title,items)=>`<div class="panel medActionCol"><span class="workspaceBadge">${esc(title)}</span>${(items||[]).map((x,i)=>`<div class="medActionItem"><b>${i+1}</b><span>${esc(x)}</span></div>`).join('')}</div>`;return `${medTopbar('Executive Brief','Leadership-ready Medicaid quality briefing with KPI coverage, top performers, watchlist states, and a 30/60/90-day action plan.')}<div class="panel"><div class="filterGrid" style="grid-template-columns:1fr 180px"><div class="field"><label>Issue type</label><select onchange="state.medicaidIssueType=this.value;render()">${medIssueOptions(state.medicaidIssueType||'',true)}</select></div><div class="field"><label>Minimum sample</label><input type="number" min="0" value="${Number(state.medicaidMinTotal||3)}" onchange="state.medicaidMinTotal=Number(this.value||3);render()"></div></div></div><br>${medKpis([['States analyzed',intFmt(k.states_analyzed),'Current executive scope'],['Avg success',`${Number(k.avg_success||0).toFixed(1)}%`,'Resolved issue rate'],['Avg backlog',`${Number(k.avg_backlog||0).toFixed(1)}%`,'Open issue share'],['Avg quality',Number(k.avg_quality||0).toFixed(1),'Composite score'],['Coverage',`${Number(k.coverage||0).toFixed(1)}%`,'States meeting threshold']])}<br><div class="panel medBriefSummary"><span class="workspaceBadge">Executive snapshot</span><h2>${esc(b.summary||'')}</h2></div><br><div class="grid grid2"><div class="panel"><h3>Top performers</h3>${genericTable(top,'medicaid_executive_top_states')}</div><div class="panel"><h3>Watchlist</h3>${genericTable(watch,'medicaid_executive_watchlist')}</div></div><br><div class="grid grid3">${actionCol('Next 30 days',actions['30_days'])}${actionCol('Next 60 days',actions['60_days'])}${actionCol('Next 90 days',actions['90_days'])}</div>`;}
-function medHeatSideEmpty(){return `<div class="medHeatSideEmpty"><div><b>Select a state on the map</b><span>Click any state to keep the national heatmap visible while reviewing that state's quality metrics and current issues here.</span></div></div>`;}
-function medCloseHeatState(){state.medicaidHeatSelectedId=0;const el=document.getElementById('medHeatStatePanel');if(el)el.innerHTML=medHeatSideEmpty();}
-function medHeatMetricDisplay(metric,value){const pctMetrics=new Set(['quality_score','success_rate','backlog_rate','cancel_rate']);if(value===null||value===undefined||Number.isNaN(Number(value)))return '—';return pctMetrics.has(metric)?`${Number(value).toFixed(1)}${metric==='quality_score'?'':'%'}`:intFmt(value);}
-function medHeatStatePanel(payload,summary,row){const s=payload.state||{},sm=payload.summary||{},dup=summary.duplicate_claims||{},metric=state.medicaidHeatMetric||'quality_score';const metricLabels={quality_score:'Quality score',success_rate:'Success rate',total:'Total issues',successful:'Resolved issues',open:'Open issues',cancelled:'Cancelled issues',backlog_rate:'Backlog rate',cancel_rate:'Cancellation rate'};const breakdown=Object.entries(summary.type_breakdown||{}).sort((a,b)=>Number(b[1]?.open_count||0)-Number(a[1]?.open_count||0)||Number(b[1]?.total||0)-Number(a[1]?.total||0)).slice(0,5);const issues=(payload.issues||[]).slice().sort((a,b)=>{const p={high:3,medium:2,low:1};return (p[b.priority]||0)-(p[a.priority]||0)||(a.status==='open'?-1:1);}).slice(0,6);return `<div class="medHeatSideHead"><div><span class="workspaceBadge">${esc(s.code||'State')} selected</span><h2>${esc(s.name||'State')}</h2><p class="muted">Filtered preview beside the national map</p></div><button class="medHeatClose" type="button" onclick="medCloseHeatState()" title="Close state preview">×</button></div><div class="medHeatMiniKpis"><div class="medHeatMiniKpi"><span>${esc(metricLabels[metric]||metric)}</span><b>${medHeatMetricDisplay(metric,row?.metric_value)}</b></div><div class="medHeatMiniKpi"><span>Quality grade</span><b>${esc(summary.quality_grade||'—')}</b></div><div class="medHeatMiniKpi"><span>Open issues</span><b>${intFmt(sm.open)}</b></div><div class="medHeatMiniKpi"><span>Resolved</span><b>${intFmt(sm.successful)}</b></div><div class="medHeatMiniKpi"><span>Resolution rate</span><b>${Number(sm.success_rate||0).toFixed(1)}%</b></div><div class="medHeatMiniKpi"><span>Duplicate rate</span><b>${Number(dup.rate||0).toFixed(2)}%</b></div></div><div class="medHeatSideSection"><h4>Issue mix</h4><div class="medHeatBreakdown">${breakdown.length?breakdown.map(([id,v])=>`<div class="medHeatBreakRow"><div><b>${esc(medIssueLabel(id))}</b><small>${intFmt(v.total)} total · ${intFmt(v.done_count)} resolved</small></div><span class="medStatus ${Number(v.open_count||0)>0?'open':'done'}">${intFmt(v.open_count)} open</span></div>`).join(''):'<div class="muted">No issue-type data for this state.</div>'}</div></div><div class="medHeatSideSection"><h4>Current issues</h4><div class="medHeatIssueList">${issues.length?issues.map(i=>`<div class="medHeatIssue"><div class="medHeatIssueTop"><b>${esc(i.title)}</b>${medPriorityPill(i.priority)}</div><div class="medHeatIssueMeta">${medStatusPill(i.status)}<span class="muted">${esc(medIssueLabel(i.issue_type))}</span>${i.days_open===null||i.days_open===undefined?'':`<span class="muted">${intFmt(i.days_open)} days open</span>`}</div></div>`).join(''):'<div class="muted">No issues match the current heatmap filters.</div>'}</div></div><div class="medHeatSideSection"><div class="medHeatBreakRow"><div><b>Duplicate-claim standing</b><small>${Number(dup.vs_national||0)>=0?'+':''}${Number(dup.vs_national||0).toFixed(2)} pts vs national average</small></div><b>#${dup.rank||'—'} / ${dup.total_states||50}</b></div></div><button class="btn medHeatOpenButton" type="button" onclick="openMedicaidState(${Number(s.id)},'medicaid-heatmap')">Open full ${esc(s.name||'state')} page →</button>`;}
-async function medSelectHeatState(id){id=Number(id);if(!id)return;state.medicaidHeatSelectedId=id;const panel=document.getElementById('medHeatStatePanel');if(panel)panel.innerHTML='<div class="medHeatSideLoading">Loading state metrics and issues…</div>';const q=new URLSearchParams();if(state.medicaidHeatStatus)q.set('status',state.medicaidHeatStatus);if(state.medicaidHeatType)q.set('issue_type',state.medicaidHeatType);try{const [payload,summary]=await Promise.all([api(`/api/medicaid/heatmap/state/${id}?${q.toString()}`),api(`/api/medicaid/state-summary/${id}`)]);if(state.medicaidHeatSelectedId!==id)return;const row=(state.medicaidHeatRows||[]).find(r=>Number(r.id)===id)||{};if(panel){panel.innerHTML=medHeatStatePanel(payload,summary,row);decorateMetricHelp(panel);}}catch(err){if(panel)panel.innerHTML=`<div class="empty">Could not load this state preview: ${esc(String(err.message||err))}</div>`;}}
-function medHeatmapPage(h,dashboard){state.medicaidIssueLabels=dashboard.issue_labels||state.medicaidIssueLabels||{};const rows=h.rows||[];state.medicaidHeatRows=rows;const metric=state.medicaidHeatMetric||'quality_score';const metricLabels={quality_score:'Quality score',success_rate:'Success rate',total:'Total issues',successful:'Resolved issues',open:'Open issues',cancelled:'Cancelled issues',backlog_rate:'Backlog rate',cancel_rate:'Cancellation rate'};const script=`<scr${''}ipt>(function(){const rows=${JSON.stringify(rows)};if(!window.Plotly)return;const trace={type:'choropleth',locationmode:'USA-states',locations:rows.map(r=>r.state_code),z:rows.map(r=>r.metric_value),text:rows.map(r=>r.name+'<br>${metricLabels[metric]}: '+r.metric_value),hovertemplate:'%{text}<extra></extra>',colorscale:'YlOrBr',marker:{line:{color:'#5a4520',width:0.7}},colorbar:{title:${JSON.stringify(metricLabels[metric]||metric)}}};Plotly.newPlot('medicaidUSMap',[trace],{geo:{scope:'usa',bgcolor:'rgba(0,0,0,0)',lakecolor:'rgba(0,0,0,0)'},margin:{l:0,r:0,t:10,b:0},paper_bgcolor:'rgba(0,0,0,0)',font:{color:'#fff7d1'}},{responsive:true,displayModeBar:false}).then(g=>g.on('plotly_click',e=>{const code=e.points?.[0]?.location;const row=rows.find(r=>r.state_code===code);if(row)medSelectHeatState(row.id);}));if(state.medicaidHeatSelectedId)medSelectHeatState(state.medicaidHeatSelectedId);})();</scr${''}ipt>`;const ranking=[...rows].sort((a,b)=>Number(b.metric_value||0)-Number(a.metric_value||0)).slice(0,15).map((r,i)=>({'Rank':i+1,'State':r.name,[metricLabels[metric]||metric]:r.metric_value,'Total':r.total,'Open':r.open,'Resolved':r.successful}));return `${medTopbar('US Quality Heatmap','Interactive 50-state heatmap with an in-place state preview. Click a state to review its metrics and issues beside the map, then open the complete state workspace when you need the full detail.')}<div class="panel"><div class="filterGrid medHeatFilters"><div class="field"><label>Metric</label><select onchange="state.medicaidHeatMetric=this.value;render()">${Object.entries(metricLabels).map(([v,l])=>`<option value="${v}" ${metric===v?'selected':''}>${l}</option>`).join('')}</select></div><div class="field"><label>Status</label><select onchange="state.medicaidHeatStatus=this.value;render()"><option value="">All statuses</option><option value="open" ${state.medicaidHeatStatus==='open'?'selected':''}>Open</option><option value="done" ${state.medicaidHeatStatus==='done'?'selected':''}>Resolved</option><option value="cancelled" ${state.medicaidHeatStatus==='cancelled'?'selected':''}>Cancelled</option></select></div><div class="field"><label>Issue type</label><select onchange="state.medicaidHeatType=this.value;render()">${medIssueOptions(state.medicaidHeatType||'',true)}</select></div></div></div><br><div class="medHeatWorkspace"><div class="panel medMapPanel"><div id="medicaidUSMap"></div>${script}</div><aside class="panel medHeatSidePanel" id="medHeatStatePanel">${medHeatSideEmpty()}</aside></div><br><div class="panel"><h3>Current heatmap ranking</h3>${genericTable(ranking,'medicaid_heatmap_ranking')}</div>`;}
-function medClaimsPage(c){const s=c.summary||{}, trend=c.duplicate_trend||[], opportunities=(c.top_opportunities||[]).map((x,i)=>({'Priority':i+1,'State':x.state_name,'Issue type':x.label,'Current metric':x.metric,'Open issues':x.open_issues,'Modeled money at risk':medMoney(x.money_at_risk)}));const typeRows=(c.issue_type_metrics||[]).map(x=>({'Issue type':x.label,'Metric volume':Number(x.metric_total).toLocaleString(),'Issue records':x.records,'Open issues':x.open_issues,'Modeled money at risk':medMoney(x.estimated_money_at_risk)}));const script=`<scr${''}ipt>(function(){const rows=${JSON.stringify(trend)};if(!window.Plotly)return;Plotly.newPlot('medClaimsTrend',[{type:'scatter',mode:'lines+markers',x:rows.map(r=>r.quarter),y:rows.map(r=>r.avg_rate),name:'Average duplicate rate',fill:'tozeroy'}],{margin:{l:55,r:20,t:20,b:50},paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{color:'#fff7d1'},yaxis:{title:'Duplicate claim rate %'}},{responsive:true,displayModeBar:false});})();</scr${''}ipt>`;return `${medTopbar('Claims Analysis','Medicaid claim-quality and spending-risk analysis derived from the state issue model, including duplicate trends, issue-volume diagnostics, monitoring subscriptions, and prioritization.')} ${medKpis([['Total quality issues',intFmt(s.total_issues),'State issue database'],['Open',intFmt(s.open),'Current claim-quality backlog','warn'],['Resolved',intFmt(s.done),'Completed remediation'],['Monitoring agents',intFmt(c.subscriptions),'Registered subscriptions'],['Top modeled risk',opportunities[0]?.['Modeled money at risk']||'$0','Highest current state/type opportunity']])}<br><div class="grid grid2"><div class="panel"><h3>Duplicate claim trend</h3><div id="medClaimsTrend" class="medChart"></div>${script}</div><div class="panel"><h3>Register monitoring agent</h3><p class="muted">Preserves the standalone app’s agent-subscription concept inside the Medicaid workspace.</p><form onsubmit="registerMedicaidAgent(event)"><div class="field"><label>Email</label><input name="email" type="email" required placeholder="analyst@example.gov"></div><div class="field"><label>Requirements</label><input name="requirements" placeholder="duplicate claims, payment risk, open backlog"></div><div class="field"><label>Filter value</label><input name="filter" placeholder="Optional state or issue type"></div><br><button class="btn" type="submit">Register agent</button></form></div></div><br><div class="panel"><h3>Top state opportunities</h3>${genericTable(opportunities,'medicaid_claims_opportunities')}</div><br><div class="panel"><h3>Issue-type spending / quality model</h3>${genericTable(typeRows,'medicaid_claims_type_metrics')}</div>`;}
-async function registerMedicaidAgent(event){event.preventDefault();const f=event.target;const requirements=f.requirements.value.split(',').map(x=>x.trim()).filter(Boolean);const r=await postJson('/api/medicaid/claims/register-agent',{email:f.email.value,requirements,filter_value:f.filter.value,rules:[]});toast(r.message||'Agent registered');await render();}
-function medOptimizePage(c){const opp=(c.top_opportunities||[]).map((x,i)=>({'Priority':i+1,'State':x.state_name,'Issue type':x.label,'Metric':x.metric,'Open':x.open_issues,'Modeled money at risk':medMoney(x.money_at_risk),'Suggested action':x.issue_type==='duplicate_claims'?'Strengthen duplicate detection and pre-pay edit rules':x.issue_type==='payment_amount_exceeded'?'Review fee schedule/outlier controls':x.issue_type==='referential_integrity'?'Repair provider/member reference integrity':'Target the highest-volume validation failure'}));const total=(c.issue_type_metrics||[]).reduce((a,x)=>a+Number(x.estimated_money_at_risk||0),0);return `${medTopbar('Optimize Spending','Actionable Medicaid quality and modeled overspending opportunities, prioritized by the same issue metrics and cost multipliers represented in the standalone app.')} ${medKpis([['Modeled exposure',medMoney(total),'Across all issue types'],['Priority opportunities',intFmt(opp.length),'State/type combinations'],['Top opportunity',opp[0]?.['State']||'—',opp[0]?.['Issue type']||''],['Top modeled risk',opp[0]?.['Modeled money at risk']||'$0','Planning proxy'],['Open quality issues',intFmt(c.summary?.open),'Current backlog']])}<br><div class="panel"><h3>Optimization queue</h3>${genericTable(opp,'medicaid_optimization_queue')}</div><br><div class="grid grid3"><div class="panel"><span class="workspaceBadge">30 days</span><h3>Control the largest leaks</h3><p>Target the top duplicate, payment, and code-quality opportunities. Confirm high-risk state metrics and assign accountable owners.</p></div><div class="panel"><span class="workspaceBadge">60 days</span><h3>Standardize remediation</h3><p>Deploy common validation rules and state playbooks, then compare backlog and quality-score movement across programs.</p></div><div class="panel"><span class="workspaceBadge">90 days</span><h3>Institutionalize monitoring</h3><p>Use agent subscriptions, quarterly state scorecards, and executive briefs to sustain the strongest controls.</p></div></div>`;}
-function medMethodologyPage(c){const m=c.methodology||{};const rows=Object.entries(m.cost_multipliers||{}).map(([it,v])=>({'Issue type':medIssueLabel(it),'Prototype multiplier':it==='duplicate_claims'?`${medMoney(v)} per 1 percentage point`:medMoney(v)+' per modeled case','Metric interpretation':it==='duplicate_claims'?'Quarterly duplicate claim rate (%)':'Q1 2026 issue/case volume'}));const defs=[{'Measure':'Success rate','Formula':'Resolved ÷ Total issues','Use':'Issue-resolution performance'},{'Measure':'Backlog rate','Formula':'Open ÷ Total issues','Use':'Outstanding remediation load'},{'Measure':'Cancellation rate','Formula':'Cancelled ÷ Total issues','Use':'Issues closed without resolution'},{'Measure':'Confidence','Formula':'min(100%, Total issues ÷ 6 × 100)','Use':'Sample-size reliability adjustment'},{'Measure':'Composite quality','Formula':'[55% success + 25% (1-cancel) + 20% (1-backlog)] × confidence','Use':'Cross-state quality ranking'},{'Measure':'Modeled money at risk','Formula':'Current issue metric × prototype cost multiplier','Use':'Prioritization proxy; not audited recovery'}];return `${medTopbar('Methodology & Data Dictionary','Reference for the Medicaid state-quality prototype: issue definitions, score formulas, cost multipliers, quarterly framing, and interpretation guidance.')}<div class="panel medMethodNote"><h3>Important interpretation</h3><p>${esc(m.note||'The Medicaid workspace uses deterministic prototype data for demonstration and prioritization.')}</p></div><br><div class="grid grid2"><div class="panel"><h3>Scoring methodology</h3>${genericTable(defs,'medicaid_scoring_methodology')}</div><div class="panel"><h3>Issue cost multipliers</h3>${genericTable(rows,'medicaid_cost_multipliers')}</div></div><br><div class="panel"><h3>CMS issue dictionary</h3>${genericTable(Object.entries(state.medicaidIssueLabels||{}).map(([id,label])=>({'Issue type ID':id,'Display name':label,'Standalone title':label})), 'medicaid_issue_dictionary')}</div>`;}
-
-async function renderMedicaid(meta){
-  let html='';
-  if(state.page==='medicaid-home'){
-    const d=await api('/api/medicaid/dashboard');html=medDashboardPage(d,meta);
-  }else if(state.page==='medicaid-states'){
-    const d=await api('/api/medicaid/dashboard');html=medStatesPage(d);
-  }else if(state.page==='medicaid-state'){
-    const id=Number(state.medicaidStateId||1);const qs=new URLSearchParams();if(state.medicaidStateStatus)qs.set('status',state.medicaidStateStatus);if(state.medicaidStateType)qs.set('issue_type',state.medicaidStateType);const [p,s]=await Promise.all([api(`/api/medicaid/state/${id}?${qs.toString()}`),api(`/api/medicaid/state-summary/${id}`)]);html=medStatePage(p,s);
-  }else if(state.page==='medicaid-compare'){
-    const q=new URLSearchParams();if(state.medicaidIssueType)q.set('issue_type',state.medicaidIssueType);q.set('min_total',String(Number(state.medicaidMinTotal||0)));const d=await api('/api/medicaid/compare?'+q.toString());html=medComparePage(d);
-  }else if(state.page==='medicaid-analytics'){
-    const a=await api('/api/medicaid/analytics');html=medAnalyticsPage(a);
-  }else if(state.page==='medicaid-ai'){
-    const q=new URLSearchParams();if(state.medicaidIssueType)q.set('issue_type',state.medicaidIssueType);q.set('min_total',String(Number(state.medicaidMinTotal||3)));const d=await api('/api/medicaid/ai-comparison?'+q.toString());if(!state.medicaidIssueLabels){const dash=await api('/api/medicaid/dashboard');state.medicaidIssueLabels=dash.issue_labels;}html=medInsightsPage(d);
-  }else if(state.page==='medicaid-chat'){
-    if(!state.medicaidIssueLabels){const dash=await api('/api/medicaid/dashboard');state.medicaidIssueLabels=dash.issue_labels;}html=medChatPage();
-  }else if(state.page==='medicaid-exec'){
-    if(!state.medicaidIssueLabels){const dash=await api('/api/medicaid/dashboard');state.medicaidIssueLabels=dash.issue_labels;}const q=new URLSearchParams();if(state.medicaidIssueType)q.set('issue_type',state.medicaidIssueType);q.set('min_total',String(Number(state.medicaidMinTotal||3)));const b=await api('/api/medicaid/executive-brief?'+q.toString());html=medExecPage(b);
-  }else if(state.page==='medicaid-heatmap'){
-    const q=new URLSearchParams({metric:state.medicaidHeatMetric||'quality_score'});if(state.medicaidHeatStatus)q.set('status',state.medicaidHeatStatus);if(state.medicaidHeatType)q.set('issue_type',state.medicaidHeatType);const [h,d]=await Promise.all([api('/api/medicaid/heatmap?'+q.toString()),api('/api/medicaid/dashboard')]);html=medHeatmapPage(h,d);
-  }else if(state.page==='medicaid-claims'){
-    const c=await api('/api/medicaid/claims-data');if(!state.medicaidIssueLabels)state.medicaidIssueLabels=c.methodology?.issue_labels||{};html=medClaimsPage(c);
-  }else if(state.page==='medicaid-optimize'){
-    const c=await api('/api/medicaid/claims-data');if(!state.medicaidIssueLabels)state.medicaidIssueLabels=c.methodology?.issue_labels||{};html=medOptimizePage(c);
-  }else if(state.page==='medicaid-methodology'){
-    const c=await api('/api/medicaid/claims-data');state.medicaidIssueLabels=c.methodology?.issue_labels||{};html=medMethodologyPage(c);
-  }else{state.page='medicaid-home';return renderMedicaid(meta);}
-  document.getElementById('footer').innerHTML=`Medicaid State Intelligence · 50-state CMS quality prototype · ${esc(meta.version)} · FastAPI`;
-  const appEl=document.getElementById('app');appEl.classList.remove('page-enter');appEl.innerHTML=html;runInjectedScripts(appEl);decorateMetricHelp(appEl);refreshThemeVisuals(appEl);requestAnimationFrame(()=>appEl.classList.add('page-enter'));ensureAssistantBubble();
-}
-function byoStats(info,prefix=''){return `<div class="grid grid6"><div class="panel metric"><div class="label">Rows</div><div class="value">${intFmt(info.rows)}</div><div class="sub">${prefix||'Dataset'}</div></div><div class="panel metric"><div class="label">Columns</div><div class="value">${intFmt(info.columns)}</div><div class="sub">Detected fields</div></div><div class="panel metric"><div class="label">Completeness</div><div class="value">${pctNum(info.completeness)}</div><div class="sub">Non-missing cells</div></div><div class="panel metric"><div class="label">Missing cells</div><div class="value">${intFmt(info.missing_cells)}</div><div class="sub">Across all fields</div></div><div class="panel metric"><div class="label">Duplicate rows</div><div class="value">${intFmt(info.duplicate_rows)}</div><div class="sub">Exact duplicates</div></div><div class="panel metric"><div class="label">Numeric fields</div><div class="value">${intFmt(info.numeric_columns)}</div><div class="sub">Detected numeric</div></div></div>`;}
-function byoUploadPanel(info){return `<div class="byoDrop"><span class="workspaceBadge">Persistent upload</span><h3>Save datasets to your repo</h3><p class="muted">Upload one or more CSV/XLSX files. DART validates each file, then saves the original file under <span class="byoStoragePath">${esc(info.storage_path||'Data/DIY')}</span>. Files remain available after FastAPI restarts.</p><input id="byoFiles" type="file" accept=".csv,.xlsx" multiple><div class="heroActions" style="justify-content:center"><button class="btn" type="button" onclick="uploadByoFiles()">Upload & save</button><button class="btn secondary" type="button" onclick="showPage('byo-library')">Open Dataset Library</button></div></div>`;}
-async function uploadByoFiles(){const input=document.getElementById('byoFiles');const files=[...(input?.files||[])];if(!files.length){toast('Choose at least one CSV or Excel file');return;}const fd=new FormData();files.forEach(f=>fd.append('files',f));try{const r=await fetch('/api/byo/upload',{method:'POST',body:fd});const payload=await r.json().catch(()=>({error:'Upload failed'}));if(!r.ok)throw new Error(payload.error||'Upload failed');const names=(payload.saved||[]).map(x=>x.name);if(names.length){state.byoLeft=state.byoLeft||names[0];if(!state.byoRight&&names.length>1)state.byoRight=names[1];saveByoSelection();}toast(`${names.length} dataset${names.length===1?'':'s'} saved to ${payload.storage_path||'Data/DIY'}`);await render();}catch(err){toast('Upload failed: '+String(err.message||err).slice(0,180));}}
-function byoImportPanel(){
-  const s3=state.byoS3Items;
-  const sp=state.byoSharePointItems;
-  return `<div class="grid grid2">
-    <div class="panel byoImportPanel">
-      <span class="workspaceBadge">Online folder / URL</span>
-      <h3>Import from a web link</h3>
-      <p class="muted">Paste one or more direct CSV/XLSX file URLs (one per line). DART downloads and saves each into your DIY library.</p>
-      <textarea id="byoImportUrls" placeholder="https://example.com/folder/claims.csv&#10;https://example.com/folder/ledger.xlsx" rows="4"></textarea>
-      <div class="heroActions" style="justify-content:flex-start"><button class="btn" type="button" onclick="importByoFromUrl()">Import from URL(s)</button></div>
-    </div>
-    <div class="panel byoImportPanel">
-      <span class="workspaceBadge">Amazon S3</span>
-      <h3>Import from an S3 bucket</h3>
-      <p class="muted">List CSV/XLSX objects in a bucket (optionally under a prefix/folder), then choose which ones to save. Leave the keys blank to use the server's default AWS credentials.</p>
-      <div class="byoS3Fields">
-        <input id="byoS3Bucket" type="text" placeholder="Bucket name">
-        <input id="byoS3Prefix" type="text" placeholder="Prefix / folder (optional)">
-        <input id="byoS3Region" type="text" placeholder="Region (optional)">
-        <input id="byoS3AccessKey" type="text" placeholder="Access key (optional)">
-        <input id="byoS3SecretKey" type="password" placeholder="Secret key (optional)">
-        <input id="byoS3SessionToken" type="password" placeholder="Session token (optional)">
-      </div>
-      <div class="heroActions" style="justify-content:flex-start"><button class="btn secondary" type="button" onclick="listByoS3Files()">List bucket files</button></div>
-      ${s3?byoS3ResultsHtml(s3):''}
-    </div>
-    <div class="panel byoImportPanel" style="grid-column:1/-1">
-      <span class="workspaceBadge">SharePoint / OneDrive (private)</span>
-      <h3>Import from a private SharePoint or OneDrive folder</h3>
-      <p class="muted">Paste a SharePoint or OneDrive (work/school account) sharing link to a folder or file. This needs an Azure AD app registration with the <b>Sites.Read.All</b> (or Files.Read.All) application permission, admin-consented in your tenant — DART signs in app-only, so no user login or cookie is required. Personal <b>outlook.com</b> OneDrive accounts aren't supported by this flow.</p>
-      <div class="byoS3Fields">
-        <input id="byoSpTenant" type="text" placeholder="Azure AD tenant ID">
-        <input id="byoSpClientId" type="text" placeholder="App (client) ID">
-        <input id="byoSpClientSecret" type="password" placeholder="Client secret">
-        <input id="byoSpShareUrl" type="text" placeholder="SharePoint/OneDrive share link" style="grid-column:1/-1">
-      </div>
-      <div class="heroActions" style="justify-content:flex-start"><button class="btn secondary" type="button" onclick="listByoSharePointFiles()">List folder files</button></div>
-      ${sp?byoSharePointResultsHtml(sp):''}
-    </div>
-  </div>`;
-}
-function byoS3ResultsHtml(items){
-  if(!items.length)return '<div class="empty" style="margin-top:12px">No matching .csv/.xlsx objects found for that bucket/prefix.</div>';
-  return `<div class="byoS3Results">
-    <div class="byoS3ResultsHead"><b>${items.length} file${items.length===1?'':'s'} found</b><button class="btn small" type="button" onclick="importByoFromS3()">Import selected</button></div>
-    ${items.map(x=>`<label class="byoS3Row"><input type="checkbox" class="byoS3Check" value="${esc(x.key)}"><span class="byoS3Key">${esc(x.key)}</span><span class="byoS3Size muted">${x.size_mb} MB</span></label>`).join('')}
-  </div>`;
-}
-async function importByoFromUrl(){
-  const box=document.getElementById('byoImportUrls');
-  const raw=(box?.value||'').trim();
-  if(!raw){toast('Paste at least one file URL');return;}
-  try{
-    const r=await fetch('/api/byo/import/url',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls:raw})});
-    const payload=await r.json().catch(()=>({error:'Import failed'}));
-    if(!r.ok)throw new Error(payload.error||'Import failed');
-    const names=(payload.saved||[]).map(x=>x.name);
-    if(names.length){state.byoLeft=state.byoLeft||names[0];if(!state.byoRight&&names.length>1)state.byoRight=names[1];saveByoSelection();}
-    toast(`${names.length} dataset${names.length===1?'':'s'} imported${payload.errors?.length?`, ${payload.errors.length} failed`:''}`);
-    await render();
-  }catch(err){toast('Import failed: '+String(err.message||err).slice(0,200));}
-}
-function byoS3Context(){
-  return {
-    bucket:document.getElementById('byoS3Bucket')?.value.trim()||'',
-    prefix:document.getElementById('byoS3Prefix')?.value.trim()||'',
-    region:document.getElementById('byoS3Region')?.value.trim()||'',
-    access_key:document.getElementById('byoS3AccessKey')?.value.trim()||'',
-    secret_key:document.getElementById('byoS3SecretKey')?.value.trim()||'',
-    session_token:document.getElementById('byoS3SessionToken')?.value.trim()||'',
-  };
-}
-async function listByoS3Files(){
-  const ctx=byoS3Context();
-  if(!ctx.bucket){toast('Enter an S3 bucket name');return;}
-  try{
-    const r=await fetch('/api/byo/import/s3/list',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(ctx)});
-    const payload=await r.json().catch(()=>({error:'S3 list failed'}));
-    if(!r.ok)throw new Error(payload.error||'S3 list failed');
-    state.byoS3Items=payload.items||[];
-    state.byoS3Context=ctx;
-    toast(`${state.byoS3Items.length} matching file(s) found`);
-    await render();
-  }catch(err){toast('S3 list failed: '+String(err.message||err).slice(0,200));}
-}
-async function importByoFromS3(){
-  const checked=[...document.querySelectorAll('.byoS3Check:checked')].map(x=>x.value);
-  if(!checked.length){toast('Select at least one S3 file');return;}
-  const ctx=state.byoS3Context||byoS3Context();
-  try{
-    const r=await fetch('/api/byo/import/s3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...ctx,keys:checked})});
-    const payload=await r.json().catch(()=>({error:'S3 import failed'}));
-    if(!r.ok)throw new Error(payload.error||'S3 import failed');
-    const names=(payload.saved||[]).map(x=>x.name);
-    if(names.length){state.byoLeft=state.byoLeft||names[0];if(!state.byoRight&&names.length>1)state.byoRight=names[1];saveByoSelection();}
-    toast(`${names.length} dataset${names.length===1?'':'s'} imported from S3${payload.errors?.length?`, ${payload.errors.length} failed`:''}`);
-    state.byoS3Items=null;
-    await render();
-  }catch(err){toast('S3 import failed: '+String(err.message||err).slice(0,200));}
-}
-function byoSharePointResultsHtml(items){
-  if(!items.length)return '<div class="empty" style="margin-top:12px">No matching .csv/.xlsx files found at that link.</div>';
-  return `<div class="byoS3Results">
-    <div class="byoS3ResultsHead"><b>${items.length} file${items.length===1?'':'s'} found</b><button class="btn small" type="button" onclick="importByoFromSharePoint()">Import selected</button></div>
-    ${items.map((x,i)=>`<label class="byoS3Row"><input type="checkbox" class="byoSpCheck" value="${i}"><span class="byoS3Key">${esc(x.name)}</span><span class="byoS3Size muted">${x.size_mb} MB</span></label>`).join('')}
-  </div>`;
-}
-function byoSharePointContext(){
-  return {
-    tenant_id:document.getElementById('byoSpTenant')?.value.trim()||'',
-    client_id:document.getElementById('byoSpClientId')?.value.trim()||'',
-    client_secret:document.getElementById('byoSpClientSecret')?.value.trim()||'',
-    share_url:document.getElementById('byoSpShareUrl')?.value.trim()||'',
-  };
-}
-async function listByoSharePointFiles(){
-  const ctx=byoSharePointContext();
-  if(!ctx.tenant_id||!ctx.client_id||!ctx.client_secret||!ctx.share_url){toast('Fill in the tenant ID, app ID, client secret, and share link');return;}
-  try{
-    const r=await fetch('/api/byo/import/sharepoint/list',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(ctx)});
-    const payload=await r.json().catch(()=>({error:'SharePoint list failed'}));
-    if(!r.ok)throw new Error(payload.error||'SharePoint list failed');
-    state.byoSharePointItems=payload.items||[];
-    toast(`${state.byoSharePointItems.length} matching file(s) found`);
-    await render();
-  }catch(err){toast('SharePoint list failed: '+String(err.message||err).slice(0,200));}
-}
-async function importByoFromSharePoint(){
-  const items=state.byoSharePointItems||[];
-  const checked=[...document.querySelectorAll('.byoSpCheck:checked')].map(x=>items[Number(x.value)]).filter(Boolean);
-  if(!checked.length){toast('Select at least one SharePoint/OneDrive file');return;}
-  try{
-    const r=await fetch('/api/byo/import/sharepoint',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:checked})});
-    const payload=await r.json().catch(()=>({error:'SharePoint import failed'}));
-    if(!r.ok)throw new Error(payload.error||'SharePoint import failed');
-    const names=(payload.saved||[]).map(x=>x.name);
-    if(names.length){state.byoLeft=state.byoLeft||names[0];if(!state.byoRight&&names.length>1)state.byoRight=names[1];saveByoSelection();}
-    toast(`${names.length} dataset${names.length===1?'':'s'} imported from SharePoint/OneDrive${payload.errors?.length?`, ${payload.errors.length} failed`:''}`);
-    state.byoSharePointItems=null;
-    await render();
-  }catch(err){toast('SharePoint import failed: '+String(err.message||err).slice(0,200));}
-}
-function saveByoSelection(){sessionStorage.setItem('dart_byo_left',state.byoLeft||'');sessionStorage.setItem('dart_byo_right',state.byoRight||'');}
-var byoRelationshipSelection={key_index:null,dimension:null,measure:null};
-var byoRelationshipData=null;
-function ensureByoSelections(info){const names=(info.datasets||[]).filter(x=>x.status==='Ready').map(x=>x.name);if(state.byoLeft&&!names.includes(state.byoLeft))state.byoLeft='';if(state.byoRight&&!names.includes(state.byoRight))state.byoRight='';if(!state.byoLeft&&names.length)state.byoLeft=names[0];if(!state.byoRight&&names.length>1)state.byoRight=names.find(x=>x!==state.byoLeft)||'';if(state.byoRight===state.byoLeft)state.byoRight=names.find(x=>x!==state.byoLeft)||'';if(state.byoEditFile&&!names.includes(state.byoEditFile))state.byoEditFile='';if(state.byoEmailFile&&!names.includes(state.byoEmailFile))state.byoEmailFile='';if(!state.byoEditFile&&names.length)state.byoEditFile=names[0];if(!state.byoEmailFile&&names.length)state.byoEmailFile=state.byoEditFile||names[0];saveByoSelection();sessionStorage.setItem('dart_byo_edit_file',state.byoEditFile||'');sessionStorage.setItem('dart_byo_email_file',state.byoEmailFile||'');}
-function byoPairReady(){return Boolean(state.byoLeft&&state.byoRight&&state.byoLeft!==state.byoRight);}
-async function setByoSelection(side,value){if(side==='left')state.byoLeft=value;else state.byoRight=value;if(state.byoLeft===state.byoRight){if(side==='left')state.byoRight='';else state.byoLeft='';}state.byoCompare=null;state.byoChat=null;byoRelationshipSelection={key_index:null,dimension:null,measure:null};saveByoSelection();await render();}
-async function swapByoSelection(){const a=state.byoLeft;state.byoLeft=state.byoRight;state.byoRight=a;state.byoCompare=null;state.byoChat=null;byoRelationshipSelection={key_index:null,dimension:null,measure:null};saveByoSelection();await render();}
-function byoDatasetOptions(info,selected,exclude=''){return `<option value="">Choose a saved dataset…</option>${(info.datasets||[]).filter(x=>x.status==='Ready'&&x.name!==exclude).map(x=>`<option value="${esc(x.name)}" ${x.name===selected?'selected':''}>${esc(x.name)} · ${intFmt(x.rows)} rows · ${intFmt(x.columns)} cols</option>`).join('')}`;}
-function byoPairPicker(info){return `<div class="panel"><div class="byoPairPicker"><div class="field"><label>Dataset A</label><select id="byoLeftSelect" onchange="setByoSelection('left',this.value)">${byoDatasetOptions(info,state.byoLeft,state.byoRight)}</select></div><div class="byoVersus">VS</div><div class="field"><label>Dataset B</label><select id="byoRightSelect" onchange="setByoSelection('right',this.value)">${byoDatasetOptions(info,state.byoRight,state.byoLeft)}</select></div></div>${byoPairReady()?`<div class="heroActions"><button class="btn" type="button" onclick="showPage('byo-compare')">Analyze selected pair</button><button class="btn secondary" type="button" onclick="showPage('byo-ai')">Ask AI about this pair</button><button class="btn ghost" type="button" onclick="swapByoSelection()">Swap A ↔ B</button></div>`:'<div class="callout" style="margin-top:14px"><b>Select two different saved datasets</b> to activate comparison and AI analysis.</div>'}</div>`;}
-function byoLibraryCards(info){const rows=info.datasets||[];if(!rows.length)return `<div class="empty">No saved DIY datasets yet. Upload files and they will appear here and on disk under ${esc(info.storage_path||'Data/DIY')}.</div>`;return `<div class="grid grid2">${rows.map(d=>`<div class="byoFileCard ${state.byoLeft===d.name?'selectedA':''} ${state.byoRight===d.name?'selectedB':''}"><div class="byoFileTop"><div><div class="byoFileName">${esc(d.name)}</div><div class="muted" style="font-size:.8rem;margin-top:3px">Modified ${esc(d.modified_at)}</div></div><span class="pill ${d.status==='Ready'?'Stable':'Critical'}">${esc(d.status)}</span></div><div class="byoMeta"><span>${esc(d.type)}</span><span>${intFmt(d.rows||0)} rows</span><span>${intFmt(d.columns||0)} columns</span><span>${esc(d.size_mb)} MB</span>${state.byoLeft===d.name?'<span>Dataset A ✓</span>':''}${state.byoRight===d.name?'<span>Dataset B ✓</span>':''}</div><div class="byoFileActions">${d.status==='Ready'?`<button class="btn small" type="button" onclick="setByoSelection('left','${safeArg(d.name)}')">${state.byoLeft===d.name?'Dataset A ✓':'Use as A'}</button><button class="btn secondary small" type="button" onclick="setByoSelection('right','${safeArg(d.name)}')">${state.byoRight===d.name?'Dataset B ✓':'Use as B'}</button>`:''}<a class="btn secondary small" href="/download/byo-file/${encodeURIComponent(d.name)}">Download original</a><a class="btn ghost small" href="/download/byo-csv/${encodeURIComponent(d.name)}">Export CSV</a><button class="btn ghost small dangerBtn" type="button" onclick="deleteByoFile('${safeArg(d.name)}')">Delete</button></div></div>`).join('')}</div>`;}
-async function deleteByoFile(name){if(!confirm(`Delete ${name} from Data/DIY? This removes the saved repo file.`))return;try{await del('/api/byo/files/'+encodeURIComponent(name));if(state.byoLeft===name)state.byoLeft='';if(state.byoRight===name)state.byoRight='';if(state.byoEditFile===name)state.byoEditFile='';if(state.byoEmailFile===name)state.byoEmailFile='';state.byoCompare=null;state.byoChat=null;saveByoSelection();toast('Dataset deleted');await render();}catch(err){toast('Delete failed: '+String(err.message||err).slice(0,160));}}
-function byoHomeStats(info){const datasets=info.datasets||[];const totalRows=datasets.reduce((a,x)=>a+Number(x.rows||0),0);const totalSize=datasets.reduce((a,x)=>a+Number(x.size_mb||0),0);return `<div class="grid grid4"><div class="panel metric"><div class="label">Saved datasets</div><div class="value">${intFmt(info.dataset_count||0)}</div><div class="sub">Persistent library</div></div><div class="panel metric"><div class="label">Rows available</div><div class="value">${intFmt(totalRows)}</div><div class="sub">Across saved files</div></div><div class="panel metric"><div class="label">Storage</div><div class="value" style="font-size:1.1rem">${esc(info.storage_path||'Data/DIY')}</div><div class="sub">Repo folder</div></div><div class="panel metric"><div class="label">AI analyst</div><div class="value" style="font-size:1.1rem">${info.ai_configured?'Connected':'Local mode'}</div><div class="sub">${info.ai_configured?esc(info.ai_model):'Uses same GROQ key when configured'}</div></div></div>`;}
-function compareSummaryCards(c){const s=c.summary;return `<div class="compareHeroGrid"><div class="compareMetric"><div class="k">Shared columns</div><div class="v">${intFmt(s.common_columns)}</div></div><div class="compareMetric"><div class="k">Type mismatches</div><div class="v ${s.type_mismatches?'deltaWarn':'deltaGood'}">${intFmt(s.type_mismatches)}</div></div><div class="compareMetric"><div class="k">Row difference B − A</div><div class="v">${intFmt(s.row_delta)}</div></div><div class="compareMetric"><div class="k">Completeness delta</div><div class="v ${Number(s.completeness_delta_pp)>=0?'deltaGood':'deltaWarn'}">${Number(s.completeness_delta_pp).toFixed(2)} pp</div></div></div>`;}
-function datasetSideCard(label,d){return `<div class="byoSelected"><span class="workspaceBadge">${esc(label)}</span><div class="datasetName">${esc(d.source)}</div><div class="muted" style="margin-top:5px">${intFmt(d.rows)} rows · ${intFmt(d.columns)} columns · ${pctNum(d.completeness)} complete · ${intFmt(d.duplicate_rows)} duplicates</div></div>`;}
-function compareOverview(c){return `${compareSummaryCards(c)}<br><div class="grid grid2">${datasetSideCard('Dataset A',c.left)}${datasetSideCard('Dataset B',c.right)}</div><br><div class="grid grid2"><div class="panel"><h3>Likely join keys</h3><p class="muted">Candidates are ranked using uniqueness and cross-file value overlap.</p>${genericTable(c.key_candidates,'DIY likely join keys')}</div><div class="panel"><h3>Schema exceptions</h3><p class="muted">Shared fields whose inferred pandas data types differ.</p>${genericTable(c.type_mismatches,'DIY schema type mismatches')}</div></div>`;}
-function compareQuality(c){return `<div class="byoSplitTables"><div class="panel"><div class="byoDatasetHead"><h3>Dataset A quality</h3><span class="pill Stable">${esc(c.left.source)}</span></div>${byoStats(c.left,'Dataset A')}<br>${genericTable(c.left.quality,'Dataset A quality')}</div><div class="panel"><div class="byoDatasetHead"><h3>Dataset B quality</h3><span class="pill Stable">${esc(c.right.source)}</span></div>${byoStats(c.right,'Dataset B')}<br>${genericTable(c.right.quality,'Dataset B quality')}</div></div><br><div class="panel"><h3>Shared-column quality comparison</h3>${genericTable(c.column_comparison,'DIY shared column quality comparison')}</div>`;}
-function compareExplorer(c){return `<div class="byoSplitTables"><div class="panel"><div class="byoDatasetHead"><h3>Dataset A preview</h3><a class="btn secondary small" href="/download/byo-csv/${encodeURIComponent(c.left.source)}">Full CSV</a></div>${genericTable(c.left.preview,'Dataset A preview')}</div><div class="panel"><div class="byoDatasetHead"><h3>Dataset B preview</h3><a class="btn secondary small" href="/download/byo-csv/${encodeURIComponent(c.right.source)}">Full CSV</a></div>${genericTable(c.right.preview,'Dataset B preview')}</div></div>`;}
-function compareDeepDive(c){return `<div class="grid grid2"><div class="panel"><h3>Common columns</h3>${genericTable(c.common_columns,'DIY common columns')}</div><div class="panel"><h3>Columns unique to each dataset</h3><div class="byoSplitTables byoUniqueTables"><div class="byoCompactTable">${genericTable(c.only_left,'Columns only in Dataset A')}</div><div class="byoCompactTable">${genericTable(c.only_right,'Columns only in Dataset B')}</div></div></div></div><br><div class="panel"><h3>Numeric field comparison</h3><p class="muted">Side-by-side means, medians, ranges, and mean deltas for shared numeric columns.</p>${genericTable(c.numeric_comparison,'DIY numeric comparison')}</div>`;}
-function relationshipOptionLabel(option){return `Dataset ${option.side} · ${option.column}`;}
-function relationshipOptions(options,selected){return options.map((o,i)=>`<option value="${i}" ${selected&&o.side===selected.side&&o.column===selected.column?'selected':''}>${esc(relationshipOptionLabel(o))}</option>`).join('');}
-async function changeRelationship(kind,value){
-  if(kind==='key'){byoRelationshipSelection={key_index:Number(value),dimension:null,measure:null};}
-  else if(kind==='dimension'){byoRelationshipSelection.dimension=byoRelationshipData.dimensions[Number(value)];byoRelationshipSelection.measure=null;}
-  else{byoRelationshipSelection.measure=byoRelationshipData.measures[Number(value)];}
-  await render();
-}
-function relationshipLab(r){
-  if(!r.keys?.length)return `<section class="relationshipLab"><div class="panel"><h3>Relationship explorer</h3><p>${esc(r.message||'No matching field is available.')}</p></div></section>`;
-  const c=r.coverage,total=c.only_a+c.only_b+c.shared_distinct;
-  const width=n=>total?Math.max(0,100*n/total):0;
-  const maxGroup=Math.max(1,...r.groups.map(g=>g.records));
-  const fields=r.disagreements.length?r.disagreements.map(f=>`<div><div class="relationshipRowTop"><span>${esc(f.field_a)}${f.field_a!==f.field_b?' ↔ '+esc(f.field_b):''}</span><strong>${f.percent.toFixed(1)}%</strong></div><div class="relationshipTrack"><div class="relationshipBar" style="width:${f.percent}%"></div></div><div class="relationshipDetail">${intFmt(f.different)} different of ${intFmt(f.compared)} comparable pairs</div></div>`).join(''):'<div class="empty">No other shared fields with comparable values in uniquely matched records.</div>';
-  const groups=r.groups.length?r.groups.map(g=>`<div><div class="relationshipRowTop"><span>${esc(g.label)}</span><strong>${intFmt(g.records)} records</strong></div><div class="relationshipTrack"><div class="relationshipBar" style="width:${100*g.records/maxGroup}%"></div></div>${r.measure?`<div class="relationshipDetail">Average ${esc(r.measure.column)}: ${g.mean===null?'no numeric values':esc(g.mean.toLocaleString(undefined,{maximumFractionDigits:4}))} · ${intFmt(g.measure_count)} values</div>`:''}</div>`).join(''):'<div class="empty">No uniquely matched records or suitable category values to chart.</div>';
-  return `<section class="relationshipLab"><div class="relationshipIntro"><div><span class="relationshipBadge">New · Connected insights</span><h2>See how the datasets connect</h2><p>Explore record-level relationships, not just side-by-side file statistics. Choose the matching field and confirm it represents the same entity in both datasets.</p></div></div>
-    <div class="panel relationshipControls"><div class="field"><label for="relationshipKey">Matching field</label><select id="relationshipKey" onchange="changeRelationship('key',this.value)">${r.keys.map((k,i)=>`<option value="${i}" ${i===r.key_index?'selected':''}>${esc(k.a)}${k.a!==k.b?' ↔ '+esc(k.b):''}</option>`).join('')}</select></div><div class="field"><label for="relationshipDimension">Category field</label><select id="relationshipDimension" onchange="changeRelationship('dimension',this.value)" ${r.dimensions.length?'':'disabled'}>${r.dimensions.length?relationshipOptions(r.dimensions,r.dimension):'<option>No suitable categories</option>'}</select></div><div class="field"><label for="relationshipMeasure">Measure from the other dataset</label><select id="relationshipMeasure" onchange="changeRelationship('measure',this.value)" ${r.measures.length?'':'disabled'}>${r.measures.length?relationshipOptions(r.measures,r.measure):'<option>No numeric measure available</option>'}</select></div></div>
-    <div class="relationshipGrid"><div class="panel relationshipPanel"><h3>Matching field coverage</h3><p>Distinct nonblank values; shared values may still have duplicate records.</p><div class="relationshipBig"><strong>${intFmt(c.unique_matched)}</strong><span>unambiguous matched record pairs</span></div><div class="relationshipStack" role="img" aria-label="${intFmt(c.only_a)} only in A, ${intFmt(c.shared_distinct)} shared, ${intFmt(c.only_b)} only in B"><span style="width:${width(c.only_a)}%;background:#738caa"></span><span style="width:${width(c.shared_distinct)}%;background:#c9a13f"></span><span style="width:${width(c.only_b)}%;background:#6b9b8e"></span></div><div class="relationshipLegend"><span><i style="background:#738caa"></i>Only A: ${intFmt(c.only_a)}</span><span><i style="background:#c9a13f"></i>Shared: ${intFmt(c.shared_distinct)}</span><span><i style="background:#6b9b8e"></i>Only B: ${intFmt(c.only_b)}</span></div><p>${intFmt(c.ambiguous_shared)} shared values excluded from record analysis because a key repeats. Blank key rows: A ${intFmt(c.missing_rows_a)}, B ${intFmt(c.missing_rows_b)}. Duplicate-key rows: A ${intFmt(c.duplicate_rows_a)}, B ${intFmt(c.duplicate_rows_b)}.</p></div>
-    <div class="panel relationshipPanel"><h3>Matched-field disagreements</h3><p>Top 10 shared fields ranked by difference rate among uniquely matched records. Whitespace is normalized; two blanks are excluded, one blank counts as different.</p><div class="relationshipRows">${fields}</div></div>
-    <div class="panel relationshipPanel" style="grid-column:1 / -1"><h3>Matched records by category</h3><p>Top 10 categories by record count${r.measure?`, with the average ${esc(r.measure.column)} from Dataset ${esc(r.measure.side)} for each group`:''}. Only one-to-one matched keys are included; blank categories are shown separately.</p><div class="relationshipRows">${groups}</div></div></div></section>`;
-}
-function byoAiStatus(info){return `<span class="aiStatus ${info.ai_configured?'on':'off'}">● ${info.ai_configured?'AI connected · '+esc(info.ai_model):'Local analysis · Groq client unavailable'}</span>`;}
-async function getByoChat(){if(!byoPairReady())return {chat:[],ai_configured:false};try{return await api(`/api/byo/chat?left=${encodeURIComponent(state.byoLeft)}&right=${encodeURIComponent(state.byoRight)}`);}catch{return {chat:[],ai_configured:false};}}
-async function askByoAI(prefill=''){if(!byoPairReady()){toast('Select two datasets first');return;}const input=document.getElementById('byoAiPrompt');const value=(prefill||input?.value||'').trim();if(!value)return;const send=document.getElementById('byoAiSend');if(send){send.disabled=true;send.textContent='Analyzing…';}try{await postJson('/api/byo/chat',{prompt:value,left:state.byoLeft,right:state.byoRight});const fresh=await getByoChat();state.byoChat=fresh.chat||[];await render();}catch(err){toast('AI analysis failed: '+String(err.message||err).slice(0,180));if(send){send.disabled=false;send.textContent='Send';}}}
-async function resetByoAI(){await postJson('/api/byo/chat/reset',{});state.byoChat=null;toast('AI conversation cleared');await render();}
-function byoAiPage(info,chat,c){const messages=chat?.chat||[];return `<div class="hero"><span class="workspaceBadge">Two-dataset AI</span><h1>AI Analyst</h1><p>Ask questions across the two selected saved datasets. The analyst uses the same Groq/OpenAI-compatible configuration as DART Copilot and is grounded in computed profiles, distributions, comparison metrics, key candidates, and representative records from both files.</p><div class="heroActions">${byoAiStatus(info)}<button class="btn secondary" type="button" onclick="resetByoAI()">Clear conversation</button></div></div>${byoPairPicker(info)}<br>${byoPairReady()?`<div class="byoChatShell"><div class="panel byoChatPanel"><div class="byoChat">${messages.length?messages.map(chatMessageHtml).join(''):'<div class="empty">Ask your first question about the selected pair.</div>'}</div><div class="byoChatComposer"><input id="byoAiPrompt" placeholder="Compare the two datasets, find likely keys, explain quality differences…" onkeydown="if(event.key==='Enter')askByoAI()"><button class="btn" id="byoAiSend" type="button" onclick="askByoAI()">Send</button></div><div class="heroActions"><button class="btn secondary small" type="button" onclick="askByoAI('Give me an executive comparison of these two datasets')">Executive comparison</button><button class="btn secondary small" type="button" onclick="askByoAI('What are the biggest data quality differences?')">Quality differences</button><button class="btn secondary small" type="button" onclick="askByoAI('Which columns are the best candidates to join these datasets and why?')">Find join keys</button><button class="btn secondary small" type="button" onclick="askByoAI('What anomalies or mismatches should I investigate first?')">Investigation priorities</button></div></div><aside class="panel byoContextCard"><h3>Active context</h3>${datasetSideCard('Dataset A',c.left)}<br>${datasetSideCard('Dataset B',c.right)}<br><div class="callout"><b>${intFmt(c.summary.common_columns)} shared columns</b><br>${intFmt(c.summary.type_mismatches)} type mismatches · ${intFmt(c.summary.key_candidates)} key candidates</div><p class="muted" style="font-size:.8rem">The model is not retrained on your files. Each answer is grounded in the two selected datasets at request time.</p></aside></div>`:`<div class="byoEmptyPair"><h3>Select two datasets to start the AI analyst</h3><p class="muted">Upload at least two files, then choose Dataset A and Dataset B above.</p></div>`}`;}
-function byoSingleDatasetPicker(info,selected,onchange,label='Dataset'){return `<div class="panel"><div class="field"><label>${esc(label)}</label><select onchange="${onchange}(this.value)">${byoDatasetOptions(info,selected)}</select></div></div>`;}
-async function setByoEditFile(value){state.byoEditFile=value;state.byoRawOffset=0;state.byoRawSearch='';state.byoRawData=null;sessionStorage.setItem('dart_byo_edit_file',value||'');await render();}
-async function setByoEmailFile(value){state.byoEmailFile=value;state.byoEmailEditingId=null;state.byoEmailAgent=null;sessionStorage.setItem('dart_byo_email_file',value||'');await render();}
-function byoRawDataPage(info,raw){state.byoRawData=raw;if(!raw?.file_found)return `<div class="hero"><span class="workspaceBadge">Build Your Own</span><h1>Raw Data Editor</h1><p>Upload a CSV or XLSX file first, then choose it here to inspect and edit the underlying saved file.</p><div class="heroActions"><button class="btn" onclick="showPage('byo-lab')">Upload data</button></div></div>`;const cols=raw.columns||[],rows=raw.rows||[],start=(raw.offset||0)+1,end=(raw.offset||0)+rows.length;const grid=`<div class="tableWrap"><table class="table rawTable"><thead><tr><th class="rawRow">Source row</th>${cols.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr><td class="rawRow">${esc(r._SourceRow)}</td>${cols.map(c=>`<td><input class="rawCell byoRawCell" data-row="${esc(r._SourceRow)}" data-col="${esc(c)}" data-before="${esc(rawText(r[c]))}" value="${esc(rawText(r[c]))}"></td>`).join('')}</tr>`).join('')}</tbody></table></div>`;return `${byoSingleDatasetPicker(info,state.byoEditFile,'setByoEditFile','File to edit')}<br>${section('byo-raw-overview','File editor',`<div class="hero"><span class="workspaceBadge">Build Your Own · ${esc(raw.file_type||'')}</span><h1>Raw Data Editor</h1><p>Inspect every row in the selected uploaded file and change cell values directly. Saving writes back to the actual file under Data/DIY, creates a timestamped backup first, and can immediately check BYO Email Alerts for the same file.</p><div class="heroActions"><button class="btn" onclick="saveByoRawChanges()">Save changes to file</button><button class="btn secondary" onclick="reloadByoRawData()">Refresh from file</button><button class="btn ghost" onclick="restoreLatestByoBackup()" ${raw.latest_backup?'':'disabled'}>Restore latest backup</button><button class="btn ghost" onclick="state.byoEmailFile=state.byoEditFile;sessionStorage.setItem('dart_byo_email_file',state.byoEmailFile);showPage('byo-email')">Open Email Alerts</button></div></div><div class="statusGrid"><div class="statusCard"><div class="muted">File</div><div class="big" style="font-size:1rem">${esc(raw.filename)}</div></div><div class="statusCard"><div class="muted">Rows</div><div class="big">${intFmt(raw.raw_rows)}</div></div><div class="statusCard"><div class="muted">Columns</div><div class="big">${intFmt(cols.length)}</div></div><div class="statusCard"><div class="muted">Sheet / type</div><div class="big" style="font-size:1rem">${esc(raw.sheet||raw.file_type||'')}</div></div></div><br><div class="callout"><b>Demo workflow:</b> open Email Alerts for this file and establish a baseline. Return here, edit a cell, leave “Check BYO Email Alerts immediately” selected, and save. The alert engine will compare the new file against the baseline immediately.</div>`)}${section('byo-raw-grid','Edit data',`<div class="panel"><div class="grid grid2"><div class="field"><label>Search this file</label><input id="byoRawSearchBox" value="${esc(state.byoRawSearch)}" placeholder="Search any column"><div class="heroActions"><button class="btn secondary small" onclick="applyByoRawSearch()">Search</button><button class="btn ghost small" onclick="clearByoRawSearch()">Clear</button></div></div><div class="field"><label>After save</label><select id="byoRawRunAgent"><option value="true">Check BYO Email Alerts immediately</option><option value="false">Do not run alerts</option></select><div class="rangeLine">Showing ${intFmt(start)}-${intFmt(end)} of ${intFmt(raw.filtered_rows)} matching rows.</div></div></div><br>${grid}<br><div class="heroActions"><button class="btn secondary" onclick="byoRawPage(-1)" ${raw.offset<=0?'disabled':''}>Previous</button><button class="btn secondary" onclick="byoRawPage(1)" ${raw.offset+raw.limit>=raw.filtered_rows?'disabled':''}>Next</button><button class="btn" onclick="saveByoRawChanges()">Save changes to file</button></div></div>`)}${section('byo-raw-backup','Backup protection',`<div class="panel"><h3>Backup status</h3><p class="muted">${raw.latest_backup?`Latest backup: <code>${esc(raw.latest_backup)}</code>`:'No backup has been created for this file yet.'}</p><p class="muted">For XLSX files DART changes only the targeted worksheet cells. For CSV files DART rewrites the CSV after backing up the original. Source row numbers are editor-only and are never added as a data column.</p></div>`)}`;}
-function collectByoRawChanges(){return [...document.querySelectorAll('.byoRawCell')].filter(el=>el.value!==el.dataset.before).map(el=>({source_row:Number(el.dataset.row),column:el.dataset.col,before:el.dataset.before,after:el.value}));}
-async function saveByoRawChanges(){const changes=collectByoRawChanges();if(!changes.length){toast('No cell changes to save');return;}if(!confirm(`Save ${changes.length} changed cell(s) to ${state.byoEditFile}?`))return;try{const runAgent=document.getElementById('byoRawRunAgent')?.value!=='false';const r=await postJson('/api/byo/raw-data/save',{filename:state.byoEditFile,changes,run_email_agent:runAgent,signature:state.byoRawData?.signature||''});const sent=(r.agent_results||[]).filter(x=>x.status==='Email sent').length;toast(`Saved ${r.saved} cell(s)${r.agent_results?.length?' · alerts checked':''}${sent?` · ${sent} email sent`:''}`);state.byoRawOffset=0;await render();}catch(err){toast('Save failed: '+String(err.message||err).slice(0,180));}}
-async function restoreLatestByoBackup(){if(!confirm(`Restore the most recent backup for ${state.byoEditFile}?`))return;try{await postJson('/api/byo/raw-data/restore-latest',{filename:state.byoEditFile});toast('DIY file restored');state.byoRawOffset=0;await render();}catch(err){toast('Restore failed: '+String(err.message||err).slice(0,160));}}
-async function reloadByoRawData(){state.byoRawOffset=0;await render();}
-async function applyByoRawSearch(){state.byoRawSearch=document.getElementById('byoRawSearchBox')?.value.trim()||'';state.byoRawOffset=0;await render();}
-async function clearByoRawSearch(){state.byoRawSearch='';state.byoRawOffset=0;await render();}
-async function byoRawPage(dir){state.byoRawOffset=Math.max(0,state.byoRawOffset+dir*state.byoRawLimit);await render();}
-function addByoEmailCondition(){const cols=state.byoEmailAgent?.columns||[];document.getElementById('byoConditionList')?.insertAdjacentHTML('beforeend',emailConditionRow({},cols));}
-function byoEmailAgentPage(info,workspace){state.byoEmailAgent=info;const templates=info.templates||[],tpl=(state.byoEmailEditingId?templates.find(t=>t.id===state.byoEmailEditingId):null)||info.default_template,cols=info.columns||[],status=info.status||{},smtp=info.smtp||{};const saved=templates.map(t=>`<div class="savedAutomation"><div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start"><div><b>${esc(t.name)}</b><div class="muted">${esc(t.dataset_name||'Dataset missing')} · ${esc(t.recipient_email)} · ${t.enabled?'Enabled':'Disabled'} · ${esc(t.last_status||'Not run yet')}</div></div><span class="pill ${t.enabled?'Stable':'Watch'}">${t.enabled?'Enabled':'Disabled'}</span></div><div class="automationActions"><button class="btn secondary small" onclick="editByoEmailById('${esc(t.id)}','${safeArg(t.dataset_name||'')}')">Edit</button><button class="btn secondary small" onclick="baselineByoEmail('${esc(t.id)}')">Refresh baseline</button><button class="btn secondary small" onclick="runByoEmail('${esc(t.id)}',false)">Check only</button><button class="btn small" onclick="runByoEmail('${esc(t.id)}',true)">Run + send</button><button class="btn ghost small" onclick="testByoEmail('${esc(t.id)}')">Send test</button><button class="btn ghost small" onclick="deleteByoEmailTemplate('${esc(t.id)}')">Delete</button></div></div>`).join('')||'<div class="empty">No Build Your Own alert automations yet. Choose a dataset, configure one below, and save it.</div>';const history=(info.history||[]).length?simpleTable(info.history):'<div class="empty">No Build Your Own alert history yet.</div>',dup=tpl.identity_duplicate_count||0;return `${byoSingleDatasetPicker(workspace,state.byoEmailFile,'setByoEmailFile','Dataset to monitor')}<br>${section('byo-email-status','Alert status',`<div class="hero"><span class="workspaceBadge">Build Your Own</span><h1>Email Alerts</h1><p>Monitor any uploaded DIY dataset for new or changed rows. Each automation is tied to one saved file, has its own baseline, and uses the same working SMTP delivery as the Medicare Email Agent.</p><div class="heroActions"><button class="btn" onclick="checkAllByoEmails()">Check all enabled alerts now</button><button class="btn secondary" onclick="baselineAllByoEmails()">Baseline all enabled</button><button class="btn ghost" onclick="testSmtp()">Test SMTP connection</button><button class="btn ghost" onclick="state.byoEditFile=state.byoEmailFile;sessionStorage.setItem('dart_byo_edit_file',state.byoEditFile);showPage('byo-raw')">Edit selected file</button></div></div><div class="statusGrid"><div class="statusCard"><div class="muted">Watcher</div><div class="big"><span class="statusDot ${String(status.status||'').toLowerCase().includes('error')?'bad':'good'}"></span>${esc(status.status||'Not started')}</div></div><div class="statusCard"><div class="muted">Check interval</div><div class="big">${esc(info.check_interval_seconds)}s</div></div><div class="statusCard"><div class="muted">Dataset</div><div class="big" style="font-size:1rem">${esc(info.selected_dataset||'None')}</div></div><div class="statusCard"><div class="muted">Email delivery</div><div class="big">${smtp.configured?'Ready':'Setup needed'}</div><div class="muted">${esc(smtp.host||'')} ${smtp.port?': '+esc(smtp.port):''}</div></div></div><br><div class="callout"><b>Best demo:</b> save an automation, click Refresh baseline, open the Raw Data Editor for this same file, change a monitored value, and save. The editor can run this alert immediately so you do not have to wait for the background interval.</div>`)}${section('byo-email-saved','Saved alerts',`<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div><h3>Saved Build Your Own alerts</h3><p class="muted">Each alert remembers the exact DIY file it monitors.</p></div><button class="btn secondary" onclick="newByoEmailTemplate()">New alert</button></div>${saved}</div>`)}${section('byo-email-builder','Alert builder',`<div class="panel emailBuilder"><h3>${tpl.id?'Edit alert':'Create alert'}</h3><div class="grid grid2"><div class="field"><label>Monitoring dataset</label><input value="${esc(info.selected_dataset||'')}" disabled><div class="rangeLine">Change the dataset using the picker above.</div></div><div class="field"><label>Alert name</label><input id="byoEmailName" value="${esc(tpl.name||'')}"></div><div class="field"><label>Recipient email(s)</label><input id="byoEmailRecipient" value="${esc(tpl.recipient_email||'')}" placeholder="owner@example.com; second@example.com"></div><div class="field"><label>Enabled</label><select id="byoEmailEnabled"><option value="false" ${!tpl.enabled?'selected':''}>Disabled</option><option value="true" ${tpl.enabled?'selected':''}>Enabled</option></select></div><div class="field"><label>Trigger mode</label><select id="byoEmailTrigger">${['New or changed rows','New rows only','All changes including deletions'].map(x=>`<option ${tpl.trigger_mode===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Row identity columns</label>${smartMultiSelect('byoEmailIdentity',cols,tpl.identity_columns,'Choose row identity columns')}<div class="rangeLine">Use stable fields that identify the same logical row between file versions. ${dup?`${intFmt(dup)} rows currently share duplicate identity values.`:'Current selection is suitable for row matching.'}</div></div><div class="field"><label>Monitored columns</label>${smartMultiSelect('byoEmailMonitor',cols,tpl.monitor_columns,'Choose monitored columns')}<div class="rangeLine">Changes to these fields count as detected changes.</div></div><div class="field"><label>Display columns in email</label>${smartMultiSelect('byoEmailDisplay',cols,tpl.display_columns,'Choose email display columns')}</div><div class="field"><label>Requirement mode</label><select id="byoEmailConditionMode"><option ${tpl.condition_mode==='Any change'?'selected':''}>Any change</option><option ${tpl.condition_mode!=='Any change'?'selected':''}>Only when conditions are met</option></select><label style="margin-top:10px">Condition logic</label><select id="byoEmailLogic"><option ${tpl.condition_logic!=='ANY condition'?'selected':''}>ALL conditions</option><option ${tpl.condition_logic==='ANY condition'?'selected':''}>ANY condition</option></select></div></div><br><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Conditions</h3><button type="button" class="btn secondary small" onclick="addByoEmailCondition()">Add condition</button></div><div id="byoConditionList">${(tpl.conditions||[]).map(r=>emailConditionRow(r,cols)).join('')}</div><div class="grid grid2"><div class="field"><label>Subject prefix</label><input id="byoEmailSubject" value="${esc(tpl.subject_prefix||'[DART DIY Alert]')}"></div><div class="field"><label>Greeting</label><input id="byoEmailGreeting" value="${esc(tpl.greeting||'Hello,')}"></div></div><div class="field"><label>Email introduction</label><textarea id="byoEmailIntro">${esc(tpl.email_intro||'')}</textarea></div><div class="field" style="max-width:280px"><label>CSV attachment</label><select id="byoEmailCsv"><option value="true" ${tpl.include_csv!==false?'selected':''}>Include CSV</option><option value="false" ${tpl.include_csv===false?'selected':''}>No CSV</option></select></div><br><div class="heroActions"><button class="btn" onclick="saveByoEmailTemplate()">Save alert</button><button class="btn secondary" onclick="previewByoEmailTemplate()">Preview current matches</button></div></div><div id="byoEmailPreviewHolder" style="margin-top:16px"></div>`)}${section('byo-email-history','Execution history',`<div class="panel"><h3>Recent BYO alert history</h3>${history}</div><br><div class="callout"><b>SMTP:</b> This page uses the same local-demo Gmail configuration as the Medicare Email Agent. The password is never sent to the browser.${smtp.issues?.length?`<br><br><b>Current setup items:</b> ${esc(smtp.issues.join(' '))}`:''}</div>`)}`;}
-async function editByoEmailById(id,dataset){state.byoEmailEditingId=id;state.byoEmailFile=dataset;sessionStorage.setItem('dart_byo_email_file',dataset||'');await render();}
-async function newByoEmailTemplate(){state.byoEmailEditingId=null;await render();}
-function collectByoEmailTemplate(){const conditions=[...document.querySelectorAll('#byoConditionList .conditionRow')].map(row=>({column:row.querySelector('.condColumn').value,operator:row.querySelector('.condOperator').value,value:row.querySelector('.condValue').value}));return {id:state.byoEmailEditingId||'',dataset_name:state.byoEmailFile||'',name:document.getElementById('byoEmailName')?.value||'',recipient_email:document.getElementById('byoEmailRecipient')?.value||'',enabled:document.getElementById('byoEmailEnabled')?.value==='true',trigger_mode:document.getElementById('byoEmailTrigger')?.value||'New or changed rows',identity_columns:selectedValues('byoEmailIdentity'),monitor_columns:selectedValues('byoEmailMonitor'),condition_mode:document.getElementById('byoEmailConditionMode')?.value||'Any change',condition_logic:document.getElementById('byoEmailLogic')?.value||'ALL conditions',conditions,display_columns:selectedValues('byoEmailDisplay'),subject_prefix:document.getElementById('byoEmailSubject')?.value||'[DART DIY Alert]',greeting:document.getElementById('byoEmailGreeting')?.value||'Hello,',email_intro:document.getElementById('byoEmailIntro')?.value||'',include_csv:document.getElementById('byoEmailCsv')?.value!=='false'};}
-async function saveByoEmailTemplate(){try{const r=await postJson('/api/byo/email-agent/template',collectByoEmailTemplate());state.byoEmailEditingId=r.template.id;toast('Build Your Own alert saved');await render();}catch(err){toast('Could not save: '+String(err.message||err).slice(0,160));}}
-async function deleteByoEmailTemplate(id){if(!confirm('Delete this BYO alert and its baseline snapshot?'))return;await del('/api/byo/email-agent/template/'+encodeURIComponent(id));state.byoEmailEditingId=null;toast('BYO alert deleted');await render();}
-async function baselineByoEmail(id){try{const r=await postJson('/api/byo/email-agent/baseline/'+encodeURIComponent(id),{});toast(`${r.rows||0} rows saved as baseline`);await render();}catch(err){toast('Baseline failed: '+String(err.message||err).slice(0,160));}}
-async function baselineAllByoEmails(){const r=await postJson('/api/byo/email-agent/baselines',{});toast(`Refreshed ${r.baselines||0} BYO baseline(s)`);await render();}
-async function runByoEmail(id,send){try{const r=await postJson('/api/byo/email-agent/run/'+encodeURIComponent(id),{send_email:send});toast(r.status||'Check complete');await render();}catch(err){toast('Alert check failed: '+String(err.message||err).slice(0,160));}}
-async function testByoEmail(id){try{const r=await postJson('/api/byo/email-agent/test/'+encodeURIComponent(id),{});toast(r.status||'Test email sent');}catch(err){toast('Test failed: '+String(err.message||err).slice(0,160));}}
-async function checkAllByoEmails(){const r=await postJson('/api/byo/email-agent/check',{});toast(`Checked ${r.results?.length||0} enabled BYO alert(s)`);await render();}
-async function previewByoEmailTemplate(){try{const r=await postJson('/api/byo/email-agent/preview',collectByoEmailTemplate());const holder=document.getElementById('byoEmailPreviewHolder');holder.innerHTML=`<div class="panel"><h3>Preview · ${intFmt(r.matches)} current matching row(s)</h3><div class="emailPreview"><iframe id="byoEmailPreviewFrame"></iframe></div></div>`;document.getElementById('byoEmailPreviewFrame').srcdoc=r.html||'<p>No preview available.</p>';}catch(err){toast('Preview failed: '+String(err.message||err).slice(0,160));}}
-async function renderByo(meta,info){
-  ensureByoSelections(info);
-  state.byoInfo=info;
-  let comparison=null;
-  if(byoPairReady()&&['byo-compare','byo-quality','byo-preview','byo-ai','byo-export'].includes(state.page)){
-    try{comparison=await postJson('/api/byo/compare',{left:state.byoLeft,right:state.byoRight});state.byoCompare=comparison;}
-    catch(err){state.byoCompare=null;toast('Comparison failed: '+String(err.message||err).slice(0,160));}
-  }
-  let relationshipError='';
-  if(state.page==='byo-compare'&&comparison){
-    try{
-      byoRelationshipData=await postJson('/api/byo/relationships',{left:state.byoLeft,right:state.byoRight,...byoRelationshipSelection});
-    }catch(err){
-      byoRelationshipData=null;
-      relationshipError=String(err.message||err);
-    }
-  }
-  let rawInfo=null,emailInfo=null;
-  if(state.page==='byo-raw'&&state.byoEditFile)rawInfo=await api(`/api/byo/raw-data?filename=${encodeURIComponent(state.byoEditFile)}&search=${encodeURIComponent(state.byoRawSearch)}&offset=${state.byoRawOffset}&limit=${state.byoRawLimit}`);
-  if(state.page==='byo-email')emailInfo=await api(`/api/byo/email-agent?filename=${encodeURIComponent(state.byoEmailFile||'')}`);
-  let html='';
-  const noFiles=`<div class="panel workspaceEmpty"><h3>No saved DIY datasets yet</h3><p class="muted">Upload CSV/XLSX files. DART will save them under <span class="byoStoragePath">${esc(info.storage_path||'Data/DIY')}</span> and keep them available after restart.</p><button class="btn" onclick="showPage('byo-lab')">Upload datasets</button></div>`;
-  const needPair=(info.dataset_count||0)<1?noFiles:`<div class="byoEmptyPair"><h3>${(info.dataset_count||0)===1?'One more dataset needed':'Select two datasets'}</h3><p class="muted">${(info.dataset_count||0)===1?'Upload another CSV/XLSX file, then choose a pair.':'Choose two different saved datasets above to run this analysis.'}</p><button class="btn secondary" onclick="showPage('byo-library')">Open Dataset Library</button></div>`;
-  if(state.page==='byo-home'){
-    html=`<div class="hero"><span class="workspaceBadge">Build Your Own</span><h1>Dataset Intelligence Workspace</h1><p>Upload reusable data files, compare datasets, inspect quality, edit the underlying saved data, configure file-specific email alerts, and ask an AI analyst questions grounded in your selected files.</p><div class="heroActions"><button class="btn" onclick="showPage('byo-library')">Open Dataset Library</button><button class="btn secondary" onclick="showPage('byo-raw')">Open Raw Data Editor</button><button class="btn secondary" onclick="showPage('byo-email')">Open Email Alerts</button><button class="btn ghost" onclick="showPage('byo-ai')">Open AI Analyst</button></div></div>${byoHomeStats(info)}<br>${personaLensPanel(meta)}<br><div class="byoFlow"><div class="byoFlowCard"><b>1 · Save datasets</b><span>Upload Excel or CSV files once. Originals are stored in Data/DIY and persist between server restarts.</span></div><div class="byoFlowCard"><b>2 · Inspect, edit, or compare</b><span>Open any single file in Raw Data Editor or choose a pair for comparison and quality analysis.</span></div><div class="byoFlowCard"><b>3 · Alert + analyze</b><span>Baseline a file-specific Email Alert, edit a monitored cell for the demo, then let DART detect and email the change immediately.</span></div></div><br>${(info.datasets||[]).length?byoPairPicker(info):noFiles}`;
-  }else if(state.page==='byo-lab'){
-    html=`<div class="hero"><span class="workspaceBadge">Build Your Own</span><h1>Upload Data</h1><p>Add reusable datasets to the persistent DIY library. Multiple files can be uploaded at once and duplicate filenames are saved safely with a numeric suffix.</p></div>${byoUploadPanel(info)}<br>${byoImportPanel()}<br><div class="panel"><h3>Saved location</h3><p>Files are written to <span class="byoStoragePath">${esc(info.storage_path||'Data/DIY')}</span> relative to this Python app. Once uploaded, the same file can be opened in Raw Data Editor and selected in Email Alerts.</p></div>`;
-  }else if(state.page==='byo-library'){
-    html=`<div class="hero"><span class="workspaceBadge">Persistent library</span><h1>Dataset Library</h1><p>Choose, download, export, or delete the files saved in your repo. Every ready file is also available to the BYO Raw Data Editor and Email Alerts pages.</p><div class="heroActions"><button class="btn" onclick="showPage('byo-lab')">Upload more files</button><button class="btn secondary" onclick="showPage('byo-raw')">Edit a file</button><button class="btn ghost" onclick="showPage('byo-email')">Configure alerts</button></div></div><div class="byoLibraryGrid"><div class="panel"><h3>${intFmt(info.dataset_count||0)} saved datasets</h3>${byoLibraryCards(info)}</div><div>${byoPairPicker(info)}</div></div>`;
-  }else if(state.page==='byo-compare'){
-    html=`<div class="hero"><span class="workspaceBadge">Dataset A ↔ Dataset B</span><h1>Compare Lab</h1><p>Explore how your datasets connect, investigate matched records, and compare their schema, quality, and numeric fields.</p></div>${byoPairPicker(info)}${comparison?`${relationshipError?`<div class="panel"><h3>Relationship analysis unavailable</h3><p>${esc(relationshipError)}</p></div>`:relationshipLab(byoRelationshipData)}<br>${compareOverview(comparison)}<br><div class="panel"><h3>Detailed field comparison</h3>${genericTable(comparison.column_comparison,'DIY detailed field comparison')}</div><br>${compareDeepDive(comparison)}`:`<br>${needPair}`}`;
-  }else if(state.page==='byo-quality'){
-    html=`<div class="hero"><h1>Schema & Quality</h1><p>Compare column completeness, distinctness, duplicates, inferred data types, and schema exceptions across the selected pair.</p></div>${byoPairPicker(info)}${comparison?`<br>${compareQuality(comparison)}`:`<br>${needPair}`}`;
-  }else if(state.page==='byo-preview'){
-    html=`<div class="hero"><h1>Data Explorer</h1><p>Inspect both selected datasets side-by-side without editing them. Use Raw Data Editor when you want to write changes back to one uploaded file.</p><div class="heroActions"><button class="btn secondary" onclick="showPage('byo-raw')">Open Raw Data Editor</button></div></div>${byoPairPicker(info)}${comparison?`<br>${compareExplorer(comparison)}<br><div class="panel"><h3>Shared schema</h3>${genericTable(comparison.column_comparison,'DIY explorer shared schema')}</div>`:`<br>${needPair}`}`;
-  }else if(state.page==='byo-raw'){
-    html=(info.dataset_count||0)?byoRawDataPage(info,rawInfo):noFiles;
-  }else if(state.page==='byo-email'){
-    html=(info.dataset_count||0)?byoEmailAgentPage(emailInfo||{},info):noFiles;
-  }else if(state.page==='byo-ai'){
-    const chat=await getByoChat();html=byoAiPage(info,chat,comparison||state.byoCompare||{left:{},right:{},summary:{common_columns:0,type_mismatches:0,key_candidates:0}});
-  }else if(state.page==='byo-export'){
-    html=`<div class="hero"><h1>Export Center</h1><p>Download the original saved files, export either full dataset as CSV, or export the comparison tables currently generated by DART.</p></div>${byoPairPicker(info)}${comparison?`<br><div class="grid grid2"><div class="panel"><h3>Dataset A</h3><p><b>${esc(comparison.left.source)}</b></p><div class="heroActions"><a class="btn" href="/download/byo-file/${encodeURIComponent(comparison.left.source)}">Download original</a><a class="btn secondary" href="/download/byo-csv/${encodeURIComponent(comparison.left.source)}">Export full CSV</a></div></div><div class="panel"><h3>Dataset B</h3><p><b>${esc(comparison.right.source)}</b></p><div class="heroActions"><a class="btn" href="/download/byo-file/${encodeURIComponent(comparison.right.source)}">Download original</a><a class="btn secondary" href="/download/byo-csv/${encodeURIComponent(comparison.right.source)}">Export full CSV</a></div></div></div><br><div class="grid grid2"><div class="panel"><h3>Comparison export</h3>${genericTable(comparison.column_comparison,'DIY comparison export')}</div><div class="panel"><h3>Join-key export</h3>${genericTable(comparison.key_candidates,'DIY join key candidates')}</div></div>`:`<br>${needPair}`}`;
-  }else{state.page='byo-home';return renderByo(meta,info);}
-  document.getElementById('footer').innerHTML=`Build Your Own · ${intFmt(info.dataset_count||0)} saved datasets · ${esc(info.storage_path||'Data/DIY')} · DART ${esc(meta.version)} · ${esc(meta.build_fingerprint||'build unknown')} · FastAPI`;
-  const appEl=document.getElementById('app');appEl.innerHTML=html;runInjectedScripts(appEl);decorateMetricHelp(appEl);refreshThemeVisuals(appEl);ensureAssistantBubble();
-}
-function genericTable(rows,exportName=''){if(!rows||!rows.length)return '<div class="empty">No rows available.</div>';const cols=Object.keys(rows[0]);return `<div class="exportTableBlock">${exportBar(exportName,rows.length)}<div class="tableWrap"><table class="table"><thead><tr>${cols.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(c=>`<td>${esc(r[c])}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div>`;}
-
-function kanban(rows){const lanes=['Open','In progress','Blocked','Resolved'];return `<div class="kanban">${lanes.map(l=>`<div class="lane"><h4>${l}</h4>${(rows||[]).filter(r=>r.Status===l).map(r=>`<div class="task"><b>${esc(r.Field)}</b><br><span class="muted">${esc(r.Stream)} · ${esc(r.Priority||'')}</span><br>${esc(r.Owner||'Unassigned')}<br><span class="muted">${esc(r.Note||'')}</span></div>`).join('')||'<div class="muted">No items</div>'}</div>`).join('')}</div>`;}
-
 async function render(){const meta=await api('/api/meta');state.meta=meta;if(!meta.auth_user){renderAuth();return;}setNav();if(state.page==='welcome'){document.getElementById('footer').innerHTML=`DART ${esc(meta.version)} · Data Assurance Reconciliation Tracker`;document.getElementById('app').innerHTML=welcomePage();refreshThemeVisuals(document.getElementById('app'));return;}syncChatHistoryFromWorkspaceState();if(state.page==='profile'||state.page==='settings'){renderSharedPage(meta);return;}if(state.workspace==='medicaid'){await renderMedicaid(meta);return;}if(state.workspace==='byo'){const byo=await api('/api/byo');await renderByo(meta,byo);return;}const data=await getData();let emailInfo=null;let rawInfo=null;if(state.page==='emailagent')emailInfo=await api('/api/email-agent');if(state.page==='raweditor')rawInfo=await api(`/api/raw-data?search=${encodeURIComponent(state.rawSearch)}&offset=${state.rawOffset}&limit=${state.rawLimit}`);document.getElementById('footer').innerHTML=`Loaded: ${esc(meta.source)} · ${intFmt(meta.rows)} rows · ${intFmt(meta.columns)} columns · DART ${esc(meta.version)} · ${esc(meta.build_fingerprint||'build unknown')} · FastAPI`;const p=meta.persona||{};let html=filterBar(meta);
 if(state.page==='home'){
   const pqLimit=Number(state.priorityQueueLimit||10);
@@ -11478,25 +10558,6 @@ async def compare_byo_route(request: Request) -> Any:
     try:
         return compare_byo_datasets(str(payload.get("left", "")), str(payload.get("right", "")), include_previews=True)
     except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
-
-
-@app.post("/api/byo/relationships")
-async def byo_relationships_route(request: Request) -> Any:
-    payload = await request.json()
-    try:
-        left_name = str(payload.get("left", ""))
-        right_name = str(payload.get("right", ""))
-        if not left_name or not right_name or left_name == right_name:
-            raise ValueError("Choose two different saved datasets.")
-        return _byo_relationship_analysis(
-            _read_byo_dataset(left_name),
-            _read_byo_dataset(right_name),
-            key_index=payload.get("key_index"),
-            dimension=payload.get("dimension"),
-            measure=payload.get("measure"),
-        )
-    except (ValueError, FileNotFoundError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
 
