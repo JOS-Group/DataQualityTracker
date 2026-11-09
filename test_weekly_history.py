@@ -48,6 +48,18 @@ class WeeklyHistoryTests(unittest.TestCase):
         self.assertEqual(len(history.history(self.path, "alice", "claims.csv")["timeline"]), 2)
         self.assertFalse(history.history(self.path, "bob", "claims.csv")["timeline"])
 
+    def test_manual_refresh_compares_without_moving_schedule(self):
+        first = pd.DataFrame([{"ID": "A", "V": 1}, {"ID": "B", "V": 2}])
+        with self.assertRaises(ValueError):
+            history.capture_now(self.path, "alice", "d.csv", first)
+        start = (datetime.now(timezone.utc).date() + timedelta(days=3)).isoformat()
+        history.save_schedule(self.path, "alice", "d.csv", "ID", start, first)
+        history.capture_now(self.path, "alice", "d.csv", pd.DataFrame([{"ID": "A", "V": 5}, {"ID": "B", "V": 2}]))
+        data = history.history(self.path, "alice", "d.csv")
+        self.assertEqual(data["comparison"]["changed_values"], 1)
+        self.assertTrue(data["schedule"]["next_run"].startswith(start))
+        self.assertEqual(history.key_candidates(pd.DataFrame({"ID": ["A", "B"], "V": [1, 1], "N": ["x", None]})), ["ID"])
+
     def test_invalid_key_failure_and_retry_are_visible(self):
         frame = pd.DataFrame([{"id": 1, "value": "a"}])
         today = datetime.now(timezone.utc).date()

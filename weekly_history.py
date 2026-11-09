@@ -323,6 +323,35 @@ def deliver_pending(path, sender, now):
                              ((now + timedelta(minutes=15)).isoformat(), str(exc), item_id))
 
 
+def key_candidates(frame):
+    """Columns whose values are non-empty and unique, so they can identify rows."""
+    result = []
+    for column in frame.columns:
+        values = frame[column].astype(str).str.strip()
+        if (frame[column].notna().all() and not (values == "").any() and values.is_unique
+                and len(frame) > 0):
+            result.append(str(column))
+    return result
+
+
+def capture_now(path, owner, dataset, frame):
+    """Manual refresh: snapshot the dataset now without moving the weekly schedule."""
+    with connect(path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        last = conn.execute("SELECT key_column FROM snapshots WHERE owner=? AND dataset=? ORDER BY id DESC LIMIT 1",
+                            (owner, dataset)).fetchone()
+        if not last:
+            raise ValueError("Save a weekly schedule first to capture the baseline.")
+        data = frame_data(frame, last["key_column"])
+        now = datetime.now(timezone.utc).isoformat()
+        snapshot_id = conn.execute("INSERT INTO snapshots(owner,dataset,captured_at,key_column,data) VALUES(?,?,?,?,?)",
+                                   (owner, dataset, now, last["key_column"], json.dumps(data))).lastrowid
+        conn.execute("""INSERT INTO email_outbox(owner,dataset,snapshot_id,email,next_attempt)
+                        SELECT owner,dataset,?,email,? FROM recipients WHERE owner=? AND dataset=?""",
+                     (snapshot_id, now, owner, dataset))
+        return snapshot_id
+
+
 def run_due(path, loader, now=None, sender=None):
     now = now or datetime.now(timezone.utc)
     with connect(path) as conn:

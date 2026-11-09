@@ -6490,10 +6490,6 @@ HTML = r'''
     @media(max-width:900px){.welcomeHero{grid-template-columns:1fr}.welcomeCompass{max-width:600px}.welcomeCards{grid-template-columns:1fr}.welcomeCard{padding:24px}.welcomeCard h3{margin-top:18px}}
     @media(max-width:600px){.welcome{margin-top:0}.welcomeHero{gap:26px;border-radius:20px}.welcomeHeading,.welcomeNote{align-items:flex-start;flex-direction:column}.welcomeHeading{margin-top:32px}.welcomeNote button{width:100%}}
 
-  .hero.historyHero,:root[data-theme="dark"] .hero.historyHero{background:linear-gradient(125deg,#142d46,#24566b 65%,#326d71)!important;border-color:#326d71!important;color:#fff}
-  .hero.historyHero h1,:root[data-theme="dark"] .hero.historyHero h1{color:#fff!important}
-  .hero.historyHero p,:root[data-theme="dark"] .hero.historyHero p{color:#e4f2f4!important;max-width:760px}
-  .hero.historyHero .workspaceBadge,:root[data-theme="dark"] .hero.historyHero .workspaceBadge{background:#f9e6ac!important;border-color:#f9e6ac!important;color:#332700!important}
   .historyPicker{display:flex;align-items:center;gap:20px;flex-wrap:wrap;border-left:4px solid #c99a2e}
   .historyPickerIntro{flex:1;min-width:220px}.historyPickerIntro h3{margin:0 0 5px}.historyPickerIntro p{margin:0}
   .historyPicker .field{flex:1;min-width:250px;max-width:520px}
@@ -9048,6 +9044,10 @@ async function saveHistorySchedule(event){
     state.historySnapshot=null;toast('Weekly schedule saved and baseline captured');await render();
   }catch(err){toast('Schedule could not be saved: '+String(err.message||err));}
 }
+async function refreshHistoryNow(){
+  try{const r=await postJson('/api/byo/history/refresh',{dataset:state.historyDataset});state.historySnapshot=r.snapshot;state.historyOffset=0;state.historyMetric='';toast('Snapshot captured; compared with the previous one');await render();}
+  catch(err){toast('Refresh failed: '+String(err.message||err));}
+}
 async function pauseHistorySchedule(){
   try{await postJson('/api/byo/history/pause',{dataset:state.historyDataset});toast('Schedule paused; history retained');await render();}
   catch(err){toast('Could not pause schedule: '+String(err.message||err));}
@@ -9063,7 +9063,7 @@ function historyPage(info,data){
     const schedulePanel=demo?`<div class="historyNotice"><b>Illustrative demo data.</b> These four synthetic snapshots are not live Medicare data and are not scheduled.</div>`:
       `<div class="panel"><h3>Weekly refresh</h3><p class="muted">A baseline is captured when you save. The first refresh runs at 00:00 UTC on the selected date, then every 7 days, using the saved local dataset. The server must be running; missed weeks cannot be recreated.</p>
       ${schedule?`<p><b>Next refresh:</b> ${esc(historyDate(schedule.next_run))} UTC · <b>Identity:</b> ${esc(schedule.key_column)}</p>${schedule.error?`<div class="historyNotice"><b>Last refresh failed:</b> ${esc(schedule.error)}. The worker will retry.</div>`:''}`:''}
-      <form onsubmit="saveHistorySchedule(event)"><div class="grid grid2"><div class="field"><label for="historyKey">Unique row / claim ID</label><select id="historyKey" required>${columns.map(c=>`<option value="${esc(c)}" ${c===(schedule?.key_column||data.identity_column||columns.find(x=>x.toLowerCase()==='claim id')||columns[0])?'selected':''}>${esc(c)}</option>`).join('')}</select></div><div class="field"><label for="historyStart">First refresh date (UTC)</label><input id="historyStart" type="date" min="${today}" value="${schedule?esc(schedule.next_run.slice(0,10)):today}" required></div></div><br><button class="btn" type="submit">${schedule?'Update schedule':'Capture baseline & schedule'}</button> ${schedule?'<button class="btn ghost" type="button" onclick="pauseHistorySchedule()">Pause schedule</button>':''}</form><p class="muted">The identity must be unique and non-empty in every snapshot; it cannot change after history is created. Pausing keeps existing history.</p></div>`;
+      <form onsubmit="saveHistorySchedule(event)"><div class="grid grid2"><div class="field"><label for="historyKey">Unique row / claim ID</label><select id="historyKey" required>${(schedule?[schedule.key_column]:(data.key_candidates||[])).map(c=>`<option value="${esc(c)}" ${c===(schedule?.key_column||data.identity_column||columns.find(x=>x.toLowerCase()==='claim id')||columns[0])?'selected':''}>${esc(c)}</option>`).join('')}</select></div><div class="field"><label for="historyStart">First refresh date (UTC)</label><input id="historyStart" type="date" min="${today}" value="${schedule?esc(schedule.next_run.slice(0,10)):today}" required></div></div><br><button class="btn" type="submit">${schedule?'Update schedule':'Capture baseline & schedule'}</button> ${schedule?'<button class="btn secondary" type="button" onclick="refreshHistoryNow()">Refresh now</button> <button class="btn ghost" type="button" onclick="pauseHistorySchedule()">Pause schedule</button>':''}</form>${!schedule&&!(data.key_candidates||[]).length?'<div class="historyNotice">No column in this dataset has unique, non-empty values, so rows cannot be tracked week to week. Add or fix an ID column in the Raw Data Editor first.</div>':''}<p class="muted">The identity must be unique and non-empty in every snapshot; it cannot change after history is created. Pausing keeps existing history.</p></div>`;
     const timeline=(data.timeline||[]).slice().reverse().map((w,i)=>`<button class="historyWeek ${w.id===data.selected?'active':''}" onclick="selectHistoryWeek(${Number(w.id)})"><b>${i===0?'Latest · ':''}${esc(historyDate(w.captured_at))}</b><small>${w.summary?`${intFmt(w.summary.changed_values)} values changed · +${intFmt(w.summary.added)} / −${intFmt(w.summary.removed)} rows`:'Baseline snapshot'}</small></button>`).join('');
     let detail='<div class="panel workspaceEmpty"><h3>No snapshots yet</h3><p class="muted">Save a schedule to capture the first baseline.</p></div>';
     if(data.selected&&!data.comparison){
@@ -9081,7 +9081,7 @@ function historyPage(info,data){
     }
     content=`<br>${schedulePanel}<br><div class="historyLayout"><div class="panel"><h3>Snapshot timeline</h3><p class="muted">Select a week to explore its changes.</p><div class="historyTimeline">${timeline||'<div class="empty">No snapshots yet.</div>'}</div></div><div>${detail}${data.comparison?'':`<br>${historyEmailPanel(data)}`}</div></div>`;
   }
-  return `<div class="hero historyHero"><span class="workspaceBadge">Build Your Own · Analyze</span><h1>Weekly Dataset History</h1><p>Follow your data over time. Explore new claims, quality changes, and the exact values behind each weekly refresh.</p></div>${picker}${content}`;
+  return `<div class="hero"><span class="workspaceBadge">Build Your Own · Analyze</span><h1>Weekly Dataset History</h1><p>Follow your data over time. Explore new claims, quality changes, and the exact values behind each weekly refresh.</p></div>${picker}${content}`;
 }
 
 async function renderByo(meta,info){
@@ -10171,7 +10171,9 @@ def get_byo_history(request: Request, dataset: str, snapshot: Optional[int] = No
         result["email"] = weekly_history.recipients(BYO_HISTORY_DB, username, dataset)
         result["smtp_issues"] = smtp_configuration_issues()
         if dataset != weekly_history.DEMO:
-            result["dataset_columns"] = [str(c) for c in _read_byo_dataset(_byo_path(dataset)).columns]
+            frame = _read_byo_dataset(_byo_path(dataset))
+            result["dataset_columns"] = [str(c) for c in frame.columns]
+            result["key_candidates"] = weekly_history.key_candidates(frame)
         return result
     except (ValueError, FileNotFoundError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
@@ -10220,6 +10222,24 @@ async def schedule_byo_history(request: Request) -> Any:
         weekly_history.save_schedule(BYO_HISTORY_DB, username, dataset,
                                      str(payload.get("key", "")), payload.get("start"), frame)
         return {"status": "ok"}
+    except (ValueError, FileNotFoundError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/byo/history/refresh")
+async def refresh_byo_history(request: Request) -> Any:
+    username = get_session_user(request)
+    if not username:
+        return JSONResponse({"error": "Sign in to refresh dataset history."}, status_code=401)
+    payload = await request.json()
+    dataset = str(payload.get("dataset", ""))
+    try:
+        if dataset == weekly_history.DEMO or _safe_byo_filename(dataset) != dataset:
+            raise ValueError("Choose a saved dataset, not the sample.")
+        frame = _read_byo_dataset(_byo_path(dataset))
+        weekly_history.initialize(BYO_HISTORY_DB)
+        snapshot_id = weekly_history.capture_now(BYO_HISTORY_DB, username, dataset, frame)
+        return {"status": "ok", "snapshot": snapshot_id}
     except (ValueError, FileNotFoundError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
