@@ -6724,7 +6724,7 @@ function personaLandingOptions(selected='auto'){if(!state.meta?.persona)selected
 
 const filterPages=new Set(['home','briefing','explorer','catalog','briefbuilder','riskcenter','insights','scorecards','actioncenter','governance']);
 const defaultChatHistories={medicare:{activeId:'general',sessions:[{id:'general',title:'DART Copilot',messages:[]}]},medicaid:{activeId:'medicaid',sessions:[{id:'medicaid',title:'CMS Q&A',messages:[]}]},byo:{activeId:'byo',sessions:[{id:'byo',title:'AI Analyst',messages:[]}]} };const persistedChatHistories=(()=>{try{const raw=sessionStorage.getItem('dart_chat_histories_v1');if(!raw)return null;const parsed=JSON.parse(raw);return parsed&&typeof parsed==='object'?parsed:null;}catch(_err){return null;}})();
-let state={workspace:sessionStorage.getItem('dart_workspace')||'medicare',page:'home',priorityQueueLimit:10,filters:{streams:null,classes:null,tiers:null,reasons:null,min_rate:0,min_impact:0,min_unmatched:0,actions_only:false,search:'',custom_filters:[]},meta:null,emailEditingId:null,rawSearch:'',rawOffset:0,rawLimit:75,emailAgent:null,rawData:null,byoLeft:sessionStorage.getItem('dart_byo_left')||'',byoRight:sessionStorage.getItem('dart_byo_right')||'',byoEditFile:sessionStorage.getItem('dart_byo_edit_file')||'',byoEmailFile:sessionStorage.getItem('dart_byo_email_file')||'',byoRawSearch:'',byoRawOffset:0,byoRawLimit:75,byoRawData:null,byoEmailEditingId:null,byoEmailAgent:null,byoCompare:null,byoChat:null,byoRecLeftKeys:null,byoRecRightKeys:null,byoRecCaseSens:false,byoRecTrim:true,byoRecStripZeros:false,byoRecTol:0.0,byoRecTolMode:'absolute',byoRecFilter:'all',byoRecSearch:'',byoRecColFilter:'',byoRecOffset:0,byoRecLimit:50,byoRecData:null,byoRecModalRow:null,byoRecAiDiagnosis:null,medicaidStateId:1,medicaidStateStatus:'',medicaidStateType:'',medicaidIssueType:'',medicaidMinTotal:3,medicaidHeatMetric:'quality_score',medicaidHeatStatus:'',medicaidHeatType:'',medicaidHeatSelectedId:0,medicaidHeatRows:[],medicaidStateReturnPage:'medicaid-states',medicaidIssueLabels:null,medicaidChat:[],chatHistories:{...defaultChatHistories,...(persistedChatHistories||{})},assistantBubbleOpen:false};
+let state={workspace:sessionStorage.getItem('dart_workspace')||'medicare',page:sessionStorage.getItem('dart_page')||'home',priorityQueueLimit:10,filters:{streams:null,classes:null,tiers:null,reasons:null,min_rate:0,min_impact:0,min_unmatched:0,actions_only:false,search:'',custom_filters:[]},meta:null,emailEditingId:null,rawSearch:'',rawOffset:0,rawLimit:75,emailAgent:null,rawData:null,byoLeft:sessionStorage.getItem('dart_byo_left')||'',byoRight:sessionStorage.getItem('dart_byo_right')||'',byoEditFile:sessionStorage.getItem('dart_byo_edit_file')||'',byoEmailFile:sessionStorage.getItem('dart_byo_email_file')||'',byoRawSearch:'',byoRawOffset:0,byoRawLimit:75,byoRawData:null,byoEmailEditingId:null,byoEmailAgent:null,byoCompare:null,byoChat:null,byoRecLeftKeys:null,byoRecRightKeys:null,byoRecCaseSens:false,byoRecTrim:true,byoRecStripZeros:false,byoRecTol:0.0,byoRecTolMode:'absolute',byoRecFilter:'all',byoRecSearch:'',byoRecColFilter:'',byoRecOffset:0,byoRecLimit:50,byoRecData:null,byoRecModalRow:null,byoRecAiDiagnosis:null,medicaidStateId:1,medicaidStateStatus:'',medicaidStateType:'',medicaidIssueType:'',medicaidMinTotal:3,medicaidHeatMetric:'quality_score',medicaidHeatStatus:'',medicaidHeatType:'',medicaidHeatSelectedId:0,medicaidHeatRows:[],medicaidStateReturnPage:'medicaid-states',medicaidIssueLabels:null,medicaidChat:[],chatHistories:{...defaultChatHistories,...(persistedChatHistories||{})},assistantBubbleOpen:false};
 let modalState={key:null,title:'',items:[],selected:[]};
 function esc(v){return String(v??'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));}
 function mdInline(v){
@@ -6832,9 +6832,10 @@ async function boot(){
     state.page=p.landing_page||workspaceHomes[state.workspace]||'home';
   }else{
     state.workspace=sessionStorage.getItem('dart_workspace')||p.preferred_workspace||'medicare';
-    state.page=workspaceHomes[state.workspace]||'home';
+    state.page=sessionStorage.getItem('dart_page')||workspaceHomes[state.workspace]||'home';
   }
   sessionStorage.setItem('dart_workspace',state.workspace);
+  sessionStorage.setItem('dart_page',state.page);
   setNav();
   await render();
 }
@@ -7075,7 +7076,7 @@ function showSettingsTab(tabName){
   setNav();
   render();
 }
-async function showPage(id){state.page=id;setNav();await render();}
+async function showPage(id){state.page=id;sessionStorage.setItem('dart_page',id);setNav();await render();}
 function filterLabel(key){const arr=state.filters[key];if(arr===null||arr===undefined)return 'All values';if(!arr.length)return 'No values';return arr.length===1?arr[0]:`${arr.length} selected`;}
 function openFilterModal(key,title,items){modalState={key,title,items:[...items],selected:[...(state.filters[key]||items)]};modalTitle.textContent=title;modalSub.textContent='Search and select values. Leave everything selected to include all values.';modalSearch.value='';filterModal.style.display='flex';renderModalOptions();}
 function closeFilterModal(){filterModal.style.display='none';}
@@ -9206,7 +9207,7 @@ async function saveSettings(e){
   const payload={program:document.getElementById('setProgram').value,role:document.getElementById('setRole').value,audience:document.getElementById('setAudience').value,depth:document.getElementById('setDepth').value,focus:document.getElementById('setFocus').value.split(',').map(x=>x.trim()).filter(Boolean),geography:['National'],first_question:document.getElementById('setQuestion').value,preferred_workspace:document.getElementById('setPreferredWorkspace').value,landing_page:document.getElementById('setLandingPage').value};
   await postJson('/api/persona',payload);toast('Persona and startup preferences saved');state.meta=await api('/api/meta');await render();
 }
-async function showPage(id){state.page=id;setNav();await render();}
+async function showPage(id){state.page=id;sessionStorage.setItem('dart_page',id);setNav();await render();}
 function filterLabel(key){const arr=state.filters[key];if(arr===null||arr===undefined)return 'All values';if(!arr.length)return 'No values';return arr.length===1?arr[0]:`${arr.length} selected`;}
 function openFilterModal(key,title,items){modalState={key,title,items:[...items],selected:[...(state.filters[key]||items)]};modalTitle.textContent=title;modalSub.textContent='Search and select values. Leave everything selected to include all values.';modalSearch.value='';filterModal.style.display='flex';renderModalOptions();}
 function closeFilterModal(){filterModal.style.display='none';}
