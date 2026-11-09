@@ -6634,7 +6634,7 @@ const navSets={
       ['More',[['copilot','DART Copilot'],['profile','Profile'],['settings','Settings']]]
     ],
   medicaid:[['Overview',[['medicaid-home','Dashboard'],['medicaid-heatmap','US Heatmap'],['medicaid-exec','Executive Brief']]],['States',[['medicaid-states','State Explorer'],['medicaid-compare','Compare States'],['medicaid-analytics','Analytics']]],['Intelligence',[['medicaid-ai','AI Insights'],['medicaid-chat','CMS Q&A']]],['Claims',[['medicaid-claims','Claims Analysis'],['medicaid-optimize','Optimize Spending'],['medicaid-methodology','Methodology']]],['More',[['profile','Profile'],['settings','Settings']]]],
-  byo:[['Workspace',[['byo-home','DIY Home'],['byo-library','Dataset Library'],['byo-lab','Upload Data'],['byo-raw','Raw Data Editor'],['byo-email','Email Alerts']]],['Analyze',[['byo-history','Weekly Dataset History'],['byo-reconcile','Reconciliation Studio'],['byo-compare','Compare Lab'],['byo-quality','Schema & Quality'],['byo-preview','Data Explorer']]],['AI',[['byo-ai','AI Analyst']]],['Output',[['byo-export','Export Center']]],['More',[['profile','Profile'],['settings','Settings']]]],
+  byo:[['Workspace',[['byo-home','DIY Home'],['byo-library','Dataset Library'],['byo-lab','Upload Data']]],['Data Tools',[['byo-raw','Raw Data Editor'],['byo-email','Email Alerts'],['byo-history','Weekly Dataset History'],['byo-preview','Data Explorer']]],['Analyze',[['byo-reconcile','Reconciliation Studio'],['byo-compare','Compare Lab'],['byo-quality','Schema & Quality']]],['AI',[['byo-ai','AI Analyst']]],['Output',[['byo-export','Export Center']]],['More',[['profile','Profile'],['settings','Settings']]]],
 };
 const workspaceLabels={medicare:'Medicare',medicaid:'Medicaid',byo:'Build Your Own'};
 const workspaceHomes={medicare:'home',medicaid:'medicaid-home',byo:'byo-home'};
@@ -9081,7 +9081,7 @@ function historyPage(info,data){
     }
     content=`<br>${schedulePanel}<br><div class="historyLayout"><div class="panel"><h3>Snapshot timeline</h3><p class="muted">Select a week to explore its changes.</p><div class="historyTimeline">${timeline||'<div class="empty">No snapshots yet.</div>'}</div></div><div>${detail}${data.comparison?'':`<br>${historyEmailPanel(data)}`}</div></div>`;
   }
-  return `<div class="hero"><span class="workspaceBadge">Build Your Own · Analyze</span><h1>Weekly Dataset History</h1><p>Follow your data over time. Explore new claims, quality changes, and the exact values behind each weekly refresh.</p></div>${picker}${content}`;
+  return `<div class="hero"><span class="workspaceBadge">Build Your Own · Data Tools</span><h1>Weekly Dataset History</h1><p>Follow your data over time. Explore new claims, quality changes, and the exact values behind each weekly refresh.</p></div>${picker}${content}`;
 }
 
 async function renderByo(meta,info){
