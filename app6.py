@@ -6791,7 +6791,7 @@ function closeAllMenus(){document.querySelectorAll('.menu').forEach(m=>{m.classL
 function closeWorkspaceMenu(){const sw=document.getElementById('workspaceSwitcher');if(sw)sw.classList.remove('open');const b=document.getElementById('workspaceButton');if(b)b.setAttribute('aria-expanded','false');}
 function toggleWorkspaceMenu(e){e.stopPropagation();const sw=document.getElementById('workspaceSwitcher');if(!sw)return;const opening=!sw.classList.contains('open');closeAllMenus();closeWorkspaceMenu();if(opening){sw.classList.add('open');workspaceButton.setAttribute('aria-expanded','true');}}
 function toggleMenu(e,menu){e.stopPropagation();closeWorkspaceMenu();const wasOpen=menu.classList.contains('open');closeAllMenus();if(!wasOpen){menu.classList.add('open');const b=menu.querySelector('.menuBtn');if(b)b.setAttribute('aria-expanded','true');}}
-function goWorkspaceHome(){if(state.page==='welcome')return;if(state.meta?.auth_user&&!state.meta?.persona){renderOnboarding();return;}showPage(workspaceHomes[state.workspace]||'home');}
+function goWorkspaceHome(){if(state.page==='welcome')return;if(state.meta?.auth_user&&!state.meta?.persona){showPage('welcome');return;}showPage(workspaceHomes[state.workspace]||'home');}
 async function switchWorkspace(mode){if(!navSets[mode])return;state.workspace=mode;sessionStorage.setItem('dart_workspace',mode);state.page=workspaceHomes[mode];closeWorkspaceMenu();setNav();await render();}
 document.addEventListener('click',e=>{closeAllMenus();if(!e.target.closest('.workspaceSwitch'))closeWorkspaceMenu();if(!e.target.closest('.smartMulti'))closeSmartMultis();if(!e.target.closest('.assistantBubbleHistorySelect'))closeAssistantHistoryMenu();});document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeAllMenus();closeWorkspaceMenu();closeFilterModal();closeMetricModal();closeSmartMultis();closeAssistantHistoryMenu();}});
 function setNav(){
@@ -6812,7 +6812,6 @@ async function boot(){
     showConfidentialityModal();
     return;
   }
-  if(!state.meta.persona){renderOnboarding();return;}
   const p=state.meta.persona||{};
   const target=sessionStorage.getItem('dart_target_page');
   const freshLogin=sessionStorage.getItem('dart_fresh_login')==='1';
@@ -7093,7 +7092,7 @@ async function getData(){return postJson('/api/view',state.filters);}
 function closeMetricModal(){if(typeof metricModal!=='undefined'&&metricModal)metricModal.style.display='none';if(typeof metricModalBody!=='undefined'&&metricModalBody)metricModalBody.innerHTML='';streamModalState=null;}
 function keyActivate(event,fn){if(event.key==='Enter'||event.key===' '){event.preventDefault();fn();}}
 
-const METRIC_HELP={
+var METRIC_HELP={
   'health score':'Event-weighted reconciliation quality across the current Medicare scope. Higher-volume fields influence this score more, so it is the strongest single executive quality signal; higher is better.',
   'risk score':'Average impact score across the current scope. Impact combines mismatch severity with reconciliation volume, so higher values indicate greater potential operational or reporting risk.',
   'critical items':'Count of fields currently classified in the Critical risk tier based on DART impact-score thresholds.',
@@ -7216,7 +7215,7 @@ function openLocalDrill(title,subtitle,rows){streamModalState=null;metricModalTi
 function metricCard(label,value,sub,kind,extraClass=''){const action=()=>openMetricDrill(kind,label);return `<div class="panel metric metricClickable ${extraClass}" role="button" tabindex="0" onclick="openMetricDrill('${kind}','${esc(label)}')" onkeydown="keyActivate(event,()=>openMetricDrill('${kind}','${esc(label)}'))"><div class="label">${esc(label)}</div><div class="value" title="${esc(value)}">${value}</div><div class="sub">${esc(sub)}</div></div>`;}
 function metrics(s){return `<div class="grid grid4">${metricCard('Health score',s.health_score,'Event-weighted quality','health','health')}${metricCard('Critical items',s.critical,'Highest risk tier','critical')}${metricCard('Actionable items',s.actions,'Require review, change, or remediation','open-issues')}${metricCard('Unmatched volume',s.unmatched,'Current scope','unmatched','unmatchedMetric')}</div>`;}
 function miniDeck(s){return '';}
-let streamModalState=null;
+var streamModalState=null;
 async function openStreamDetails(stream){try{metricModalTitle.textContent=`${stream} stream details`;metricModalSub.textContent='Loading stream metrics and underlying data…';metricModalBody.innerHTML='<div class="empty">Loading stream data…</div>';metricModal.style.display='flex';const result=await postJson('/api/stream-detail/'+encodeURIComponent(stream),state.filters);streamModalState={data:result,tab:'overview'};metricModalSub.textContent=`${intFmt(result.total)} field${Number(result.total)===1?'':'s'} in ${stream} under the current filters${result.truncated?' · large tables are truncated':''}.`;renderStreamModal();}catch(err){metricModalSub.textContent='Could not load stream details.';metricModalBody.innerHTML=`<div class="empty">${esc(err.message||err)}</div>`;}}
 function setStreamTab(tab){if(!streamModalState)return;streamModalState.tab=tab;renderStreamModal();}
 function streamTabs(active){const tabs=[['overview','Overview'],['fields','Fields'],['risk','Risk'],['unmatched','Unmatched'],['classifications','Classifications'],['remediation','Remediation'],['mapping','Mapping & impact']];return `<div class="modalTabs" role="tablist">${tabs.map(([id,label])=>`<button class="modalTab ${active===id?'active':''}" type="button" onclick="setStreamTab('${id}')">${label}</button>`).join('')}</div>`;}
@@ -8427,8 +8426,8 @@ async function importByoFromSharePoint(){
   }catch(err){toast('SharePoint import failed: '+String(err.message||err).slice(0,200));}
 }
 function saveByoSelection(){sessionStorage.setItem('dart_byo_left',state.byoLeft||'');sessionStorage.setItem('dart_byo_right',state.byoRight||'');}
-let byoRelationshipSelection={key_index:null,dimension:null,measure:null};
-let byoRelationshipData=null;
+var byoRelationshipSelection={key_index:null,dimension:null,measure:null};
+var byoRelationshipData=null;
 function ensureByoSelections(info){const names=(info.datasets||[]).filter(x=>x.status==='Ready').map(x=>x.name);if(state.byoLeft&&!names.includes(state.byoLeft))state.byoLeft='';if(state.byoRight&&!names.includes(state.byoRight))state.byoRight='';if(!state.byoLeft&&names.length)state.byoLeft=names[0];if(!state.byoRight&&names.length>1)state.byoRight=names.find(x=>x!==state.byoLeft)||'';if(state.byoRight===state.byoLeft)state.byoRight=names.find(x=>x!==state.byoLeft)||'';if(state.byoEditFile&&!names.includes(state.byoEditFile))state.byoEditFile='';if(state.byoEmailFile&&!names.includes(state.byoEmailFile))state.byoEmailFile='';if(!state.byoEditFile&&names.length)state.byoEditFile=names[0];if(!state.byoEmailFile&&names.length)state.byoEmailFile=state.byoEditFile||names[0];saveByoSelection();sessionStorage.setItem('dart_byo_edit_file',state.byoEditFile||'');sessionStorage.setItem('dart_byo_email_file',state.byoEmailFile||'');}
 function byoPairReady(){return Boolean(state.byoLeft&&state.byoRight&&state.byoLeft!==state.byoRight);}
 async function setByoSelection(side,value){if(side==='left')state.byoLeft=value;else state.byoRight=value;if(state.byoLeft===state.byoRight){if(side==='left')state.byoRight='';else state.byoLeft='';}state.byoCompare=null;state.byoChat=null;byoRelationshipSelection={key_index:null,dimension:null,measure:null};byoRelationshipData=null;saveByoSelection();await render();}
@@ -9224,7 +9223,7 @@ async function getData(){return postJson('/api/view',state.filters);}
 function closeMetricModal(){if(typeof metricModal!=='undefined'&&metricModal)metricModal.style.display='none';if(typeof metricModalBody!=='undefined'&&metricModalBody)metricModalBody.innerHTML='';streamModalState=null;}
 function keyActivate(event,fn){if(event.key==='Enter'||event.key===' '){event.preventDefault();fn();}}
 
-const METRIC_HELP={
+var METRIC_HELP={
   'health score':'Event-weighted reconciliation quality across the current Medicare scope. Higher-volume fields influence this score more, so it is the strongest single executive quality signal; higher is better.',
   'risk score':'Average impact score across the current scope. Impact combines mismatch severity with reconciliation volume, so higher values indicate greater potential operational or reporting risk.',
   'critical items':'Count of fields currently classified in the Critical risk tier based on DART impact-score thresholds.',
@@ -9347,7 +9346,7 @@ function openLocalDrill(title,subtitle,rows){streamModalState=null;metricModalTi
 function metricCard(label,value,sub,kind,extraClass=''){const action=()=>openMetricDrill(kind,label);return `<div class="panel metric metricClickable ${extraClass}" role="button" tabindex="0" onclick="openMetricDrill('${kind}','${esc(label)}')" onkeydown="keyActivate(event,()=>openMetricDrill('${kind}','${esc(label)}'))"><div class="label">${esc(label)}</div><div class="value" title="${esc(value)}">${value}</div><div class="sub">${esc(sub)}</div></div>`;}
 function metrics(s){return `<div class="grid grid4">${metricCard('Health score',s.health_score,'Event-weighted quality','health','health')}${metricCard('Critical items',s.critical,'Highest risk tier','critical')}${metricCard('Actionable items',s.actions,'Require review, change, or remediation','open-issues')}${metricCard('Unmatched volume',s.unmatched,'Current scope','unmatched','unmatchedMetric')}</div>`;}
 function miniDeck(s){return '';}
-let streamModalState=null;
+var streamModalState=null;
 async function openStreamDetails(stream){try{metricModalTitle.textContent=`${stream} stream details`;metricModalSub.textContent='Loading stream metrics and underlying data…';metricModalBody.innerHTML='<div class="empty">Loading stream data…</div>';metricModal.style.display='flex';const result=await postJson('/api/stream-detail/'+encodeURIComponent(stream),state.filters);streamModalState={data:result,tab:'overview'};metricModalSub.textContent=`${intFmt(result.total)} field${Number(result.total)===1?'':'s'} in ${stream} under the current filters${result.truncated?' · large tables are truncated':''}.`;renderStreamModal();}catch(err){metricModalSub.textContent='Could not load stream details.';metricModalBody.innerHTML=`<div class="empty">${esc(err.message||err)}</div>`;}}
 function setStreamTab(tab){if(!streamModalState)return;streamModalState.tab=tab;renderStreamModal();}
 function streamTabs(active){const tabs=[['overview','Overview'],['fields','Fields'],['risk','Risk'],['unmatched','Unmatched'],['classifications','Classifications'],['remediation','Remediation'],['mapping','Mapping & impact']];return `<div class="modalTabs" role="tablist">${tabs.map(([id,label])=>`<button class="modalTab ${active===id?'active':''}" type="button" onclick="setStreamTab('${id}')">${label}</button>`).join('')}</div>`;}
@@ -9782,8 +9781,8 @@ async function importByoFromSharePoint(){
   }catch(err){toast('SharePoint import failed: '+String(err.message||err).slice(0,200));}
 }
 function saveByoSelection(){sessionStorage.setItem('dart_byo_left',state.byoLeft||'');sessionStorage.setItem('dart_byo_right',state.byoRight||'');}
-let byoRelationshipSelection={key_index:null,dimension:null,measure:null};
-let byoRelationshipData=null;
+var byoRelationshipSelection={key_index:null,dimension:null,measure:null};
+var byoRelationshipData=null;
 function ensureByoSelections(info){const names=(info.datasets||[]).filter(x=>x.status==='Ready').map(x=>x.name);if(state.byoLeft&&!names.includes(state.byoLeft))state.byoLeft='';if(state.byoRight&&!names.includes(state.byoRight))state.byoRight='';if(!state.byoLeft&&names.length)state.byoLeft=names[0];if(!state.byoRight&&names.length>1)state.byoRight=names.find(x=>x!==state.byoLeft)||'';if(state.byoRight===state.byoLeft)state.byoRight=names.find(x=>x!==state.byoLeft)||'';if(state.byoEditFile&&!names.includes(state.byoEditFile))state.byoEditFile='';if(state.byoEmailFile&&!names.includes(state.byoEmailFile))state.byoEmailFile='';if(!state.byoEditFile&&names.length)state.byoEditFile=names[0];if(!state.byoEmailFile&&names.length)state.byoEmailFile=state.byoEditFile||names[0];saveByoSelection();sessionStorage.setItem('dart_byo_edit_file',state.byoEditFile||'');sessionStorage.setItem('dart_byo_email_file',state.byoEmailFile||'');}
 function byoPairReady(){return Boolean(state.byoLeft&&state.byoRight&&state.byoLeft!==state.byoRight);}
 async function setByoSelection(side,value){if(side==='left')state.byoLeft=value;else state.byoRight=value;if(state.byoLeft===state.byoRight){if(side==='left')state.byoRight='';else state.byoLeft='';}state.byoCompare=null;state.byoChat=null;byoRelationshipSelection={key_index:null,dimension:null,measure:null};saveByoSelection();await render();}
@@ -9900,7 +9899,7 @@ function genericTable(rows,exportName=''){if(!rows||!rows.length)return '<div cl
 
 function kanban(rows){const lanes=['Open','In progress','Blocked','Resolved'];return `<div class="kanban">${lanes.map(l=>`<div class="lane"><h4>${l}</h4>${(rows||[]).filter(r=>r.Status===l).map(r=>`<div class="task"><b>${esc(r.Field)}</b><br><span class="muted">${esc(r.Stream)} · ${esc(r.Priority||'')}</span><br>${esc(r.Owner||'Unassigned')}<br><span class="muted">${esc(r.Note||'')}</span></div>`).join('')||'<div class="muted">No items</div>'}</div>`).join('')}</div>`;}
 
-async function render(){const meta=await api('/api/meta');state.meta=meta;if(!meta.auth_user){renderAuth();return;}setNav();if(state.page==='welcome'){document.getElementById('footer').innerHTML=`DART ${esc(meta.version)} · Data Assurance Reconciliation Tracker`;document.getElementById('app').innerHTML=welcomePage();refreshThemeVisuals(document.getElementById('app'));return;}if(!meta.persona){renderOnboarding();return;}syncChatHistoryFromWorkspaceState();if(state.page==='profile'||state.page==='settings'){renderSharedPage(meta);return;}if(state.workspace==='medicaid'){await renderMedicaid(meta);return;}if(state.workspace==='byo'){const byo=await api('/api/byo');await renderByo(meta,byo);return;}const data=await getData();let emailInfo=null;let rawInfo=null;if(state.page==='emailagent')emailInfo=await api('/api/email-agent');if(state.page==='raweditor')rawInfo=await api(`/api/raw-data?search=${encodeURIComponent(state.rawSearch)}&offset=${state.rawOffset}&limit=${state.rawLimit}`);document.getElementById('footer').innerHTML=`Loaded: ${esc(meta.source)} · ${intFmt(meta.rows)} rows · ${intFmt(meta.columns)} columns · DART ${esc(meta.version)} · ${esc(meta.build_fingerprint||'build unknown')} · FastAPI`;const p=meta.persona||{};let html=filterBar(meta);
+async function render(){const meta=await api('/api/meta');state.meta=meta;if(!meta.auth_user){renderAuth();return;}setNav();if(state.page==='welcome'){document.getElementById('footer').innerHTML=`DART ${esc(meta.version)} · Data Assurance Reconciliation Tracker`;document.getElementById('app').innerHTML=welcomePage();refreshThemeVisuals(document.getElementById('app'));return;}syncChatHistoryFromWorkspaceState();if(state.page==='profile'||state.page==='settings'){renderSharedPage(meta);return;}if(state.workspace==='medicaid'){await renderMedicaid(meta);return;}if(state.workspace==='byo'){const byo=await api('/api/byo');await renderByo(meta,byo);return;}const data=await getData();let emailInfo=null;let rawInfo=null;if(state.page==='emailagent')emailInfo=await api('/api/email-agent');if(state.page==='raweditor')rawInfo=await api(`/api/raw-data?search=${encodeURIComponent(state.rawSearch)}&offset=${state.rawOffset}&limit=${state.rawLimit}`);document.getElementById('footer').innerHTML=`Loaded: ${esc(meta.source)} · ${intFmt(meta.rows)} rows · ${intFmt(meta.columns)} columns · DART ${esc(meta.version)} · ${esc(meta.build_fingerprint||'build unknown')} · FastAPI`;const p=meta.persona||{};let html=filterBar(meta);
 if(state.page==='home'){
   const pqLimit=Number(state.priorityQueueLimit||10);
   const queueSource=Array.isArray(data.summary?.top_actions)&&data.summary.top_actions.length?data.summary.top_actions:(data.issues||data.rows||[]);
