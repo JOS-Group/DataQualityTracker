@@ -2076,6 +2076,49 @@ PERSONA_ROLE_RECOMMENDATIONS: Dict[str, List[Tuple[str, str, str]]] = {
 }
 
 
+PERSONA_DEPTH_SETTINGS: Dict[str, Dict[str, Any]] = {
+    "Executive": {"queue_limit": 5, "history_period": "month", "ai_hint": "Keep it brief: lead with the bottom line and the few decisions that matter, in plain language, roughly 250-400 words."},
+    "Balanced": {"queue_limit": 10, "history_period": "week", "ai_hint": "Balance headline findings with enough supporting evidence to act on."},
+    "Technical": {"queue_limit": 25, "history_period": "update", "ai_hint": "Go deep: include field names, mappings, counts and likely root causes, and be explicit about evidence and next checks."},
+}
+
+PERSONA_FOCUS: Dict[str, Dict[str, Any]] = {
+    "Data quality": {"sort": "matchrate", "pages": {"medicare": ["scorecards", "riskcenter"], "medicaid": ["medicaid-analytics", "medicaid-states"], "byo": ["byo-quality", "byo-history"]}},
+    "Claims": {"sort": "unmatched", "pages": {"medicare": ["explorer", "riskcenter"], "medicaid": ["medicaid-claims"], "byo": ["byo-reconcile"]}},
+    "Reporting impact": {"sort": "impact", "pages": {"medicare": ["riskcenter", "scorecards"], "medicaid": ["medicaid-optimize", "medicaid-exec"], "byo": ["byo-export"]}},
+    "Remediation": {"sort": "weighted", "pages": {"medicare": ["riskcenter", "emailagent"], "medicaid": ["medicaid-states"], "byo": ["byo-compare"]}},
+    "AI insights": {"sort": "", "pages": {"medicare": ["insights", "copilot"], "medicaid": ["medicaid-ai", "medicaid-chat"], "byo": ["byo-ai"]}},
+    "Automation": {"sort": "", "pages": {"medicare": ["emailagent", "raweditor"], "medicaid": ["medicaid-methodology"], "byo": ["byo-email", "byo-history"]}},
+}
+
+_PERSONA_FOCUS_ALIASES = {
+    "reporting": "Reporting impact", "impact": "Reporting impact", "ai": "AI insights", "insights": "AI insights",
+    "quality": "Data quality", "claim": "Claims", "remediat": "Remediation", "automat": "Automation", "alert": "Automation",
+}
+
+
+def normalize_persona_focus(focus: Any) -> List[str]:
+    """Map saved focus values (including older free text) onto the known focus options."""
+    lookup = {name.lower(): name for name in PERSONA_FOCUS}
+    result: List[str] = []
+    for item in focus or []:
+        text = str(item).strip().lower()
+        name = lookup.get(text) or next((v for k, v in _PERSONA_FOCUS_ALIASES.items() if k in text), None)
+        if name and name not in result:
+            result.append(name)
+    return result
+
+
+def persona_ai_hint(persona: Optional[Dict[str, Any]]) -> str:
+    if not persona:
+        return ""
+    depth = PERSONA_DEPTH_SETTINGS.get(persona.get("depth", "Balanced"), PERSONA_DEPTH_SETTINGS["Balanced"])
+    parts = [f"The reader is a {persona.get('role', 'general')} user. {depth['ai_hint']}"]
+    if persona.get("focus"):
+        parts.append("Give extra weight to: " + ", ".join(persona["focus"]) + ".")
+    return " " + " ".join(parts)
+
+
 def _persona_workspace_from_program(program: str) -> str:
     program_lower = str(program or "").strip().lower()
     if program_lower == "medicaid":
@@ -2089,19 +2132,23 @@ def normalize_persona(payload: Dict[str, Any]) -> Dict[str, Any]:
     persona = dict(payload or {})
     persona["program"] = str(persona.get("program", "Medicare") or "Medicare").strip()
     persona["role"] = str(persona.get("role", "Other") or "Other").strip()
-    persona["audience"] = str(persona.get("audience", "Myself") or "Myself").strip()
     persona["depth"] = str(persona.get("depth", "Balanced") or "Balanced").strip()
+    if persona["depth"] not in PERSONA_DEPTH_SETTINGS:
+        persona["depth"] = "Balanced"
     focus = persona.get("focus", [])
     if isinstance(focus, str):
         focus = [x.strip() for x in focus.split(",") if x.strip()]
-    persona["focus"] = [str(x).strip() for x in (focus or []) if str(x).strip()][:12]
-    persona["geography"] = [str(x).strip() for x in (persona.get("geography") or ["National"]) if str(x).strip()] or ["National"]
+    persona["focus"] = normalize_persona_focus(focus)
+    # Audience and geography were retired; drop them from older saved personas.
+    persona.pop("audience", None)
+    persona.pop("geography", None)
     persona["first_question"] = str(persona.get("first_question", "") or "").strip()
 
     requested_workspace = str(persona.get("preferred_workspace", "") or "").strip().lower()
     if requested_workspace not in PERSONA_WORKSPACE_PAGES:
         requested_workspace = _persona_workspace_from_program(persona["program"])
     persona["preferred_workspace"] = requested_workspace
+    persona["program"] = {"medicare": "Medicare", "medicaid": "Medicaid", "byo": "Other / General"}[requested_workspace]
 
     requested_page = str(persona.get("landing_page", "") or "").strip()
     if not requested_page:
@@ -2178,7 +2225,7 @@ PERSONA_BYO_RECOMMENDATIONS: Dict[str, List[Tuple[str, str, str]]] = {
 }
 
 
-def persona_suggested_pages(role: str) -> Dict[str, List[Dict[str, str]]]:
+def persona_suggested_pages(role: str, focus: Optional[List[str]] = None) -> Dict[str, List[Dict[str, Any]]]:
     medicaid = {
         "Executive / Leadership": [("medicaid-exec", "Executive Brief", "Review the nationwide quality picture and 30/60/90 actions."), ("medicaid-heatmap", "US Heatmap", "See geographic quality variation and drill into states."), ("medicaid-home", "Dashboard", "Start with nationwide Medicaid quality KPIs and rankings.")],
         "Data / Analytics": [("medicaid-analytics", "Analytics", "Inspect issue-type performance and modeled risk."), ("medicaid-compare", "Compare States", "Benchmark state quality scores and confidence."), ("medicaid-heatmap", "US Heatmap", "Explore geographic patterns across quality metrics.")],
@@ -2194,15 +2241,30 @@ def persona_suggested_pages(role: str) -> Dict[str, List[Dict[str, str]]]:
         "medicaid": medicaid,
         "byo": PERSONA_BYO_RECOMMENDATIONS,
     }
-    result: Dict[str, List[Dict[str, str]]] = {}
+    result: Dict[str, List[Dict[str, Any]]] = {}
+    labels = {pid: label for table in sets.values() for recs in table.values() for pid, label, _ in recs}
+    labels.update({"scorecards": "Scorecards", "explorer": "Explorer", "emailagent": "Email Agent", "raweditor": "Raw Data Editor", "copilot": "DART Copilot", "byo-history": "Dataset History", "byo-export": "Export", "byo-email": "Email Alerts", "byo-compare": "Compare Lab", "byo-quality": "Schema & Quality", "byo-ai": "AI Analyst", "byo-reconcile": "Reconciliation Studio"})
     for workspace, table in sets.items():
         home = {"medicare": "home", "medicaid": "medicaid-home", "byo": "byo-home"}[workspace]
         recs = table.get(role, table["Other"])
-        result[workspace] = [
-            {"id": page_id, "label": label, "reason": reason}
+        items: List[Dict[str, Any]] = [
+            {"id": page_id, "label": label, "reason": reason, "focus": []}
             for page_id, label, reason in recs
             if page_id != home or workspace == "medicare"
         ]
+        by_id = {item["id"]: item for item in items}
+        for chip in focus or []:
+            for page_id in PERSONA_FOCUS.get(chip, {}).get("pages", {}).get(workspace, []):
+                if page_id in by_id:
+                    by_id[page_id]["focus"].append(chip)
+                else:
+                    item = {"id": page_id, "label": labels.get(page_id, page_id), "reason": f"Matches your {chip} focus.", "focus": [chip]}
+                    by_id[page_id] = item
+                    items.append(item)
+        # Pages that fit both role and focus lead, then role-only picks, then focus-only picks.
+        order = {item["id"]: i for i, item in enumerate(items)}
+        items.sort(key=lambda it: (-len(it["focus"]) if it["focus"] and order[it["id"]] < len(recs) else 0, order[it["id"]]))
+        result[workspace] = items[:5]
     return result
 
 def persona_effects(persona: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -2250,15 +2312,19 @@ def persona_effects(persona: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         lens_title = f"{role} lens"
         lens_summary = role_summary
 
-    priority_limit = {"Executive": 4, "Balanced": 8, "Technical": 12}.get(depth, 8)
+    depth_cfg = PERSONA_DEPTH_SETTINGS.get(depth, PERSONA_DEPTH_SETTINGS["Balanced"])
+    priority_limit = depth_cfg["queue_limit"]
+    queue_sort = next((PERSONA_FOCUS[f]["sort"] for f in focus if PERSONA_FOCUS.get(f, {}).get("sort")), "unmatched")
     return {
         "workspace": workspace,
         "landing_page": p.get("landing_page"),
         "lens_title": lens_title,
         "lens_summary": lens_summary,
         "priority_limit": priority_limit,
+        "queue_sort": queue_sort,
+        "history_period": depth_cfg["history_period"],
         "focus": focus[:5],
-        "suggested_pages": persona_suggested_pages(role),
+        "suggested_pages": persona_suggested_pages(role, focus),
         "recommended_pages": [
             {"id": page_id, "label": label, "reason": reason}
             for page_id, label, reason in recs
@@ -6698,7 +6764,11 @@ HTML = r'''
     .suggestedRank{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;flex:none;font-size:.78rem;font-weight:800;background:linear-gradient(135deg,#0f1f3d,#1c3768);color:#f4d58d}.suggestedIcon{font-size:1.5rem;flex:none}.suggestedText{display:grid;gap:3px;min-width:0;flex:1}.suggestedText small{color:#667085;font-size:.8rem;line-height:1.4}.suggestedText em{justify-self:start;font-style:normal;font-size:.68rem;font-weight:800;text-transform:uppercase;letter-spacing:.05em;padding:2px 8px;border-radius:99px;background:#f4d58d;color:#5b4300}
     .suggestedCard .launchArrow{opacity:.5}.suggestedCard:hover .launchArrow{opacity:1;transform:none}.suggestedEmpty{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}.suggestedEmpty .suggestedHead{margin:0;display:contents}
     .launchCard.isSuggested{border-color:#d6bb73}.suggestedStar{position:absolute;top:8px;right:12px;color:#c99a12;font-size:.95rem}.launchCard{position:relative}
-    :root[data-theme="dark"] .suggested{background:linear-gradient(135deg,#1b1a14,#26220f 60%,#1b1a14);border-color:#5a4a1a;box-shadow:0 10px 28px rgba(0,0,0,.35)}:root[data-theme="dark"] .suggestedCard{background:#1d2630;border-color:#4a4222;color:#edf0f3}:root[data-theme="dark"] .suggestedText small{color:#a9b3bf}:root[data-theme="dark"] .suggestedCard:hover{border-color:#d4af37}:root[data-theme="dark"] .suggestedStar{color:#f4d58d}:root[data-theme="dark"] .suggestedHead .personaTag{background:#1d2630;color:#f4d58d;border-color:#4a4222}    .launchpad{margin:6px 0 4px}
+    :root[data-theme="dark"] .suggested{background:linear-gradient(135deg,#1b1a14,#26220f 60%,#1b1a14);border-color:#5a4a1a;box-shadow:0 10px 28px rgba(0,0,0,.35)}:root[data-theme="dark"] .suggestedCard{background:#1d2630;border-color:#4a4222;color:#edf0f3}:root[data-theme="dark"] .suggestedText small{color:#a9b3bf}:root[data-theme="dark"] .suggestedCard:hover{border-color:#d4af37}:root[data-theme="dark"] .suggestedStar{color:#f4d58d}:root[data-theme="dark"] .suggestedHead .personaTag{background:#1d2630;color:#f4d58d;border-color:#4a4222}    .fieldWide{grid-column:1/-1}.focusChips{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}.focusChip{cursor:pointer;margin:0}.focusChip input{position:absolute;opacity:0;pointer-events:none}.focusChip span{display:inline-flex;align-items:center;border:1px solid #e2d4a5;background:#fff;color:#6f5400;border-radius:999px;padding:7px 13px;font-size:.84rem;font-weight:800;transition:all .15s ease}.focusChip:hover span{border-color:#c99a12}.focusChip input:checked+span{background:linear-gradient(135deg,#d4af37,#b8860b);border-color:#b8860b;color:#fff;box-shadow:0 4px 12px rgba(184,134,11,.28)}.focusChip input:focus-visible+span{outline:2px solid #b8860b;outline-offset:2px}
+    .suggestedFocus{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}.suggestedFocus i{font-style:normal;font-size:.68rem;font-weight:800;color:#6f5400;background:#fff4cc;border:1px solid #e1c66f;border-radius:999px;padding:2px 8px}
+    .standingQ{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:0 0 14px;padding:16px 20px;border-radius:18px;border:1px solid #e1c66f;border-left:5px solid #c99a12;background:linear-gradient(135deg,#fffdf8,#fff4cc)}.standingQIcon{flex:none;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,#d4af37,#b8860b);color:#fff;font-weight:900;font-size:1.15rem}.standingQText{flex:1;min-width:220px}.standingQText p{margin:2px 0 0;font-size:1.05rem;font-weight:700;color:#3c310f}
+    :root[data-theme="dark"] .focusChip span{background:#1d2630;border-color:#4a4222;color:#f4d58d}:root[data-theme="dark"] .suggestedFocus i{background:#26220f;border-color:#5a4a1a;color:#f4d58d}:root[data-theme="dark"] .standingQ{background:linear-gradient(135deg,#1b1a14,#26220f);border-color:#5a4a1a}:root[data-theme="dark"] .standingQText p{color:#f4e9c4}
+    .launchpad{margin:6px 0 4px}
     .launchpad .welcomeHeading{margin:4px 0 14px}
     .launchGroup{margin-bottom:16px}
     .launchGroupTitle{display:flex;align-items:center;gap:12px;margin:0 0 10px;color:#80621c;font-size:.7rem;font-weight:900;letter-spacing:.14em;text-transform:uppercase}
@@ -6912,26 +6982,33 @@ function suggestedPanel(){
   const meta=state.meta||{},p=meta.persona,e=meta.persona_effects||{},recs=suggestedPages();
   if(!p||!recs.length)return `<section class="suggested suggestedEmpty"><div class="suggestedHead"><div><span class="welcomeEyebrow">Suggested for you</span><h2>Make DART fit your role</h2><p class="muted">Tell DART who you are and it will point you to the pages that matter most.</p></div></div><button type="button" class="btn" onclick="showPage('settings')">Set up persona</button></section>`;
   const tags=[p.role||'General',(p.depth||'Balanced')+' detail'].map(x=>`<span class="personaTag">${esc(x)}</span>`).join('');
-  return `<section class="suggested"><div class="suggestedHead"><div><span class="welcomeEyebrow">Suggested for you</span><h2>Best fit for ${esc(p.role||'your role')}</h2><p class="muted">${esc(e.lens_summary||'Pages chosen to match your persona.')}</p></div><div class="suggestedTags">${tags}<button type="button" class="btn ghost small" onclick="showPage('settings')">Adjust persona</button></div></div><div class="suggestedGrid">${recs.map((r,i)=>`<button type="button" class="suggestedCard" onclick="showPage('${r.id}')"><span class="suggestedRank">${i+1}</span><span class="suggestedIcon">${pageIcons[r.id]||'◆'}</span><span class="suggestedText"><b>${esc(r.label)}</b>${i===0?'<em>Best match</em>':''}<small>${esc(r.reason)}</small></span><span class="launchArrow">→</span></button>`).join('')}</div></section>`;
+  return `<section class="suggested"><div class="suggestedHead"><div><span class="welcomeEyebrow">Suggested for you</span><h2>Best fit for ${esc(p.role||'your role')}</h2><p class="muted">${esc(e.lens_summary||'Pages chosen to match your persona.')}</p></div><div class="suggestedTags">${tags}<button type="button" class="btn ghost small" onclick="showPage('settings')">Adjust persona</button></div></div><div class="suggestedGrid">${recs.map((r,i)=>`<button type="button" class="suggestedCard" onclick="showPage('${r.id}')"><span class="suggestedRank">${i+1}</span><span class="suggestedIcon">${pageIcons[r.id]||'◆'}</span><span class="suggestedText"><b>${esc(r.label)}</b>${i===0?'<em>Best match</em>':''}<small>${esc(r.reason)}</small>${(r.focus||[]).length?`<span class="suggestedFocus">${(r.focus||[]).map(x=>`<i>${esc(x)}</i>`).join('')}</span>`:''}</span><span class="launchArrow">→</span></button>`).join('')}</div></section>`;
 }
 function workspaceLaunchpad(title,sub){
   const ws=state.workspace,sug=new Set(suggestedPages().map(r=>r.id));
   const groups=navGroupsFor(ws).map(g=>[g[0],g[1].filter(([id])=>id!==workspaceHomes[ws]&&id!=='profile'&&id!=='settings')]).filter(g=>g[1].length);
   if(!groups.length)return '';
-  return `${suggestedPanel()}<section class="launchpad"><div class="welcomeHeading"><div><span class="welcomeEyebrow">Jump to</span><h2>${esc(title)}</h2></div><p>${esc(sub)}</p></div>${groups.map(g=>`<div class="launchGroup"><div class="launchGroupTitle">${esc(g[0])}</div><div class="launchGrid">${g[1].map(([id,label])=>`<button type="button" class="launchCard ${sug.has(id)?'isSuggested':''}" onclick="showPage('${id}')"><span class="launchIcon">${pageIcons[id]||'◆'}</span><span class="launchText"><b>${esc(label)}</b><small>${esc(pageBlurbs[id]||'')}</small></span>${sug.has(id)?'<span class="suggestedStar" title="Suggested for your persona">★</span>':''}<span class="launchArrow">→</span></button>`).join('')}</div></div>`).join('')}</section>`;
+  return `${standingQuestionCard()}${suggestedPanel()}<section class="launchpad"><div class="welcomeHeading"><div><span class="welcomeEyebrow">Jump to</span><h2>${esc(title)}</h2></div><p>${esc(sub)}</p></div>${groups.map(g=>`<div class="launchGroup"><div class="launchGroupTitle">${esc(g[0])}</div><div class="launchGrid">${g[1].map(([id,label])=>`<button type="button" class="launchCard ${sug.has(id)?'isSuggested':''}" onclick="showPage('${id}')"><span class="launchIcon">${pageIcons[id]||'◆'}</span><span class="launchText"><b>${esc(label)}</b><small>${esc(pageBlurbs[id]||'')}</small></span>${sug.has(id)?'<span class="suggestedStar" title="Suggested for your persona">★</span>':''}<span class="launchArrow">→</span></button>`).join('')}</div></div>`).join('')}</section>`;
 }
 const personaLandingLabels={welcome:'Explore workspaces',auto:'Recommended for my role',home:'Command Center',riskcenter:'Risk Center',actioncenter:'Remediation Center',catalog:'Mapping Catalog',insights:'AI Insights','medicaid-home':'Medicaid Home','byo-home':'DIY Home','byo-reconcile':'Reconciliation Studio','byo-compare':'Compare Lab','byo-quality':'Schema & Quality','byo-raw':'Raw Data Editor','byo-email':'Email Alerts','byo-ai':'AI Analyst'};
+const personaFocusOptions=['Data quality','Claims','Reporting impact','Remediation','AI insights','Automation'];
+function personaFocusPicker(selected,name){const sel=new Set(selected||[]);return `<div class="focusChips" data-focus-group="${name}">${personaFocusOptions.map(o=>`<label class="focusChip"><input type="checkbox" value="${esc(o)}" ${sel.has(o)?'checked':''}><span>${esc(o)}</span></label>`).join('')}</div>`;}
+function personaFocusValues(name){return [...document.querySelectorAll(`[data-focus-group="${name}"] input:checked`)].map(x=>x.value);}
+function personaQueueLimit(){return Number(state.priorityQueueLimit||state.meta?.persona_effects?.priority_limit||10);}
+function personaQueueSort(){return state.priorityQueueSort||state.meta?.persona_effects?.queue_sort||'unmatched';}
+async function askStandingQuestion(){const q=state.meta?.persona?.first_question;if(!q)return;const t={medicare:['copilot','prompt'],medicaid:['medicaid-chat','medChatPrompt'],byo:['byo-ai','byoAiPrompt']}[state.workspace];await showPage(t[0]);setTimeout(()=>{const el=document.getElementById(t[1]);if(el){el.value=q;el.focus();}else toast('Select two datasets to ask your question');},80);}
+function standingQuestionCard(){const q=state.meta?.persona?.first_question;if(!q)return '';return `<section class="standingQ"><span class="standingQIcon" aria-hidden="true">?</span><div class="standingQText"><span class="welcomeEyebrow">Your standing question</span><p>${esc(q)}</p></div><button type="button" class="btn" onclick="askStandingQuestion()">Ask DART</button></section>`;}
 function personaPriorityLimit(meta){return Number(meta?.persona_effects?.priority_limit||8);}
 function currentWorkspacePageIds(){return new Set(activeNavGroups().flatMap(g=>g[1].map(x=>x[0])));}
 function personaRecommendations(meta){const allowed=currentWorkspacePageIds();return (meta?.persona_effects?.recommended_pages||[]).filter(x=>allowed.has(x.id));}
 function personaQuickActions(meta){const recs=personaRecommendations(meta).slice(0,3);if(!recs.length)return `<button class="btn" onclick="showPage('riskcenter')">Open Risk Center</button><button class="btn secondary" onclick="showPage('insights')">Open AI Insights</button><button class="btn ghost" onclick="showPage('settings')">Workspace Settings</button>`;return recs.map((r,i)=>`<button class="btn ${i===0?'':i===1?'secondary':'ghost'}" onclick="showPage('${r.id}')">${esc(r.label)}</button>`).join('')+`<button class="btn ghost" onclick="showPage('settings')">Adjust persona</button>`;}
 function personaEditButton(){const tip='Edit your persona';return `<button type="button" class="heroPersona" title="${esc(tip)}" onclick="showPage('settings')"><span class="heroPersonaAvatar" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><circle cx="12" cy="8.5" r="3.6"></circle><path d="M4.8 20c.7-3.7 3.7-5.6 7.2-5.6s6.5 1.9 7.2 5.6"></path></svg></span><span>Edit persona</span></button>`;}
-function personaLensPanel(meta){const p=meta?.persona||{};const e=meta?.persona_effects||{};const recs=personaRecommendations(meta);const focus=(e.focus||[]).map(x=>`<span class="personaTag">${esc(x)}</span>`).join('');return `<div class="panel personaLens"><div class="personaLensHead"><div><span class="workspaceBadge">Personalized workspace</span><h3>${esc(e.lens_title||'Your DART lens')}</h3><p class="muted">${esc(e.lens_summary||'DART is prioritizing the most relevant views for your role.')}</p></div><button class="btn ghost small" onclick="showPage('settings')">Edit persona</button></div><div class="personaTags"><span class="personaTag">${esc(p.role||'General')}</span><span class="personaTag">${esc(p.depth||'Balanced')} detail</span><span class="personaTag">Audience: ${esc(p.audience||'Myself')}</span>${focus}</div>${recs.length?`<div class="personaRecommendations">${recs.map(r=>`<button class="personaRec" onclick="showPage('${r.id}')"><b>${esc(r.label)}</b><span>${esc(r.reason)}</span></button>`).join('')}</div>`:''}</div>`;}
+function personaLensPanel(meta){const p=meta?.persona||{};const e=meta?.persona_effects||{};const recs=personaRecommendations(meta);const focus=(e.focus||[]).map(x=>`<span class="personaTag">${esc(x)}</span>`).join('');return `<div class="panel personaLens"><div class="personaLensHead"><div><span class="workspaceBadge">Personalized workspace</span><h3>${esc(e.lens_title||'Your DART lens')}</h3><p class="muted">${esc(e.lens_summary||'DART is prioritizing the most relevant views for your role.')}</p></div><button class="btn ghost small" onclick="showPage('settings')">Edit persona</button></div><div class="personaTags"><span class="personaTag">${esc(p.role||'General')}</span><span class="personaTag">${esc(p.depth||'Balanced')} detail</span>${focus}</div>${recs.length?`<div class="personaRecommendations">${recs.map(r=>`<button class="personaRec" onclick="showPage('${r.id}')"><b>${esc(r.label)}</b><span>${esc(r.reason)}</span></button>`).join('')}</div>`:''}</div>`;}
 function personaLandingOptions(selected='auto'){if(!state.meta?.persona)selected='welcome';const allowed=currentWorkspacePageIds();return Object.entries(personaLandingLabels).filter(([id])=>id==='welcome'||id==='auto'||allowed.has(id)).map(([id,label])=>`<option value="${id}" ${selected===id?'selected':''}>${esc(label)}</option>`).join('');}
 
 const filterPages=new Set(['home','explorer','catalog','riskcenter','insights','scorecards','actioncenter','governance']);
 const defaultChatHistories={medicare:{activeId:'general',sessions:[{id:'general',title:'DART Copilot',messages:[]}]},medicaid:{activeId:'medicaid',sessions:[{id:'medicaid',title:'CMS Q&A',messages:[]}]},byo:{activeId:'byo',sessions:[{id:'byo',title:'AI Analyst',messages:[]}]} };const persistedChatHistories=(()=>{try{const raw=sessionStorage.getItem('dart_chat_histories_v1');if(!raw)return null;const parsed=JSON.parse(raw);return parsed&&typeof parsed==='object'?parsed:null;}catch(_err){return null;}})();
-let state={workspace:sessionStorage.getItem('dart_workspace')||'medicare',page:'home',priorityQueueLimit:10,priorityQueueSort:'unmatched',filters:{streams:null,classes:null,tiers:null,reasons:null,min_rate:0,min_impact:0,min_unmatched:0,actions_only:false,search:'',custom_filters:[]},meta:null,emailEditingId:null,rawSearch:'',rawOffset:0,rawLimit:75,emailAgent:null,rawData:null,byoLeft:sessionStorage.getItem('dart_byo_left')||'',byoRight:sessionStorage.getItem('dart_byo_right')||'',byoEditFile:sessionStorage.getItem('dart_byo_edit_file')||'',byoEmailFile:sessionStorage.getItem('dart_byo_email_file')||'',byoRawSearch:'',byoRawOffset:0,byoRawLimit:75,byoRawData:null,byoEmailEditingId:null,byoEmailAgent:null,byoCompare:null,byoChat:null,byoRecLeftKeys:null,byoRecRightKeys:null,byoRecCaseSens:false,byoRecTrim:true,byoRecStripZeros:false,byoRecTol:0.0,byoRecTolMode:'absolute',byoRecFilter:'all',byoRecSearch:'',byoRecColFilter:'',byoRecOffset:0,byoRecLimit:50,byoRecData:null,byoRecModalRow:null,byoRecAiDiagnosis:null,medicaidStateId:1,medicaidStateStatus:'',medicaidStateType:'',medicaidIssueType:'',medicaidMinTotal:3,medicaidHeatMetric:'quality_score',medicaidHeatStatus:'',medicaidHeatType:'',medicaidHeatSelectedId:0,medicaidHeatRows:[],medicaidStateReturnPage:'medicaid-states',medicaidIssueLabels:null,medicaidChat:[],chatHistories:{...defaultChatHistories,...(persistedChatHistories||{})},assistantBubbleOpen:false};
+let state={workspace:sessionStorage.getItem('dart_workspace')||'medicare',page:'home',priorityQueueLimit:0,priorityQueueSort:'',filters:{streams:null,classes:null,tiers:null,reasons:null,min_rate:0,min_impact:0,min_unmatched:0,actions_only:false,search:'',custom_filters:[]},meta:null,emailEditingId:null,rawSearch:'',rawOffset:0,rawLimit:75,emailAgent:null,rawData:null,byoLeft:sessionStorage.getItem('dart_byo_left')||'',byoRight:sessionStorage.getItem('dart_byo_right')||'',byoEditFile:sessionStorage.getItem('dart_byo_edit_file')||'',byoEmailFile:sessionStorage.getItem('dart_byo_email_file')||'',byoRawSearch:'',byoRawOffset:0,byoRawLimit:75,byoRawData:null,byoEmailEditingId:null,byoEmailAgent:null,byoCompare:null,byoChat:null,byoRecLeftKeys:null,byoRecRightKeys:null,byoRecCaseSens:false,byoRecTrim:true,byoRecStripZeros:false,byoRecTol:0.0,byoRecTolMode:'absolute',byoRecFilter:'all',byoRecSearch:'',byoRecColFilter:'',byoRecOffset:0,byoRecLimit:50,byoRecData:null,byoRecModalRow:null,byoRecAiDiagnosis:null,medicaidStateId:1,medicaidStateStatus:'',medicaidStateType:'',medicaidIssueType:'',medicaidMinTotal:3,medicaidHeatMetric:'quality_score',medicaidHeatStatus:'',medicaidHeatType:'',medicaidHeatSelectedId:0,medicaidHeatRows:[],medicaidStateReturnPage:'medicaid-states',medicaidIssueLabels:null,medicaidChat:[],chatHistories:{...defaultChatHistories,...(persistedChatHistories||{})},assistantBubbleOpen:false};
 let modalState={key:null,title:'',items:[],selected:[]};
 function esc(v){return String(v??'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));}
 function mdInline(v){
@@ -7422,12 +7499,12 @@ function renderOnboarding(){
   if(document.getElementById('workspaceSwitcher'))document.getElementById('workspaceSwitcher').style.display='none';
   if(document.getElementById('navSearch'))document.getElementById('navSearch').style.display='none';
   document.getElementById('navlinks').innerHTML='';document.getElementById('footer').innerHTML='';
-  document.getElementById('app').innerHTML=`<div class="hero"><span class="workspaceBadge">One-time setup</span><h1>Build your DART workspace</h1><p>Your persona now controls where DART opens, which actions are emphasized, how much detail is surfaced, and how AI/briefing content is framed. No features are removed—you can still navigate anywhere.</p></div><form class="panel" id="personaForm"><h2>Personalize the experience</h2><div class="grid grid2"><div class="field"><label>Program</label><select id="program"><option>Medicare</option><option>Medicaid</option><option>Both</option><option>Other / General</option></select></div><div class="field"><label>Primary role</label><select id="role"><option>Executive / Leadership</option><option>Data / Analytics</option><option>Program / Policy</option><option>Operations</option><option>Quality / Compliance</option><option>IT / Engineering</option><option>Research</option><option>Other</option></select></div><div class="field"><label>Focus areas</label><input id="focus" value="Data quality, Claims, Reporting impact, AI insights"></div><div class="field"><label>Audience</label><select id="audience"><option>Leadership</option><option>Myself</option><option>Analysts</option><option>Program teams</option><option>Technical teams</option><option>External stakeholders</option></select></div><div class="field"><label>Detail level</label><select id="depth"><option>Executive</option><option selected>Balanced</option><option>Technical</option></select></div><div class="field"><label>First question</label><input id="first_question" placeholder="Which areas need the most attention?"></div><div class="field"><label>Preferred workspace</label><select id="preferred_workspace"><option value="medicare">Medicare</option><option value="medicaid">Medicaid</option><option value="byo">Build Your Own</option></select></div><div class="field"><label>Start page</label><select id="landing_page">${personaLandingOptions('auto')}</select><div class="personaPrefNote">Choose “Recommended for my role” and DART will pick the most useful start page automatically.</div></div></div><br><button class="btn" type="submit">Build Workspace</button></form>`;
+  document.getElementById('app').innerHTML=`<div class="hero"><span class="workspaceBadge">One-time setup</span><h1>Build your DART workspace</h1><p>Your persona now controls where DART opens, which actions are emphasized, how much detail is surfaced, and how AI/briefing content is framed. No features are removed—you can still navigate anywhere.</p></div><form class="panel" id="personaForm"><h2>Personalize the experience</h2><div class="grid grid2"><div class="field"><label>Primary role</label><select id="role"><option>Executive / Leadership</option><option>Data / Analytics</option><option>Program / Policy</option><option>Operations</option><option>Quality / Compliance</option><option>IT / Engineering</option><option>Research</option><option>Other</option></select></div><div class="field fieldWide"><label>Focus areas</label>${personaFocusPicker(["Data quality","Claims","Reporting impact","AI insights"],"focusPick")}<div class="personaPrefNote">Pick what matters most. DART will highlight matching pages and rank your priority queue to fit.</div></div><div class="field"><label>Detail level</label><select id="depth"><option>Executive</option><option selected>Balanced</option><option>Technical</option></select></div><div class="field fieldWide"><label>Your standing question</label><input id="first_question" placeholder="Which areas need the most attention?"><div class="personaPrefNote">Shown on each home page with an Ask DART button.</div></div><div class="field"><label>Preferred workspace</label><select id="preferred_workspace"><option value="medicare">Medicare</option><option value="medicaid">Medicaid</option><option value="byo">Build Your Own</option></select></div><div class="field"><label>Start page</label><select id="landing_page">${personaLandingOptions('auto')}</select><div class="personaPrefNote">Choose “Recommended for my role” and DART will pick the most useful start page automatically.</div></div></div><br><button class="btn" type="submit">Build Workspace</button></form>`;
   document.getElementById('personaForm').onsubmit=savePersona;refreshThemeVisuals(document.getElementById('app'));
 }
 async function savePersona(e){
   if(e)e.preventDefault();
-  const payload={program:document.getElementById('program').value,role:document.getElementById('role').value,audience:document.getElementById('audience').value,depth:document.getElementById('depth').value,focus:document.getElementById('focus').value.split(',').map(x=>x.trim()).filter(Boolean),geography:['National'],first_question:document.getElementById('first_question').value,preferred_workspace:document.getElementById('preferred_workspace').value,landing_page:document.getElementById('landing_page').value};
+  const payload={role:document.getElementById('role').value,depth:document.getElementById('depth').value,focus:personaFocusValues('focusPick'),first_question:document.getElementById('first_question').value,preferred_workspace:document.getElementById('preferred_workspace').value,landing_page:document.getElementById('landing_page').value};
   try{
     const saved=await postJson('/api/persona',payload);
     state.meta=await api('/api/meta');
@@ -7441,7 +7518,7 @@ async function savePersona(e){
 }
 async function saveSettings(e){
   if(e)e.preventDefault();
-  const payload={program:document.getElementById('setProgram').value,role:document.getElementById('setRole').value,audience:document.getElementById('setAudience').value,depth:document.getElementById('setDepth').value,focus:document.getElementById('setFocus').value.split(',').map(x=>x.trim()).filter(Boolean),geography:['National'],first_question:document.getElementById('setQuestion').value,preferred_workspace:document.getElementById('setPreferredWorkspace').value,landing_page:document.getElementById('setLandingPage').value};
+  const payload={role:document.getElementById('setRole').value,depth:document.getElementById('setDepth').value,focus:personaFocusValues('setFocusPick'),first_question:document.getElementById('setQuestion').value,preferred_workspace:document.getElementById('setPreferredWorkspace').value,landing_page:document.getElementById('setLandingPage').value};
   await postJson('/api/persona',payload);toast('Persona and startup preferences saved');state.meta=await api('/api/meta');await render();
 }
 async function saveAwsSettings(){
@@ -9576,7 +9653,7 @@ function historyTable(rows,columns,side){
   }).join('')}</tbody></table></div>`;
 }
 async function selectHistoryDataset(value){state.historyDataset=value;state.historySnapshot=null;state.historyOnlyChanges=false;state.historyOffset=0;state.historyMetric='';state.historyMetricOffset=0;await render();}
-function historyPeriod(){return state.historyPeriod||'week';}
+function historyPeriod(){return state.historyPeriod||state.meta?.persona_effects?.history_period||'week';}
 async function selectHistoryPeriod(period){state.historyPeriod=period;state.historySnapshot=null;state.historyOffset=0;state.historyMetric='';state.historyMetricOffset=0;await render();}
 async function selectHistoryWeek(id){state.historySnapshot=historyPeriod()==='update'?Number(id):String(id);state.historyOffset=0;state.historyMetric='';state.historyMetricOffset=0;await render();}
 async function historyPageOffset(offset){state.historyOffset=Math.max(0,offset);await render();}
@@ -9777,12 +9854,12 @@ function genericTable(rows,exportName=''){if(!rows||!rows.length)return '<div cl
 function kanban(rows){const lanes=['Open','In progress','Blocked','Resolved'];return `<div class="kanban">${lanes.map(l=>`<div class="lane"><h4>${l}</h4>${(rows||[]).filter(r=>r.Status===l).map(r=>`<div class="task"><b>${esc(r.Field)}</b><br><span class="muted">${esc(r.Stream)} · ${esc(r.Priority||'')}</span><br>${esc(r.Owner||'Unassigned')}<br><span class="muted">${esc(r.Note||'')}</span></div>`).join('')||'<div class="muted">No items</div>'}</div>`).join('')}</div>`;}
 async function render(){const meta=await api('/api/meta');state.meta=meta;if(!meta.auth_user){renderAuth();return;}setNav();if(state.page==='learn'){document.getElementById('footer').innerHTML=`DART ${esc(meta.version)} · Workspace guide`;const le=document.getElementById('app');le.innerHTML=learnMorePage();refreshThemeVisuals(le);return;}if(state.page==='welcome'){document.getElementById('footer').innerHTML=`DART ${esc(meta.version)} · Data Assurance Reconciliation Tracker`;document.getElementById('app').innerHTML=welcomePage();refreshThemeVisuals(document.getElementById('app'));return;}syncChatHistoryFromWorkspaceState();if(state.page==='profile'||state.page==='settings'){renderSharedPage(meta);return;}if(state.workspace==='medicaid'){await renderMedicaid(meta);return;}if(state.workspace==='byo'){const byo=await api('/api/byo');await renderByo(meta,byo);return;}const data=await getData();let emailInfo=null;let rawInfo=null;if(state.page==='emailagent')emailInfo=await api('/api/email-agent');if(state.page==='raweditor')rawInfo=await api(`/api/raw-data?search=${encodeURIComponent(state.rawSearch)}&offset=${state.rawOffset}&limit=${state.rawLimit}`);document.getElementById('footer').innerHTML=`Loaded: ${esc(meta.source)} · ${intFmt(meta.rows)} rows · ${intFmt(meta.columns)} columns · DART ${esc(meta.version)} · ${esc(meta.build_fingerprint||'build unknown')} · FastAPI`;const p=meta.persona||{};let html=filterBar(meta);
 if(state.page==='home'){
-  const pqLimit=Number(state.priorityQueueLimit||10);
+  const pqLimit=personaQueueLimit();
   const queueSource=Array.isArray(data.summary?.top_actions)&&data.summary.top_actions.length?data.summary.top_actions:(data.issues||data.rows||[]);
-  const pqSort=pqSortModes[state.priorityQueueSort]?state.priorityQueueSort:'unmatched';
+  const pqSort=pqSortModes[personaQueueSort()]?personaQueueSort():'unmatched';
   const queueItems=queueSource.slice().sort(pqSortModes[pqSort].cmp).slice(0,pqLimit);
   window.__pqItems=queueItems;
-  let body=`${section('overview','Overview',`<div class="hero">${personaEditButton()}<span class="workspaceBadge">Medicare · Reconciliation</span><h1>DART Command Center</h1><p>A consolidated view of data quality, reconciliation risk, unmatched volume, remediation activity, and downstream business impact${p.program||p.role?` for <b>${esc(p.program||'your program')}</b> with a <b>${esc(p.role||'general')}</b> role lens`:''}. Use this page as your primary operational command center.</p><div class="heroActions">${personaQuickActions(meta)}</div></div>${metrics(data.summary)}<br>${workspaceLaunchpad('Where would you like to go?','Every Medicare page, grouped by what you want to do.')}`)}${section('riskmix','Risk & volume',`<div class="panel"><div class="rvHead"><div><h3>Risk &amp; volume at a glance</h3><p class="muted">Reflects the data scope filters at the top of the page. Hover any chart for exact values.</p></div><div class="historyTabs rvTabs" role="tablist"><button type="button" class="historyTab active" data-rv="rvUnmatched" onclick="rvTab(this)">Unmatched by stream</button><button type="button" class="historyTab" data-rv="rvVolume" onclick="rvTab(this)">Matched vs unmatched</button></div></div><div class="rvGrid"><div class="rvCard"><h4>Risk distribution</h4>${data.charts.risk}</div><div class="rvCard"><div id="rvUnmatched" class="rvPane"><h4>Unmatched volume by stream</h4>${data.charts.volume}</div><div id="rvVolume" class="rvPane" hidden><h4>Reconciliation volume by stream</h4>${data.charts.weighted}</div></div></div></div>`)}${section('queue','Priority queue',`<div class="panel"><div class="pqHead"><div><h3>Priority queue</h3><p class="muted"><b>How it is ranked:</b> ${esc(pqSortModes[pqSort].blurb)} Select any item to open its full diagnostic.</p></div><div class="pqControls"><label>Rank by<select id="priorityQueueSort" onchange="state.priorityQueueSort=this.value;render()">${Object.keys(pqSortModes).map(k=>`<option value="${k}" ${pqSort===k?'selected':''}>${pqSortModes[k].label}</option>`).join('')}</select></label><label>Show<select id="priorityQueueSelect" onchange="state.priorityQueueLimit=Number(this.value);render()"><option value="10" ${pqLimit===10?'selected':''}>Top 10</option><option value="50" ${pqLimit===50?'selected':''}>Top 50</option><option value="100" ${pqLimit===100?'selected':''}>Top 100</option></select></label></div></div>${pqCards(queueItems,pqSort)}</div>`)}`;html+=sectionShell([['overview','Overview'],['riskmix','Risk & volume'],['queue','Priority queue']],body);}
+  let body=`${section('overview','Overview',`<div class="hero">${personaEditButton()}<span class="workspaceBadge">Medicare · Reconciliation</span><h1>DART Command Center</h1><p>A consolidated view of data quality, reconciliation risk, unmatched volume, remediation activity, and downstream business impact${p.program||p.role?` for <b>${esc(p.program||'your program')}</b> with a <b>${esc(p.role||'general')}</b> role lens`:''}. Use this page as your primary operational command center.</p><div class="heroActions">${personaQuickActions(meta)}</div></div>${metrics(data.summary)}<br>${workspaceLaunchpad('Where would you like to go?','Every Medicare page, grouped by what you want to do.')}`)}${section('riskmix','Risk & volume',`<div class="panel"><div class="rvHead"><div><h3>Risk &amp; volume at a glance</h3><p class="muted">Reflects the data scope filters at the top of the page. Hover any chart for exact values.</p></div><div class="historyTabs rvTabs" role="tablist"><button type="button" class="historyTab active" data-rv="rvUnmatched" onclick="rvTab(this)">Unmatched by stream</button><button type="button" class="historyTab" data-rv="rvVolume" onclick="rvTab(this)">Matched vs unmatched</button></div></div><div class="rvGrid"><div class="rvCard"><h4>Risk distribution</h4>${data.charts.risk}</div><div class="rvCard"><div id="rvUnmatched" class="rvPane"><h4>Unmatched volume by stream</h4>${data.charts.volume}</div><div id="rvVolume" class="rvPane" hidden><h4>Reconciliation volume by stream</h4>${data.charts.weighted}</div></div></div></div>`)}${section('queue','Priority queue',`<div class="panel"><div class="pqHead"><div><h3>Priority queue</h3><p class="muted"><b>How it is ranked:</b> ${esc(pqSortModes[pqSort].blurb)} Select any item to open its full diagnostic.</p></div><div class="pqControls"><label>Rank by<select id="priorityQueueSort" onchange="state.priorityQueueSort=this.value;render()">${Object.keys(pqSortModes).map(k=>`<option value="${k}" ${pqSort===k?'selected':''}>${pqSortModes[k].label}</option>`).join('')}</select></label><label>Show<select id="priorityQueueSelect" onchange="state.priorityQueueLimit=Number(this.value);render()">${[5,10,25].map(n=>`<option value="${n}" ${pqLimit===n?'selected':''}>Top ${n}</option>`).join('')}<option value="50" ${pqLimit===50?'selected':''}>Top 50</option><option value="100" ${pqLimit===100?'selected':''}>Top 100</option></select></label></div></div>${pqCards(queueItems,pqSort)}</div>`)}`;html+=sectionShell([['overview','Overview'],['riskmix','Risk & volume'],['queue','Priority queue']],body);}
 if(state.page==='metrics'){html+=`<div class="hero"><h1>Metric Explanations</h1><p>Plain-English definitions for the DART metrics so leadership, analysts, and owners can interpret the same dashboard consistently.</p></div>${metricExplanations()}`;}
 if(state.page==='riskcenter'){let body=`${section('risk-overview','Risk overview',`<div class="hero"><h1>Risk Center</h1><p>Concentrated view of critical findings, risk drivers, and the field-level evidence behind the current risk picture.</p></div>${miniDeck(data.summary)}`)}${section('risk-drivers','Top risk drivers',`<div class="panel"><h3>Top risk drivers</h3>${data.charts.drivers}</div>`)}${section('risk-list','Critical and elevated findings',`<div class="panel">${table(data.issues,true)}</div>`)}`;html+=sectionShell([['risk-overview','Overview'],['risk-drivers','Risk drivers'],['risk-list','Findings']],body);}
 if(state.page==='insights'){let body=aiInsightsPageHtml(data,meta);html+=sectionShell([['insight-top','Overview'],['strategic-diagnostics','AI Diagnostics'],['investigation-workspace','Anomaly Explorer']],body);}
@@ -9844,12 +9921,10 @@ function settingsPage(meta){
           <h3>Persona & Startup Preferences</h3>
           <p class="muted">Update the persona lens and choose where DART should take you immediately after future logins. These settings are saved to your local user profile.</p>
           <div class="grid grid2" style="margin-top:14px">
-            <div class="field"><label>Program</label><select id="setProgram">${['Medicare','Medicaid','Both','Other / General'].map(x=>`<option ${p.program===x?'selected':''}>${x}</option>`).join('')}</select></div>
             <div class="field"><label>Primary role</label><select id="setRole">${['Executive / Leadership','Data / Analytics','Program / Policy','Operations','Quality / Compliance','IT / Engineering','Research','Other'].map(x=>`<option ${p.role===x?'selected':''}>${x}</option>`).join('')}</select></div>
-            <div class="field"><label>Focus areas</label><input id="setFocus" value="${esc(focus)}"></div>
-            <div class="field"><label>Audience</label><select id="setAudience">${['Leadership','Myself','Analysts','Program teams','Technical teams','External stakeholders'].map(x=>`<option ${p.audience===x?'selected':''}>${x}</option>`).join('')}</select></div>
+            <div class="field fieldWide"><label>Focus areas</label>${personaFocusPicker(p.focus||[],"setFocusPick")}<div class="personaPrefNote">DART highlights matching pages and ranks your priority queue to fit.</div></div>
             <div class="field"><label>Detail level</label><select id="setDepth">${['Executive','Balanced','Technical'].map(x=>`<option ${p.depth===x?'selected':''}>${x}</option>`).join('')}</select></div>
-            <div class="field"><label>Briefing question</label><input id="setQuestion" value="${esc(p.first_question||'')}"></div>
+            <div class="field fieldWide"><label>Your standing question</label><input id="setQuestion" value="${esc(p.first_question||'')}"><div class="personaPrefNote">Shown on each home page with an Ask DART button.</div></div>
             <div class="field"><label>Preferred workspace</label><select id="setPreferredWorkspace">${[['medicare','Medicare'],['medicaid','Medicaid'],['byo','Build Your Own']].map(([v,l])=>`<option value="${v}" ${p.preferred_workspace===v?'selected':''}>${l}</option>`).join('')}</select></div>
             <div class="field"><label>Start page</label><select id="setLandingPage">${personaLandingOptions(p.landing_page||'auto')}</select><div class="personaPrefNote">If the selected page does not belong to the preferred workspace, DART safely falls back to that workspace home.</div></div>
           </div>
@@ -11630,6 +11705,7 @@ async def byo_chat(request: Request) -> Any:
             "Consistency-check the answer against the supplied schemas before responding: never attribute a field, status, category, or statistic to a dataset when that field is not present there. "
             "Always finish every section you start; never end on a heading, colon, or incomplete bullet. Aim for roughly 600-1000 words unless the user explicitly asks for more. "
             "Do not claim the model was trained on these datasets; say it is grounded in them for this conversation."
+            + persona_ai_hint(current_persona())
         )
         if OpenAI and api_key:
             try:
@@ -11991,7 +12067,7 @@ async def copilot(request: Request) -> Dict[str, Any]:
     }
     api_key = groq_api_key()
     model = groq_model()
-    system = "You are Dartboard, the DART healthcare data intelligence assistant. Be concise, executive-ready, and data-driven. Use only supplied context. Never invent statistics. This is decision support, not clinical advice. Adapt wording, depth, and recommended actions to the supplied persona role, audience, focus areas, and detail level without changing the underlying facts. Return polished Markdown with short headings, compact tables only when they improve comparison, and bullets for findings/actions. Avoid repetition and always finish every section you start. Aim for roughly 400-800 words unless the user asks for more."
+    system = "You are Dartboard, the DART healthcare data intelligence assistant. Be concise, executive-ready, and data-driven. Use only supplied context. Never invent statistics. This is decision support, not clinical advice. Adapt wording, depth, and recommended actions to the supplied persona role, audience, focus areas, and detail level without changing the underlying facts. Return polished Markdown with short headings, compact tables only when they improve comparison, and bullets for findings/actions. Avoid repetition and always finish every section you start. Aim for roughly 400-800 words unless the user asks for more." + persona_ai_hint(current_persona())
     if OpenAI and api_key:
         try:
             context_text = json.dumps(context, default=str, separators=(",", ":"))
