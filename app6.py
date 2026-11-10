@@ -6655,6 +6655,19 @@ HTML = r'''
     .learnBlock ul{margin:0;padding-left:18px;display:grid;gap:7px;line-height:1.55}
     .learnExtra{grid-column:1/-1;background:linear-gradient(135deg,rgba(231,202,123,.14),transparent)}
     @media(max-width:900px){.learnGrid{grid-template-columns:1fr}}
+    .aiInsightsHero{position:relative}
+    .pageHelpBtn{position:absolute;top:18px;right:22px;z-index:3;width:34px;height:34px;border-radius:50%;border:1px solid rgba(231,195,92,.6);background:linear-gradient(135deg,#f3d77a,#c9a227);color:#1b2a4a;font:inherit;font-weight:900;font-size:1rem;cursor:pointer;display:grid;place-items:center;box-shadow:0 6px 16px rgba(0,0,0,.2);transition:transform .15s,box-shadow .15s}
+    .pageHelpBtn:hover,.pageHelpBtn:focus-visible{transform:translateY(-1px) scale(1.06);box-shadow:0 10px 22px rgba(201,162,39,.45)}
+    @media(max-width:700px){.pageHelpBtn{right:14px!important}}
+    .pageHelpBackdrop{position:fixed;inset:0;z-index:2000;display:grid;place-items:center;padding:20px;background:rgba(15,20,30,.55);backdrop-filter:blur(3px);animation:pageHelpFade .15s ease}
+    @keyframes pageHelpFade{from{opacity:0}to{opacity:1}}
+    .pageHelpDialog{position:relative;width:min(640px,100%);max-height:calc(100vh - 40px);overflow:auto;background:var(--panel,#fff);color:var(--text,#172033);border:1px solid #d9bb6a;border-top:4px solid #c9a227;border-radius:20px;padding:26px 28px;box-shadow:0 30px 80px rgba(0,0,0,.35)}
+    .pageHelpDialog h2{margin:2px 0 14px;font-size:1.5rem}
+    .pageHelpClose{position:absolute;top:12px;right:14px;width:32px;height:32px;border-radius:50%;border:1px solid var(--line);background:transparent;color:inherit;font-size:1.3rem;line-height:1;cursor:pointer}
+    .pageHelpBlock{margin:0 0 12px;padding:14px 16px;border:1px solid var(--line);border-radius:14px}
+    .pageHelpBlock h4{margin:0 0 6px;font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:#a27b22}
+    .pageHelpBlock p{margin:0;line-height:1.6}.pageHelpBlock ul{margin:0;padding-left:18px;display:grid;gap:6px;line-height:1.5}
+    .pageHelpExtra{background:linear-gradient(135deg,rgba(231,202,123,.14),transparent)}.pageHelpFoot{display:flex;justify-content:flex-end;margin-top:4px}
 </style>
 </head>
 <body data-workspace="medicare">
@@ -7210,6 +7223,40 @@ function ensureSectionRail(appEl){
   shell.innerHTML=`<aside class="sectionRail"><div class="railTitle">On this page</div>${items.map(x=>`<a href="#${x[0]}">${esc(x[1])}</a>`).join('')}</aside>`;
   shell.appendChild(content);
   appEl.appendChild(shell);
+}
+function pageHelpEntry(){
+  const ws=state.workspace;
+  const hit=(learnContent[ws]?.tabs||[]).find(t=>t.id===state.page);
+  return hit?{ws,tab:hit}:null;
+}
+function ensurePageHelp(appEl){
+  document.getElementById('pageHelpModal')?.remove();
+  if(!appEl||state.page==='welcome'||state.page==='learn')return;
+  const entry=pageHelpEntry(),hero=appEl.querySelector('.hero,.aiInsightsHero');
+  if(!entry||!hero||hero.querySelector(':scope>.pageHelpBtn'))return;
+  const btn=document.createElement('button');
+  btn.type='button';btn.className='pageHelpBtn';btn.setAttribute('aria-label','About this page');btn.title='About this page';
+  btn.innerHTML='<span aria-hidden="true">?</span>';
+  btn.onclick=openPageHelp;
+  hero.insertBefore(btn,hero.firstChild);
+  const persona=hero.querySelector(':scope>.heroPersona');
+  if(persona)btn.style.right=(22+(persona.offsetWidth||170)+10)+'px';
+}
+function openPageHelp(){
+  const entry=pageHelpEntry();if(!entry)return;
+  const t=entry.tab;
+  document.getElementById('pageHelpModal')?.remove();
+  const modal=document.createElement('div');
+  modal.id='pageHelpModal';modal.className='pageHelpBackdrop';
+  modal.innerHTML=`<div class="pageHelpDialog" role="dialog" aria-modal="true" aria-labelledby="pageHelpTitle"><button type="button" class="pageHelpClose" aria-label="Close">×</button><span class="learnGroup">${esc(learnContent[entry.ws].title)} · ${esc(t.group)}</span><h2 id="pageHelpTitle">${esc(t.name)}</h2><div class="pageHelpBlock"><h4>The problem it solves</h4><p>${esc(t.problem)}</p></div><div class="pageHelpBlock"><h4>How it works</h4><ul>${t.how.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div><div class="pageHelpBlock pageHelpExtra"><h4>Extra</h4><p>${esc(t.extra)}</p></div><div class="pageHelpFoot"><button type="button" class="btn secondary small" data-guide>Read the full ${esc(learnContent[entry.ws].title)} guide →</button></div></div>`;
+  const close=()=>{modal.remove();document.removeEventListener('keydown',onKey);};
+  const onKey=e=>{if(e.key==='Escape')close();};
+  modal.addEventListener('click',e=>{if(e.target===modal)close();});
+  modal.querySelector('.pageHelpClose').onclick=close;
+  modal.querySelector('[data-guide]').onclick=async()=>{close();await openLearnMore(entry.ws);document.getElementById('learn-'+t.id)?.scrollIntoView({block:'start'});};
+  document.addEventListener('keydown',onKey);
+  document.body.appendChild(modal);
+  modal.querySelector('.pageHelpClose').focus();
 }
 function renderAuth(){
   const modal=document.getElementById('confidentialityModalBackdrop');
@@ -8128,7 +8175,7 @@ function loadGovernance(r){govId.value=r.id||'';govControl.value=r.Control||'';g
 async function saveGovernance(){await postJson('/api/governance',{id:govId.value,Control:govControl.value,Owner:govOwner.value,Cadence:govCadence.value,Status:govStatus.value,Evidence:govEvidence.value});toast('Governance control saved');await render();}
 async function deleteGovernance(id){await del('/api/governance/'+encodeURIComponent(id));toast('Governance control deleted');await render();}
 function workspacePlaceholder(title,description,items=[]){return `<div class="hero"><span class="workspaceBadge">${esc(workspaceLabels[state.workspace]||'Workspace')}</span><h1>${esc(title)}</h1><p>${esc(description)}</p></div><div class="panel workspaceEmpty"><h3>Workspace is separated from Medicare data</h3><p class="muted">The current All Streams reconciliation workbook is treated as Medicare-only. No Medicare rows are reused here.</p>${items.length?`<div class="grid grid3">${items.map(x=>`<div class="miniCard"><b>${esc(x[0])}</b><span>${esc(x[1])}</span></div>`).join('')}</div>`:''}</div>`;}
-function renderSharedPage(meta){document.getElementById('footer').innerHTML=`DART ${esc(meta.version)} · ${esc(workspaceLabels[state.workspace]||'Workspace')} · FastAPI`;const html=state.page==='profile'?profilePage(meta):settingsPage(meta);const appEl=document.getElementById('app');appEl.innerHTML=html;ensureSectionRail(appEl);runInjectedScripts(appEl);decorateMetricHelp(appEl);refreshThemeVisuals(appEl);ensureAssistantBubble();} 
+function renderSharedPage(meta){document.getElementById('footer').innerHTML=`DART ${esc(meta.version)} · ${esc(workspaceLabels[state.workspace]||'Workspace')} · FastAPI`;const html=state.page==='profile'?profilePage(meta):settingsPage(meta);const appEl=document.getElementById('app');appEl.innerHTML=html;ensureSectionRail(appEl);ensurePageHelp(appEl);runInjectedScripts(appEl);decorateMetricHelp(appEl);refreshThemeVisuals(appEl);ensureAssistantBubble();} 
 function workspaceChatMeta(key){
   if(key==='medicaid')return {label:'CMS Q&A',subtitle:'Medicaid workspace',route:'medicaid-chat'};
   if(key==='byo')return {label:'AI Analyst',subtitle:'Build Your Own',route:'byo-ai'};
@@ -8495,7 +8542,7 @@ async function renderMedicaid(meta){
     const c=await api('/api/medicaid/claims-data');state.medicaidIssueLabels=c.methodology?.issue_labels||{};html=medMethodologyPage(c);
   }else{state.page='medicaid-home';return renderMedicaid(meta);}
   document.getElementById('footer').innerHTML=`Medicaid State Intelligence · 50-state CMS quality prototype · ${esc(meta.version)} · FastAPI`;
-  const appEl=document.getElementById('app');appEl.classList.remove('page-enter');appEl.innerHTML=html;ensureSectionRail(appEl);runInjectedScripts(appEl);decorateMetricHelp(appEl);refreshThemeVisuals(appEl);requestAnimationFrame(()=>appEl.classList.add('page-enter'));ensureAssistantBubble();
+  const appEl=document.getElementById('app');appEl.classList.remove('page-enter');appEl.innerHTML=html;ensureSectionRail(appEl);ensurePageHelp(appEl);runInjectedScripts(appEl);decorateMetricHelp(appEl);refreshThemeVisuals(appEl);requestAnimationFrame(()=>appEl.classList.add('page-enter'));ensureAssistantBubble();
 }
 function byoStats(info,prefix=''){return `<div class="grid grid6 byoStatGrid"><div class="panel metric"><div class="label">Rows</div><div class="value">${intFmt(info.rows)}</div><div class="sub">${prefix||'Dataset'}</div></div><div class="panel metric"><div class="label">Columns</div><div class="value">${intFmt(info.columns)}</div><div class="sub">Detected fields</div></div><div class="panel metric"><div class="label">Completeness</div><div class="value">${pctNum(info.completeness)}</div><div class="sub">Non-missing cells</div></div><div class="panel metric"><div class="label">Missing cells</div><div class="value">${intFmt(info.missing_cells)}</div><div class="sub">Across all fields</div></div><div class="panel metric"><div class="label">Duplicate rows</div><div class="value">${intFmt(info.duplicate_rows)}</div><div class="sub">Exact duplicates</div></div><div class="panel metric"><div class="label">Numeric fields</div><div class="value">${intFmt(info.numeric_columns)}</div><div class="sub">Detected numeric</div></div></div>`;}
 function byoUploadPanel(info){return `<div class="byoDrop"><span class="workspaceBadge">Persistent upload</span><h3>Save datasets to your repo</h3><p class="muted">Upload one or more CSV/XLSX files. DART validates each file, then saves the original file under <span class="byoStoragePath">${esc(info.storage_path||'Data/DIY')}</span>. Files remain available after FastAPI restarts.</p><input id="byoFiles" type="file" accept=".csv,.xlsx" multiple><div class="heroActions" style="justify-content:center"><button class="btn" type="button" onclick="uploadByoFiles()">Upload & save</button><button class="btn secondary" type="button" onclick="showPage('byo-library')">Open Dataset Library</button></div></div>`;}
@@ -9602,7 +9649,7 @@ async function renderByo(meta,info){
     html=`<div class="hero"><h1>Export Center</h1><p>Download the original saved files, export either full dataset as CSV, or export the comparison tables currently generated by DART.</p></div>${byoPairPicker(info)}${comparison?`<br><div class="grid grid2"><div class="panel"><h3>Dataset A</h3><p><b>${esc(comparison.left.source)}</b></p><div class="heroActions"><a class="btn" href="/download/byo-file/${encodeURIComponent(comparison.left.source)}">Download original</a><a class="btn secondary" href="/download/byo-csv/${encodeURIComponent(comparison.left.source)}">Export full CSV</a></div></div><div class="panel"><h3>Dataset B</h3><p><b>${esc(comparison.right.source)}</b></p><div class="heroActions"><a class="btn" href="/download/byo-file/${encodeURIComponent(comparison.right.source)}">Download original</a><a class="btn secondary" href="/download/byo-csv/${encodeURIComponent(comparison.right.source)}">Export full CSV</a></div></div></div><br><div class="grid grid2"><div class="panel"><h3>Comparison export</h3>${genericTable(comparison.column_comparison,'DIY comparison export')}</div><div class="panel"><h3>Join-key export</h3>${genericTable(comparison.key_candidates,'DIY join key candidates')}</div></div>`:`<br>${needPair}`}`;
   }else{state.page='byo-home';return renderByo(meta,info);}
   document.getElementById('footer').innerHTML=`Build Your Own · ${intFmt(info.dataset_count||0)} saved datasets · ${esc(info.storage_path||'Data/DIY')} · DART ${esc(meta.version)} · ${esc(meta.build_fingerprint||'build unknown')} · FastAPI`;
-  const appEl=document.getElementById('app');appEl.innerHTML=html;ensureSectionRail(appEl);runInjectedScripts(appEl);decorateMetricHelp(appEl);refreshThemeVisuals(appEl);ensureAssistantBubble();
+  const appEl=document.getElementById('app');appEl.innerHTML=html;ensureSectionRail(appEl);ensurePageHelp(appEl);runInjectedScripts(appEl);decorateMetricHelp(appEl);refreshThemeVisuals(appEl);ensureAssistantBubble();
 }
 function genericTable(rows,exportName=''){if(!rows||!rows.length)return '<div class="empty">No rows available.</div>';const cols=Object.keys(rows[0]);return `<div class="exportTableBlock">${exportBar(exportName,rows.length)}<div class="tableWrap"><table class="table"><thead><tr>${cols.map((c,i)=>`<th class="sortable" onclick="sortTable(this,${i})" title="Click to sort by ${esc(c)}">${esc(c)}<span class="sortIcon">&#x2195;</span></th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(c=>{let v=r[c];const rawVal=v===null||v===undefined?'':String(v);const num=Number(v);const isNum=rawVal!==''&&!isNaN(num);return `<td data-val="${isNum?num:esc(rawVal)}" title="${esc(rawVal)}">${esc(rawVal)}</td>`;}).join('')}</tr>`).join('')}</tbody></table></div></div>`;}
 
@@ -9638,7 +9685,7 @@ if(state.page==='copilot'){let body=`${section('chat-area','Conversation',`<div 
 if(state.page==='raweditor'){html+=rawDataPage(rawInfo);}
 if(state.page==='emailagent'){html+=emailAgentPage(emailInfo);}
 if(state.page==='data'){let body=`${section('data-source','Source files',`<div class="hero"><h1>Data Management</h1><p>DART loads the real reconciliation workbook automatically and enriches it with the CMS mapping workbook. Use the dedicated Raw Data Editor for controlled writeback and the Email Agent for workbook-change automation.</p><div class="heroActions"><button class="btn" onclick="showPage('raweditor')">Open Raw Data Editor</button><button class="btn secondary" onclick="showPage('emailagent')">Open Email Agent</button><button class="btn ghost" onclick="restoreDemo()">Reload Excel files</button><a class="btn ghost" href="/download/current.csv">Download current view</a></div></div><div class="grid grid2"><div class="panel"><h3>Current source</h3><p>${esc(meta.source)}</p><p class="muted">Rows: ${intFmt(meta.rows)} · Columns: ${intFmt(meta.columns)}</p></div><div class="panel"><h3>Detected structure</h3>${simpleTable(meta.profile)}</div></div>`)}${section('data-preview','Preview',`<div class="panel"><h3>Standardized preview</h3>${table(data.rows)}</div>`)}`;html+=sectionShell([['data-source','Source files'],['data-preview','Preview']],body);}
-if(state.page==='profile'){html+=profilePage(meta);}if(state.page==='settings'){html+=settingsPage(meta);}const appEl=document.getElementById('app');appEl.classList.remove('page-enter');appEl.innerHTML=html;ensureSectionRail(appEl);runInjectedScripts(appEl);decorateMetricHelp(appEl);refreshThemeVisuals(appEl);requestAnimationFrame(()=>appEl.classList.add('page-enter'));ensureAssistantBubble();}
+if(state.page==='profile'){html+=profilePage(meta);}if(state.page==='settings'){html+=settingsPage(meta);}const appEl=document.getElementById('app');appEl.classList.remove('page-enter');appEl.innerHTML=html;ensureSectionRail(appEl);ensurePageHelp(appEl);runInjectedScripts(appEl);decorateMetricHelp(appEl);refreshThemeVisuals(appEl);requestAnimationFrame(()=>appEl.classList.add('page-enter'));ensureAssistantBubble();}
 function profilePage(meta){const u=meta.auth_user||{};return `<div class="hero"><h1>Profile</h1><p>Manage your local DART prototype profile. Credentials are stored in <code>${esc(u.storage_file||'dart_users.json')}</code> for easy local testing only.</p><div class="heroActions"><button class="btn secondary" onclick="logoutUser()">Logout</button></div></div><form class="panel" id="profileForm"><div class="grid grid2"><div class="field"><label>Username</label><input value="${esc(u.username||'')}" disabled></div><div class="field"><label>Display name</label><input id="profileName" value="${esc(u.display_name||'')}"></div><div class="field"><label>Email</label><input id="profileEmail" value="${esc(u.email||'')}"></div><div class="field"><label>Organization</label><input id="profileOrg" value="${esc(u.organization||'')}"></div><div class="field"><label>Role</label><input id="profileRole" value="${esc(u.role||'')}"></div><div class="field"><label>New password</label><input id="profilePass" type="password" placeholder="Leave blank to keep current password"></div></div><br><button class="btn" type="submit">Save profile</button></form><br><div class="panel"><h3>Prototype storage note</h3><p class="muted">This prototype profile system stores credentials locally in plain text. It is useful for local demos, but should be replaced with proper authentication before use with sensitive data.</p></div>`;}
 function settingsPage(meta){
   const p=meta.persona||{};
