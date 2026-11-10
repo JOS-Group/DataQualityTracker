@@ -2132,6 +2132,79 @@ def current_persona(username: Optional[str] = None) -> Optional[Dict[str, Any]]:
     return None
 
 
+PERSONA_BYO_RECOMMENDATIONS: Dict[str, List[Tuple[str, str, str]]] = {
+    "Executive / Leadership": [
+        ("byo-history", "Dataset History", "See how a dataset has changed over time without reading raw rows."),
+        ("byo-quality", "Schema & Quality", "Get a quick read on completeness and duplicates."),
+        ("byo-ai", "AI Analyst", "Ask plain-English questions about your files."),
+    ],
+    "Data / Analytics": [
+        ("byo-reconcile", "Reconciliation Studio", "Interactive row-level matching, value diffing, and drift matrix."),
+        ("byo-compare", "Compare Lab", "Run deterministic analysis across the selected dataset pair."),
+        ("byo-quality", "Schema & Quality", "Inspect missingness, types, and column-level differences."),
+        ("byo-history", "Dataset History", "Track versions, trends and anomalies across uploads."),
+    ],
+    "Program / Policy": [
+        ("byo-history", "Dataset History", "Show what changed between reporting periods."),
+        ("byo-compare", "Compare Lab", "Summarize how two files differ."),
+        ("byo-export", "Export", "Download originals or comparison tables to share."),
+    ],
+    "Operations": [
+        ("byo-email", "Email Alerts", "Get notified when a monitored file changes."),
+        ("byo-raw", "Raw Data Editor", "Fix values directly in a saved dataset."),
+        ("byo-history", "Dataset History", "Review every update that was made."),
+    ],
+    "Quality / Compliance": [
+        ("byo-quality", "Schema & Quality", "Check completeness, duplicates and data types."),
+        ("byo-history", "Dataset History", "Audit changes with anomaly flags."),
+        ("byo-reconcile", "Reconciliation Studio", "Prove records match, row by row."),
+    ],
+    "IT / Engineering": [
+        ("byo-lab", "Upload Data", "Bring new files in and check how they parse."),
+        ("byo-raw", "Raw Data Editor", "Inspect and correct saved data."),
+        ("byo-email", "Email Alerts", "Automate change monitoring."),
+        ("byo-quality", "Schema & Quality", "Validate schema and types."),
+    ],
+    "Research": [
+        ("byo-ai", "AI Analyst", "Ask grounded questions across your files."),
+        ("byo-compare", "Compare Lab", "Compare datasets before drawing conclusions."),
+        ("byo-history", "Dataset History", "Look for drift and unusual periods."),
+    ],
+    "Other": [
+        ("byo-library", "Dataset Library", "Browse and manage saved datasets."),
+        ("byo-quality", "Schema & Quality", "Get a quick read on data quality."),
+        ("byo-ai", "AI Analyst", "Ask questions about your files."),
+    ],
+}
+
+
+def persona_suggested_pages(role: str) -> Dict[str, List[Dict[str, str]]]:
+    medicaid = {
+        "Executive / Leadership": [("medicaid-exec", "Executive Brief", "Review the nationwide quality picture and 30/60/90 actions."), ("medicaid-heatmap", "US Heatmap", "See geographic quality variation and drill into states."), ("medicaid-home", "Dashboard", "Start with nationwide Medicaid quality KPIs and rankings.")],
+        "Data / Analytics": [("medicaid-analytics", "Analytics", "Inspect issue-type performance and modeled risk."), ("medicaid-compare", "Compare States", "Benchmark state quality scores and confidence."), ("medicaid-heatmap", "US Heatmap", "Explore geographic patterns across quality metrics.")],
+        "Program / Policy": [("medicaid-exec", "Executive Brief", "Turn state results into program priorities."), ("medicaid-compare", "Compare States", "Compare programs side by side."), ("medicaid-optimize", "Optimize Spending", "Find modeled quality and cost opportunities.")],
+        "Operations": [("medicaid-states", "State Explorer", "Work directly from state issue backlogs and statuses."), ("medicaid-claims", "Claims Analysis", "Review claim-quality trends and monitoring opportunities."), ("medicaid-optimize", "Optimize Spending", "Prioritize modeled financial and quality opportunities.")],
+        "Quality / Compliance": [("medicaid-analytics", "Analytics", "Review issue-type quality, backlog, and cancellation patterns."), ("medicaid-states", "State Explorer", "Inspect state-level quality evidence and remediation."), ("medicaid-methodology", "Methodology", "See exactly how scores are calculated.")],
+        "IT / Engineering": [("medicaid-methodology", "Methodology", "Review issue definitions, scoring logic, and model assumptions."), ("medicaid-states", "State Explorer", "Inspect issue records and technical categories by state."), ("medicaid-chat", "CMS Q&A", "Query state and issue evidence directly.")],
+        "Research": [("medicaid-ai", "AI Insights", "Review evidence-based cross-state patterns."), ("medicaid-analytics", "Analytics", "Explore distributions and rankings."), ("medicaid-chat", "CMS Q&A", "Ask focused questions of the CMS data.")],
+        "Other": [("medicaid-home", "Dashboard", "Start with nationwide Medicaid quality KPIs and rankings."), ("medicaid-states", "State Explorer", "Open any state for detailed issue tracking."), ("medicaid-ai", "AI Insights", "Review evidence-based cross-state recommendations.")],
+    }
+    sets = {
+        "medicare": PERSONA_ROLE_RECOMMENDATIONS,
+        "medicaid": medicaid,
+        "byo": PERSONA_BYO_RECOMMENDATIONS,
+    }
+    result: Dict[str, List[Dict[str, str]]] = {}
+    for workspace, table in sets.items():
+        home = {"medicare": "home", "medicaid": "medicaid-home", "byo": "byo-home"}[workspace]
+        recs = table.get(role, table["Other"])
+        result[workspace] = [
+            {"id": page_id, "label": label, "reason": reason}
+            for page_id, label, reason in recs
+            if page_id != home or workspace == "medicare"
+        ]
+    return result
+
 def persona_effects(persona: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     p = normalize_persona(persona or {}) if persona else {}
     if not p:
@@ -2185,6 +2258,7 @@ def persona_effects(persona: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "lens_summary": lens_summary,
         "priority_limit": priority_limit,
         "focus": focus[:5],
+        "suggested_pages": persona_suggested_pages(role),
         "recommended_pages": [
             {"id": page_id, "label": label, "reason": reason}
             for page_id, label, reason in recs
@@ -6617,7 +6691,14 @@ HTML = r'''
     body[data-page="home"] .metric.panel,body[data-page="medicaid-home"] .medKpi,body[data-page="byo-home"] .metric.panel{border-top:3px solid #d9b866}
 
     /* "Jump to" launchpad on each workspace home */
-    .launchpad{margin:6px 0 4px}
+    .suggested{margin:6px 0 22px;padding:20px 22px;border-radius:20px;border:1px solid #e1c66f;background:linear-gradient(135deg,#fffaf0,#fff4d6 60%,#fffdf8);box-shadow:0 10px 28px rgba(150,110,10,.12)}
+    .suggestedHead{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:14px}.suggestedHead h2{margin:4px 0 4px;font-size:1.3rem}.suggestedHead p{margin:0;max-width:640px}.suggestedTags{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    .suggestedGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+    .suggestedCard{position:relative;display:flex;align-items:center;gap:13px;padding:15px 16px;border:1px solid #e8d79b;border-radius:16px;background:#fff;color:#233044;text-align:left;font:inherit;cursor:pointer;box-shadow:0 6px 18px rgba(26,35,48,.06);transition:transform .18s,box-shadow .18s,border-color .18s}.suggestedCard:hover,.suggestedCard:focus-visible{transform:translateY(-3px);border-color:#c99a12;box-shadow:0 14px 30px rgba(26,35,48,.14);outline:none}
+    .suggestedRank{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;flex:none;font-size:.78rem;font-weight:800;background:linear-gradient(135deg,#0f1f3d,#1c3768);color:#f4d58d}.suggestedIcon{font-size:1.5rem;flex:none}.suggestedText{display:grid;gap:3px;min-width:0;flex:1}.suggestedText small{color:#667085;font-size:.8rem;line-height:1.4}.suggestedText em{justify-self:start;font-style:normal;font-size:.68rem;font-weight:800;text-transform:uppercase;letter-spacing:.05em;padding:2px 8px;border-radius:99px;background:#f4d58d;color:#5b4300}
+    .suggestedCard .launchArrow{opacity:.5}.suggestedCard:hover .launchArrow{opacity:1;transform:none}.suggestedEmpty{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}.suggestedEmpty .suggestedHead{margin:0;display:contents}
+    .launchCard.isSuggested{border-color:#d6bb73}.suggestedStar{position:absolute;top:8px;right:12px;color:#c99a12;font-size:.95rem}.launchCard{position:relative}
+    :root[data-theme="dark"] .suggested{background:linear-gradient(135deg,#1b1a14,#26220f 60%,#1b1a14);border-color:#5a4a1a;box-shadow:0 10px 28px rgba(0,0,0,.35)}:root[data-theme="dark"] .suggestedCard{background:#1d2630;border-color:#4a4222;color:#edf0f3}:root[data-theme="dark"] .suggestedText small{color:#a9b3bf}:root[data-theme="dark"] .suggestedCard:hover{border-color:#d4af37}:root[data-theme="dark"] .suggestedStar{color:#f4d58d}:root[data-theme="dark"] .suggestedHead .personaTag{background:#1d2630;color:#f4d58d;border-color:#4a4222}    .launchpad{margin:6px 0 4px}
     .launchpad .welcomeHeading{margin:4px 0 14px}
     .launchGroup{margin-bottom:16px}
     .launchGroupTitle{display:flex;align-items:center;gap:12px;margin:0 0 10px;color:#80621c;font-size:.7rem;font-weight:900;letter-spacing:.14em;text-transform:uppercase}
@@ -6825,12 +6906,19 @@ const navSets={
 const workspaceLabels={medicare:'Medicare',medicaid:'Medicaid',byo:'Build Your Own'};
 const workspaceHomes={medicare:'home',medicaid:'medicaid-home',byo:'byo-home'};
 const pageIcons={metrics:'📖',riskcenter:'🎯',insights:'✨',scorecards:'📊',explorer:'🧭',raweditor:'✏️',emailagent:'✉️',copilot:'🤖','medicaid-heatmap':'🗺️','medicaid-exec':'📝','medicaid-states':'🏛️','medicaid-compare':'⚖️','medicaid-analytics':'📈','medicaid-ai':'✨','medicaid-chat':'💬','medicaid-claims':'🧾','medicaid-optimize':'💡','medicaid-methodology':'📖','byo-library':'📚','byo-lab':'⬆️','byo-raw':'✏️','byo-email':'✉️','byo-history':'🕘','byo-preview':'🔎','byo-reconcile':'🔗','byo-compare':'⚖️','byo-quality':'✅','byo-ai':'🤖','byo-export':'📦'};
-const pageBlurbs={metrics:'Plain-language definitions for every metric you see',riskcenter:'Rank streams and fields by reconciliation risk',insights:'AI-generated findings, anomalies and drivers',scorecards:'Stream-by-stream performance at a glance',explorer:'Browse systems, fields and their lineage',raweditor:'View and edit the underlying workbook',emailagent:'Automated alerts when your data changes',copilot:'Ask DART questions in plain English','medicaid-heatmap':'See quality across the country on a US map','medicaid-exec':'Executive summary of national quality','medicaid-states':'Open any state for its full issue tracker','medicaid-compare':'Put states side by side','medicaid-analytics':'Trends, distributions and rankings','medicaid-ai':'AI-surfaced patterns across states','medicaid-chat':'Ask questions about the CMS data','medicaid-claims':'Claim-level quality analysis','medicaid-optimize':'Find opportunities to reduce spend','medicaid-methodology':'How scores and metrics are calculated','byo-library':'Browse, download and manage saved datasets','byo-lab':'Upload Excel or CSV files','byo-raw':'Edit a saved dataset directly','byo-email':'File-specific change alerts','byo-history':'Compare weekly versions of a dataset','byo-preview':'Inspect two datasets side by side','byo-reconcile':'Record-level matching and value differences','byo-compare':'Schema, completeness and join-key comparison','byo-quality':'Completeness, duplicates and data types','byo-ai':'Ask an AI analyst about your files','byo-export':'Download originals or comparison tables'};
+const pageBlurbs={metrics:'Plain-language definitions for every metric you see',riskcenter:'Rank streams and fields by reconciliation risk',insights:'AI-generated findings, anomalies and drivers',scorecards:'Stream-by-stream performance at a glance',explorer:'Browse systems, fields and their lineage',raweditor:'View and edit the underlying workbook',emailagent:'Automated alerts when your data changes',copilot:'Ask DART questions in plain English','medicaid-heatmap':'See quality across the country on a US map','medicaid-exec':'Executive summary of national quality','medicaid-states':'Open any state for its full issue tracker','medicaid-compare':'Put states side by side','medicaid-analytics':'Trends, distributions and rankings','medicaid-ai':'AI-surfaced patterns across states','medicaid-chat':'Ask questions about the CMS data','medicaid-claims':'Claim-level quality analysis','medicaid-optimize':'Find opportunities to reduce spend','medicaid-methodology':'How scores and metrics are calculated','byo-library':'Browse, download and manage saved datasets','byo-lab':'Upload Excel or CSV files','byo-raw':'Edit a saved dataset directly','byo-email':'File-specific change alerts','byo-history':'Review changes by week, month, year or update','byo-preview':'Inspect two datasets side by side','byo-reconcile':'Record-level matching and value differences','byo-compare':'Schema, completeness and join-key comparison','byo-quality':'Completeness, duplicates and data types','byo-ai':'Ask an AI analyst about your files','byo-export':'Download originals or comparison tables'};
+function suggestedPages(){const ws=state.workspace,allowed=currentWorkspacePageIds();return ((state.meta?.persona_effects?.suggested_pages||{})[ws]||[]).filter(r=>allowed.has(r.id)&&r.id!==workspaceHomes[ws]);}
+function suggestedPanel(){
+  const meta=state.meta||{},p=meta.persona,e=meta.persona_effects||{},recs=suggestedPages();
+  if(!p||!recs.length)return `<section class="suggested suggestedEmpty"><div class="suggestedHead"><div><span class="welcomeEyebrow">Suggested for you</span><h2>Make DART fit your role</h2><p class="muted">Tell DART who you are and it will point you to the pages that matter most.</p></div></div><button type="button" class="btn" onclick="showPage('settings')">Set up persona</button></section>`;
+  const tags=[p.role||'General',(p.depth||'Balanced')+' detail'].map(x=>`<span class="personaTag">${esc(x)}</span>`).join('');
+  return `<section class="suggested"><div class="suggestedHead"><div><span class="welcomeEyebrow">Suggested for you</span><h2>Best fit for ${esc(p.role||'your role')}</h2><p class="muted">${esc(e.lens_summary||'Pages chosen to match your persona.')}</p></div><div class="suggestedTags">${tags}<button type="button" class="btn ghost small" onclick="showPage('settings')">Adjust persona</button></div></div><div class="suggestedGrid">${recs.map((r,i)=>`<button type="button" class="suggestedCard" onclick="showPage('${r.id}')"><span class="suggestedRank">${i+1}</span><span class="suggestedIcon">${pageIcons[r.id]||'◆'}</span><span class="suggestedText"><b>${esc(r.label)}</b>${i===0?'<em>Best match</em>':''}<small>${esc(r.reason)}</small></span><span class="launchArrow">→</span></button>`).join('')}</div></section>`;
+}
 function workspaceLaunchpad(title,sub){
-  const ws=state.workspace;
+  const ws=state.workspace,sug=new Set(suggestedPages().map(r=>r.id));
   const groups=navGroupsFor(ws).map(g=>[g[0],g[1].filter(([id])=>id!==workspaceHomes[ws]&&id!=='profile'&&id!=='settings')]).filter(g=>g[1].length);
   if(!groups.length)return '';
-  return `<section class="launchpad"><div class="welcomeHeading"><div><span class="welcomeEyebrow">Jump to</span><h2>${esc(title)}</h2></div><p>${esc(sub)}</p></div>${groups.map(g=>`<div class="launchGroup"><div class="launchGroupTitle">${esc(g[0])}</div><div class="launchGrid">${g[1].map(([id,label])=>`<button type="button" class="launchCard" onclick="showPage('${id}')"><span class="launchIcon">${pageIcons[id]||'◆'}</span><span class="launchText"><b>${esc(label)}</b><small>${esc(pageBlurbs[id]||'')}</small></span><span class="launchArrow">→</span></button>`).join('')}</div></div>`).join('')}</section>`;
+  return `${suggestedPanel()}<section class="launchpad"><div class="welcomeHeading"><div><span class="welcomeEyebrow">Jump to</span><h2>${esc(title)}</h2></div><p>${esc(sub)}</p></div>${groups.map(g=>`<div class="launchGroup"><div class="launchGroupTitle">${esc(g[0])}</div><div class="launchGrid">${g[1].map(([id,label])=>`<button type="button" class="launchCard ${sug.has(id)?'isSuggested':''}" onclick="showPage('${id}')"><span class="launchIcon">${pageIcons[id]||'◆'}</span><span class="launchText"><b>${esc(label)}</b><small>${esc(pageBlurbs[id]||'')}</small></span>${sug.has(id)?'<span class="suggestedStar" title="Suggested for your persona">★</span>':''}<span class="launchArrow">→</span></button>`).join('')}</div></div>`).join('')}</section>`;
 }
 const personaLandingLabels={welcome:'Explore workspaces',auto:'Recommended for my role',home:'Command Center',riskcenter:'Risk Center',actioncenter:'Remediation Center',catalog:'Mapping Catalog',insights:'AI Insights','medicaid-home':'Medicaid Home','byo-home':'DIY Home','byo-reconcile':'Reconciliation Studio','byo-compare':'Compare Lab','byo-quality':'Schema & Quality','byo-raw':'Raw Data Editor','byo-email':'Email Alerts','byo-ai':'AI Analyst'};
 function personaPriorityLimit(meta){return Number(meta?.persona_effects?.priority_limit||8);}
