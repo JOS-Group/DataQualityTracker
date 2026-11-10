@@ -28,7 +28,7 @@ What is included in this update:
 - Build Your Own Raw Data Editor with per-file CSV/XLSX writeback, backups, and immediate BYO alert checks
 - Build Your Own Email Alerts with per-dataset automations, baselines, SMTP delivery, and background file watching
 - Build Your Own navigation uses the same compact dropdown groups as the other workspaces; Raw Data Editor and Email Alerts are standard Workspace menu items with no special badge or gradient styling
-- Weekly Dataset History under Analyze: synthetic four-week claims demo and local SQLite
+- Dataset History under Data Tools: weekly, monthly, yearly and every-update views; synthetic claims demos and local SQLite
   snapshots for saved datasets. A unique row identity is required; the baseline is
   captured immediately and refreshes run every seven days at 00:00 UTC. The server
   must be running; missed weeks are not fabricated. Set DART_BYO_HISTORY_DB to
@@ -6496,7 +6496,7 @@ HTML = r'''
   .historyPicker select{width:100%;min-height:52px;padding:12px 40px 12px 16px;border:1px solid #bba663;border-radius:12px;font-weight:700;font-size:.95rem;background-color:var(--panel);color:var(--text);cursor:pointer}
   .historyPicker select:focus-visible,.historyMetric:focus-visible{outline:3px solid #c99a2e;outline-offset:3px}
   .historyLayout{display:grid;grid-template-columns:270px minmax(0,1fr);gap:18px;align-items:start}
-  .historyTimeline{display:grid;gap:8px}.historyWeek{width:100%;text-align:left;padding:14px;border:1px solid var(--border,#ddd);border-radius:12px;background:transparent;color:inherit;cursor:pointer}
+  .historyTabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px;padding:5px;background:rgba(15,31,61,.06);border-radius:14px;width:fit-content}.historyTab{border:0;background:transparent;padding:9px 18px;border-radius:10px;font-weight:700;cursor:pointer;color:inherit;font:inherit;font-weight:700}.historyTab.active{background:linear-gradient(135deg,#0f1f3d,#1c3768);color:#f4d58d}body.dark .historyTabs{background:rgba(255,255,255,.08)}.historyTimeline{max-height:520px;overflow-y:auto;display:grid;gap:8px}.historyWeek{width:100%;text-align:left;padding:14px;border:1px solid var(--border,#ddd);border-radius:12px;background:transparent;color:inherit;cursor:pointer}
   .historyWeek.active{border-color:#b78a24;background:rgba(224,181,70,.12);box-shadow:inset 3px 0 #c99a2e}
   .historyWeek b,.historyWeek small{display:block}.historyWeek small{margin-top:5px;opacity:.72}
   .historyMetrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:12px}
@@ -6809,7 +6809,7 @@ const navSets={
       ['More',[['copilot','DART Copilot'],['profile','Profile'],['settings','Settings']]]
     ],
   medicaid:[['Overview',[['medicaid-home','Dashboard'],['medicaid-heatmap','US Heatmap'],['medicaid-exec','Executive Brief']]],['States',[['medicaid-states','State Explorer'],['medicaid-compare','Compare States'],['medicaid-analytics','Analytics']]],['Intelligence',[['medicaid-ai','AI Insights'],['medicaid-chat','CMS Q&A']]],['Claims',[['medicaid-claims','Claims Analysis'],['medicaid-optimize','Optimize Spending'],['medicaid-methodology','Methodology']]],['More',[['profile','Profile'],['settings','Settings']]]],
-  byo:[['Workspace',[['byo-home','DIY Home'],['byo-library','Dataset Library'],['byo-lab','Upload Data']]],['Data Tools',[['byo-raw','Raw Data Editor'],['byo-email','Email Alerts'],['byo-history','Weekly Dataset History'],['byo-preview','Data Explorer']]],['Analyze',[['byo-reconcile','Reconciliation Studio'],['byo-compare','Compare Lab'],['byo-quality','Schema & Quality']]],['AI',[['byo-ai','AI Analyst']]],['Output',[['byo-export','Export Center']]],['More',[['profile','Profile'],['settings','Settings']]]],
+  byo:[['Workspace',[['byo-home','DIY Home'],['byo-library','Dataset Library'],['byo-lab','Upload Data']]],['Data Tools',[['byo-raw','Raw Data Editor'],['byo-email','Email Alerts'],['byo-history','Dataset History'],['byo-preview','Data Explorer']]],['Analyze',[['byo-reconcile','Reconciliation Studio'],['byo-compare','Compare Lab'],['byo-quality','Schema & Quality']]],['AI',[['byo-ai','AI Analyst']]],['Output',[['byo-export','Export Center']]],['More',[['profile','Profile'],['settings','Settings']]]],
 };
 const workspaceLabels={medicare:'Medicare',medicaid:'Medicaid',byo:'Build Your Own'};
 const workspaceHomes={medicare:'home',medicaid:'medicaid-home',byo:'byo-home'};
@@ -7137,7 +7137,7 @@ const learnContent={
       {id:'byo-lab',group:'Workspace',name:"Upload Data",problem:"Getting data into an analysis tool is often the slowest step.",how:["Upload several CSV or XLSX files at once.","Import from a web link or an Amazon S3 bucket.","Duplicate filenames are saved safely with a numeric suffix.","Files are stored in the Data/DIY folder."],extra:"S3 imports stay linked to the source, which enables live monitoring in Email Alerts."},
       {id:'byo-raw',group:'Data Tools',name:"Raw Data Editor",problem:"Fixing a value in a saved file normally means reopening it elsewhere, and risking an overwrite.",how:["Pick a saved file and edit cells directly, with search, column filters and paging.","A timestamped backup is created before each save.","Revert pending edits or restore the latest backup.","Optionally check Email Alerts for the same file straight after saving."],extra:"The editor tracks pending changes and highlights modified cells, so you always know what you are about to save."},
       {id:'byo-email',group:'Data Tools',name:"Email Alerts",problem:"Files change, and nobody notices until a report is wrong.",how:["Monitor any saved dataset for new or changed rows.","Choose identity columns, trigger mode and recipients, with rule presets.","For S3-linked datasets, DART polls the bucket and alerts when the remote file changes.","Includes baselines, SMTP testing and a history of every run."],extra:"Each alert remembers the exact file it watches, so alerts never cross over between datasets."},
-      {id:'byo-history',group:'Data Tools',name:"Weekly Dataset History",problem:"Data refreshes weekly, yet most tools show only the latest snapshot. Trends and quiet changes go unseen.",how:["Follows a dataset across its weekly versions.","Surfaces new rows and quality changes at each refresh.","Lets you open the exact values behind any week."],extra:"It answers what changed since last week without manual comparison."},
+      {id:'byo-history',group:'Data Tools',name:"Dataset History",problem:"Most tools show only the latest snapshot of a dataset, so trends and quiet changes go unseen. Reviewing history by hand means lining up old files and diffing them yourself.",how:["Follows a dataset across every saved version and lets you switch between Weekly, Monthly, Yearly and Every update views.","Weekly, monthly and yearly views list every period, using the latest version captured in it. A period with no new upload reads No change.","Summary tiles, trend sparklines and anomaly flags show how the data moved and where it moved unusually.","Open any period to see the exact rows and values that were added, removed or changed."],extra:"Use Weekly for routine monitoring, Monthly or Yearly for reporting, and Every update to see each individual refresh. Changes between periods are net changes, so a row added and removed within one period does not appear."},
       {id:'byo-preview',group:'Data Tools',name:"Data Explorer",problem:"Before comparing anything, you need to look at the data, ideally without any risk of changing it.",how:["Shows two selected datasets side by side.","Previews each dataset and highlights the shared schema.","Read-only, so nothing is altered."],extra:"Use it for a quick sanity check before running heavier analysis."},
       {id:'byo-reconcile',group:'Analyze',name:"Reconciliation Studio",problem:"Two files that should match rarely do. Finding which records differ, and why, is painstaking by hand.",how:["Matches records between two datasets on keys you choose.","Shows value-by-value differences with adjustable tolerance.","Discovers systematic drift patterns across columns.","Presents a column drift and variance matrix."],extra:"Live tolerance tuning lets you separate real discrepancies from harmless rounding."},
       {id:'byo-compare',group:'Analyze',name:"Compare Lab",problem:"Before reconciling, you need to know whether two files are comparable at all.",how:["Compares shape, schema, completeness and duplicates.","Lists common columns, unique columns and type mismatches.","Compares numeric distributions and suggests likely join keys."],extra:"The join-key suggestions often save the longest setup step."},
@@ -9460,7 +9460,9 @@ function historyTable(rows,columns,side){
   }).join('')}</tbody></table></div>`;
 }
 async function selectHistoryDataset(value){state.historyDataset=value;state.historySnapshot=null;state.historyOnlyChanges=false;state.historyOffset=0;state.historyMetric='';state.historyMetricOffset=0;await render();}
-async function selectHistoryWeek(id){state.historySnapshot=Number(id);state.historyOffset=0;state.historyMetric='';state.historyMetricOffset=0;await render();}
+function historyPeriod(){return state.historyPeriod||'week';}
+async function selectHistoryPeriod(period){state.historyPeriod=period;state.historySnapshot=null;state.historyOffset=0;state.historyMetric='';state.historyMetricOffset=0;await render();}
+async function selectHistoryWeek(id){state.historySnapshot=historyPeriod()==='update'?Number(id):String(id);state.historyOffset=0;state.historyMetric='';state.historyMetricOffset=0;await render();}
 async function historyPageOffset(offset){state.historyOffset=Math.max(0,offset);await render();}
 async function selectHistoryMetric(metric){state.historyMetric=metric;state.historyMetricOffset=0;await render();document.getElementById('historyDrilldown')?.scrollIntoView({behavior:'smooth',block:'start'});}
 async function historyMetricPage(offset){state.historyMetricOffset=Math.max(0,offset);await render();}
@@ -9499,7 +9501,7 @@ async function saveHistorySchedule(event){
   }catch(err){toast('Schedule could not be saved: '+String(err.message||err));}
 }
 async function refreshHistoryNow(){
-  try{const r=await postJson('/api/byo/history/refresh',{dataset:state.historyDataset});state.historySnapshot=r.snapshot;state.historyOffset=0;state.historyMetric='';toast('Snapshot captured; compared with the previous one');await render();}
+  try{const r=await postJson('/api/byo/history/refresh',{dataset:state.historyDataset});state.historySnapshot=historyPeriod()==='update'?r.snapshot:null;state.historyOffset=0;state.historyMetric='';toast('Snapshot captured; compared with the previous one');await render();}
   catch(err){toast('Refresh failed: '+String(err.message||err));}
 }
 async function pauseHistorySchedule(){
@@ -9513,7 +9515,7 @@ function historySpark(weeks,key,selected,flagged,fmt){
   const line=pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
   const area=`${P},${H-P/2} ${line} ${W-P},${H-P/2}`;
   const dots=pts.map((p,i)=>{const id=weeks[i].id,bad=flagged.has(id),sel=id===selected;
-    return `<circle class="${bad?'sparkFlag':'sparkDot'} ${sel?'sparkSel':''}" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${bad||sel?4.5:2.6}" onclick="selectHistoryWeek(${Number(id)})"><title>${esc(historyDate(weeks[i].captured_at))}: ${esc(fmt(vals[i]))}${bad?' · flagged':''}</title></circle>`;}).join('');
+    return `<circle class="${bad?'sparkFlag':'sparkDot'} ${sel?'sparkSel':''}" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${bad||sel?4.5:2.6}" onclick="selectHistoryWeek(${Number(id)})"><title>${esc(weeks[i].label||historyDate(weeks[i].captured_at))}: ${esc(fmt(vals[i]))}${bad?' · flagged':''}</title></circle>`;}).join('');
   return `<svg class="historySpark" viewBox="0 0 ${W} ${H}" role="img" aria-label="Trend across ${vals.length} weeks"><polygon class="sparkArea" points="${area}"/><polyline class="sparkLine" points="${line}"/>${dots}</svg>`;
 }
 function historyDelta(diff,fmt,badWhenUp){
@@ -9523,15 +9525,15 @@ function historyDelta(diff,fmt,badWhenUp){
 }
 function historyInsights(data){
   const trends=data.trends;if(!trends||!(trends.weeks||[]).length)return '';
-  const weeks=trends.weeks,anomalies=trends.anomalies||[],idx=weeks.findIndex(w=>w.id===data.selected),cur=weeks[idx],prev=weeks[idx-1];
+  const unit=data.unit||'week',weeks=trends.weeks,anomalies=trends.anomalies||[],idx=weeks.findIndex(w=>w.id===data.selected),cur=weeks[idx],prev=weeks[idx-1];
   const flagged=new Set(anomalies.filter(a=>a.direction==='bad').map(a=>a.snapshot_id));
   let strip='';
   if(data.comparison&&prev){
     const c=data.comparison,before=(data.timeline||[])[idx-1]?.summary||null;
     const count=v=>intFmt(Math.round(v)),pct=v=>v.toFixed(2)+' pp';
     const tile=(label,value,delta,hint)=>`<div class="stripTile"><small>${esc(label)}</small><strong>${value}</strong>${delta}<span class="stripHint">${esc(hint)}</span></div>`;
-    strip=`<div class="panel"><div class="medSectionHead"><div><h3>Week-over-week at a glance</h3><p class="muted">${esc(historyDate(data.before_date))} → ${esc(historyDate(data.after_date))}. Arrows show the change against the previous week; red is worse, green is better.</p></div></div><div class="historyStrip">
-      ${tile('Total rows',intFmt(cur.rows),historyDelta(cur.rows-prev.rows,count,null),'vs '+intFmt(prev.rows)+' last week')}
+    strip=`<div class="panel"><div class="medSectionHead"><div><h3>${unit==='update'?'Update-over-update':'Period-over-period'} at a glance</h3><p class="muted">${esc(historyDate(data.before_date))} → ${esc(historyDate(data.after_date))}. Arrows show the change against the previous ${unit}; red is worse, green is better.</p></div></div><div class="historyStrip">
+      ${tile('Total rows',intFmt(cur.rows),historyDelta(cur.rows-prev.rows,count,null),'vs '+intFmt(prev.rows)+' previous '+unit)}
       ${tile('Rows added',intFmt(c.added),before?historyDelta(c.added-before.added,count,null):'<span class="deltaChip flat">● First comparison</span>','new identities')}
       ${tile('Rows removed',intFmt(c.removed),before?historyDelta(c.removed-before.removed,count,true):'<span class="deltaChip flat">● First comparison</span>','no longer present')}
       ${tile('Rows changed',intFmt(c.changed_rows),before?historyDelta(c.changed_rows-before.changed_rows,count,null):'<span class="deltaChip flat">● First comparison</span>',intFmt(c.changed_values)+' values')}
@@ -9541,16 +9543,16 @@ function historyInsights(data){
   }
   const charts=[['rows','Row count',v=>intFmt(Math.round(v))],['completeness','Completeness',v=>v.toFixed(2)+'%'],['duplicate_rate','Duplicate rate',v=>v.toFixed(1)+'%']];
   const last=weeks[weeks.length-1];
-  const sparks=`<div class="panel"><div class="medSectionHead"><div><h3>Trends across ${weeks.length} weeks</h3><p class="muted">Spot slow drift at a glance. Red dots mark weeks flagged as unusual; select any dot to open that week.</p></div></div><div class="historySparks">${charts.map(ch=>`<div class="sparkCard"><small>${ch[1]}</small><strong>${esc(ch[2](Number(last[ch[0]])))}</strong>${historySpark(weeks,ch[0],data.selected,flagged,ch[2])}<span class="sparkRange">${esc(historyDate(weeks[0].captured_at))} – ${esc(historyDate(last.captured_at))}</span></div>`).join('')}</div></div><br>`;
+  const sparks=`<div class="panel"><div class="medSectionHead"><div><h3>Trends across ${weeks.length} ${unit==='update'?'updates':unit+'s'}</h3><p class="muted">Spot slow drift at a glance. Red dots mark periods flagged as unusual; select any dot to open it.</p></div></div><div class="historySparks">${charts.map(ch=>`<div class="sparkCard"><small>${ch[1]}</small><strong>${esc(ch[2](Number(last[ch[0]])))}</strong>${historySpark(weeks,ch[0],data.selected,flagged,ch[2])}<span class="sparkRange">${esc(weeks[0].label||historyDate(weeks[0].captured_at))} – ${esc(last.label||historyDate(last.captured_at))}</span></div>`).join('')}</div></div><br>`;
   const ordered=anomalies.slice().sort((a,b)=>b.date.localeCompare(a.date)||b.z*b.z-a.z*a.z);
-  const flags=`<div class="panel"><div class="medSectionHead"><div><h3>Anomaly flags</h3><p class="muted">A week is flagged when a change is more than about 2σ away from this dataset’s usual week-to-week movement.${weeks.length<5?' At least five snapshots are needed before flags appear.':''}</p></div><span class="flagTotal ${anomalies.length?'hot':''}">${anomalies.length} flagged</span></div>
-    ${ordered.length?`<div class="flagList">${ordered.map(a=>`<button type="button" class="flagItem ${a.direction} ${a.snapshot_id===data.selected?'active':''}" onclick="selectHistoryWeek(${Number(a.snapshot_id)})"><span class="flagSev">${a.severity==='high'?'High':'Medium'}</span><span class="flagText">${esc(a.message)}<small>${esc(historyDate(a.date))} · ${a.direction==='bad'?'Needs attention':'Improvement'} · ${Math.abs(a.z).toFixed(1)}σ</small></span></button>`).join('')}</div>`:'<div class="empty">No unusual weeks detected. Everything is within its normal range.</div>'}</div><br>`;
+  const flags=`<div class="panel"><div class="medSectionHead"><div><h3>Anomaly flags</h3><p class="muted">A ${unit} is flagged when a change is more than about 2σ away from this dataset’s usual ${unit}-to-${unit} movement.${weeks.filter((w,i)=>!i||w.rows!==weeks[i-1].rows||w.completeness!==weeks[i-1].completeness||w.duplicates!==weeks[i-1].duplicates).length<5?' At least five distinct versions are needed before flags appear.':''}</p></div><span class="flagTotal ${anomalies.length?'hot':''}">${anomalies.length} flagged</span></div>
+    ${ordered.length?`<div class="flagList">${ordered.map(a=>`<button type="button" class="flagItem ${a.direction} ${a.snapshot_id===data.selected?'active':''}" onclick="selectHistoryWeek('${esc(a.snapshot_id)}')"><span class="flagSev">${a.severity==='high'?'High':'Medium'}</span><span class="flagText">${esc(a.message)}<small>${esc(a.label||historyDate(a.date))} · ${a.direction==='bad'?'Needs attention':'Improvement'} · ${Math.abs(a.z).toFixed(1)}σ</small></span></button>`).join('')}</div>`:`<div class="empty">No unusual ${unit==='update'?'updates':unit+'s'} detected. Everything is within its normal range.</div>`}</div><br>`;
   return strip+sparks+flags;
 }
 function historyPage(info,data){
   const dataset=state.historyDataset||'', demo=dataset.startsWith('__demo_'), schedule=data?.schedule;
   const options=(info.datasets||[]).filter(d=>d.status==='Ready').map(d=>`<option value="${esc(d.name)}" ${dataset===d.name?'selected':''}>${esc(d.name)}</option>`).join('');
-  const picker=`<div class="panel historyPicker"><div class="historyPickerIntro"><h3>Explore your dataset history</h3><p class="muted">Choose a saved dataset or try a sample history.</p></div><div class="field"><label for="historyDataset">Dataset</label><select id="historyDataset" onchange="selectHistoryDataset(this.value)"><option value="">Select a dataset...</option><optgroup label="Demo"><option value="__demo_claims__" ${dataset==='__demo_claims__'?'selected':''}>Medicare Claims — sample history (4 weeks)</option><option value="__demo_trends__" ${dataset==='__demo_trends__'?'selected':''}>Claims trends &amp; anomalies — sample history (10 weeks)</option></optgroup><optgroup label="Your saved datasets">${options}</optgroup></select></div></div>`;
+  const picker=`<div class="panel historyPicker"><div class="historyPickerIntro"><h3>Explore your dataset history</h3><p class="muted">Choose a saved dataset or try a sample history.</p></div><div class="field"><label for="historyDataset">Dataset</label><select id="historyDataset" onchange="selectHistoryDataset(this.value)"><option value="">Select a dataset...</option><optgroup label="Demo"><option value="__demo_claims__" ${dataset==='__demo_claims__'?'selected':''}>Medicare Claims — sample history (4 weeks)</option><option value="__demo_trends__" ${dataset==='__demo_trends__'?'selected':''}>Claims trends &amp; anomalies — sample history (10 weeks)</option><option value="__demo_long__" ${dataset==='__demo_long__'?'selected':''}>Claims long-run history — sample (16 months, irregular uploads)</option></optgroup><optgroup label="Your saved datasets">${options}</optgroup></select></div></div>`;
   let content='';
   if(dataset&&data){
     const columns=data.dataset_columns||[];
@@ -9559,24 +9561,28 @@ function historyPage(info,data){
       `<div class="panel"><h3>Weekly refresh</h3><p class="muted">A baseline is captured when you save. The first refresh runs at 00:00 UTC on the selected date, then every 7 days, using the saved local dataset. The server must be running; missed weeks cannot be recreated.</p>
       ${schedule?`<p><b>Next refresh:</b> ${esc(historyDate(schedule.next_run))} UTC · <b>Identity:</b> ${esc(schedule.key_column)}</p>${schedule.error?`<div class="historyNotice"><b>Last refresh failed:</b> ${esc(schedule.error)}. The worker will retry.</div>`:''}`:''}
       <form onsubmit="saveHistorySchedule(event)"><div class="grid grid2"><div class="field"><label for="historyKey">Unique row / claim ID</label><select id="historyKey" required>${(schedule?[schedule.key_column]:(data.key_candidates||[])).map(c=>`<option value="${esc(c)}" ${c===(schedule?.key_column||data.identity_column||columns.find(x=>x.toLowerCase()==='claim id')||columns[0])?'selected':''}>${esc(c)}</option>`).join('')}</select></div><div class="field"><label for="historyStart">First refresh date (UTC)</label><input id="historyStart" type="date" min="${today}" value="${schedule?esc(schedule.next_run.slice(0,10)):today}" required></div></div><br><button class="btn" type="submit">${schedule?'Update schedule':'Capture baseline & schedule'}</button> ${schedule?'<button class="btn secondary" type="button" onclick="refreshHistoryNow()">Refresh now</button> <button class="btn ghost" type="button" onclick="pauseHistorySchedule()">Pause schedule</button>':''}</form>${!schedule&&!(data.key_candidates||[]).length?'<div class="historyNotice">No column in this dataset has unique, non-empty values, so rows cannot be tracked week to week. Add or fix an ID column in the Raw Data Editor first.</div>':''}<p class="muted">The identity must be unique and non-empty in every snapshot; it cannot change after history is created. Pausing keeps existing history.</p></div>`;
-    const timeline=(data.timeline||[]).slice().reverse().map((w,i)=>`<button class="historyWeek ${w.id===data.selected?'active':''}" onclick="selectHistoryWeek(${Number(w.id)})"><b>${i===0?'Latest · ':''}${esc(historyDate(w.captured_at))}</b><small>${w.summary?`${intFmt(w.summary.changed_values)} values changed · +${intFmt(w.summary.added)} / −${intFmt(w.summary.removed)} rows`:'Baseline snapshot'}</small>${w.anomaly_count?`<span class="weekFlag">⚠ ${w.anomaly_count} flag${w.anomaly_count>1?'s':''}</span>`:''}</button>`).join('');
+    const periodTabs=`<div class="historyTabs" role="tablist">${[['week','Weekly'],['month','Monthly'],['year','Yearly'],['update','Every update']].map(p=>`<button type="button" role="tab" aria-selected="${historyPeriod()===p[0]}" class="historyTab ${historyPeriod()===p[0]?'active':''}" onclick="selectHistoryPeriod('${p[0]}')">${p[1]}</button>`).join('')}</div>`;
+    const timeline=(data.timeline||[]).slice().reverse().map((w,i)=>`<button class="historyWeek ${w.id===data.selected?'active':''}" onclick="selectHistoryWeek('${esc(w.id)}')"><b>${i===0?'Latest · ':''}${esc(w.label||historyDate(w.captured_at))}</b><small>${w.status==='no_change'?(w.snapshots===0?'No change · no new upload':'No change'):w.summary?`${intFmt(w.summary.changed_values)} values changed · +${intFmt(w.summary.added)} / −${intFmt(w.summary.removed)} rows`:'Baseline'}</small>${w.anomaly_count?`<span class="weekFlag">⚠ ${w.anomaly_count} flag${w.anomaly_count>1?'s':''}</span>`:''}</button>`).join('');
     let detail='<div class="panel workspaceEmpty"><h3>No snapshots yet</h3><p class="muted">Save a schedule to capture the first baseline.</p></div>';
-    if(data.selected&&!data.comparison){
+    const bk=data.bucket;
+    if(bk&&bk.status==='no_change'){
+      detail=`<div class="panel"><h3>${esc(bk.label)} · No change</h3><p class="muted">${bk.snapshots?'The version captured in this period is identical to the previous one.':'No new version was uploaded in this period.'} Showing the latest version as of ${esc(historyDate(bk.as_of))}${bk.prev_as_of&&bk.prev_as_of!==bk.as_of?', unchanged since '+esc(historyDate(bk.prev_as_of)):''}.</p></div>`;
+    }else if(data.selected&&!data.comparison){
       const base=(data.baseline_rows||[]).map(r=>({status:'Baseline',fields:[],after:r}));
-      detail=`<div class="panel"><h3>Baseline · ${esc(historyDate(data.after_date))}</h3><p class="muted">The first snapshot has no earlier week to compare. Showing up to 100 rows.</p>${historyTable(base,data.columns,'after')}</div>`;
+      detail=`<div class="panel"><h3>Baseline · ${esc(historyDate(data.after_date))}</h3><p class="muted">The first snapshot has no earlier version to compare. Showing up to 100 rows.</p>${historyTable(base,data.columns,'after')}</div>`;
     }else if(data.comparison){
       const c=data.comparison, rows=c.details;
       const metrics=[['changed_columns','Changed columns',c.changed_columns,'Fields with changed values'],['changed_values','Changed values',c.changed_values,'On matched rows'],['changed_rows','Changed rows',c.changed_rows,'Matched identities'],['added','New rows / claims',c.added,'New unique identities'],['removed','Removed rows',c.removed,'No longer present'],['new_nulls','New nulls',c.new_nulls,'Including new rows'],['resolved_nulls','Resolved nulls',c.resolved_nulls,'On matched rows'],['new_invalid','New invalid',c.new_invalid,'Claims checks only'],['schema_changes','Schema changes',c.schema_changes,'Added or removed fields']];
-      detail=`<div class="panel"><div class="medSectionHead"><div><h3>Week-over-week summary</h3><p class="muted">${esc(historyDate(data.before_date))} → ${esc(historyDate(data.after_date))} · ${intFmt(c.row_count)} current rows. Select a metric to inspect its data.</p></div></div><div class="historyMetrics">${metrics.map(m=>`<button type="button" class="historyMetric ${state.historyMetric===m[0]?'active':''}" aria-pressed="${state.historyMetric===m[0]}" onclick="selectHistoryMetric('${m[0]}')"><small>${esc(m[1])}</small><strong>${intFmt(m[2])}</strong><small>${esc(m[3])}</small><span class="historyMetricHint">View details →</span></button>`).join('')}</div>
+      detail=`<div class="panel"><div class="medSectionHead"><div><h3>${data.unit==='update'?'Update':'Period'} summary</h3><p class="muted">${esc(historyDate(data.before_date))} → ${esc(historyDate(data.after_date))} · ${intFmt(c.row_count)} current rows. Select a metric to inspect its data.</p></div></div><div class="historyMetrics">${metrics.map(m=>`<button type="button" class="historyMetric ${state.historyMetric===m[0]?'active':''}" aria-pressed="${state.historyMetric===m[0]}" onclick="selectHistoryMetric('${m[0]}')"><small>${esc(m[1])}</small><strong>${intFmt(m[2])}</strong><small>${esc(m[3])}</small><span class="historyMetricHint">View details →</span></button>`).join('')}</div>
       <p class="muted">Schema: ${c.added_columns.length?'Added '+esc(c.added_columns.join(', ')):'No added columns'}; ${c.removed_columns.length?'removed '+esc(c.removed_columns.join(', ')):'no removed columns'}. Invalid checks flag negative/non-numeric claim payments, malformed claim dates, and reversed service dates; they are not a complete claims validation.</p></div><br>${historyDrilldown(data,metrics)}${historyEmailPanel(data)}<br>
       <div class="panel"><div class="medSectionHead"><div><h3>Raw data · before & after</h3><p class="muted">Rows align by identity. Highlighted cells changed; green and red rows were added or removed.</p></div><label><input type="checkbox" ${state.historyOnlyChanges?'checked':''} onchange="state.historyOnlyChanges=this.checked;state.historyOffset=0;render()"> Changes only</label></div>
       <div class="historyLegend"><span>🟨 Changed value</span><span>🟩 New row</span><span>🟥 Removed row</span><span>— Null or not present</span></div>
       <div class="historyLegend"><button class="btn ghost small" ${c.offset===0?'disabled':''} onclick="historyPageOffset(${Math.max(0,c.offset-50)})">Previous</button><span>Showing ${c.details_total?c.offset+1:0}–${Math.min(c.offset+50,c.details_total)} of ${intFmt(c.details_total)} identities</span><button class="btn ghost small" ${c.offset+50>=c.details_total?'disabled':''} onclick="historyPageOffset(${c.offset+50})">Next</button></div>
       <div class="historyRaw"><div><h4>Before · ${esc(historyDate(data.before_date))}</h4>${historyTable(rows,data.columns,'before')}</div><div><h4>After · ${esc(historyDate(data.after_date))}</h4>${historyTable(rows,data.columns,'after')}</div></div></div>`;
     }
-    content=`<br>${schedulePanel}<br>${historyInsights(data)}<div class="historyLayout"><div class="panel"><h3>Snapshot timeline</h3><p class="muted">Select a week to explore its changes.</p><div class="historyTimeline">${timeline||'<div class="empty">No snapshots yet.</div>'}</div></div><div>${detail}${data.comparison?'':`<br>${historyEmailPanel(data)}`}</div></div>`;
+    content=`<br>${schedulePanel}<br>${historyInsights(data)}${periodTabs}<div class="historyLayout"><div class="panel"><h3>Snapshot timeline</h3><p class="muted">Select a ${(data.unit||'week')==='update'?'update':data.unit} to explore its changes.</p><div class="historyTimeline">${timeline||'<div class="empty">No snapshots yet.</div>'}</div></div><div>${detail}${data.comparison?'':`<br>${historyEmailPanel(data)}`}</div></div>`;
   }
-  return `<div class="hero"><span class="workspaceBadge">Build Your Own · Data Tools</span><h1>Weekly Dataset History</h1><p>Follow your data over time. Explore new claims, quality changes, and the exact values behind each weekly refresh.</p></div>${picker}${content}`;
+  return `<div class="hero"><span class="workspaceBadge">Build Your Own · Data Tools</span><h1>Dataset History</h1><p>Follow your data over time by week, month or year, or see every individual update. Explore new claims, quality changes, and the exact values behind each change.</p></div>${picker}${content}`;
 }
 
 async function renderByo(meta,info){
@@ -9616,7 +9622,7 @@ async function renderByo(meta,info){
   if(state.page==='byo-raw'&&state.byoEditFile)rawInfo=await api(`/api/byo/raw-data?filename=${encodeURIComponent(state.byoEditFile)}&search=${encodeURIComponent(state.byoRawSearch)}&offset=${state.byoRawOffset}&limit=${state.byoRawLimit}`);
   if(state.page==='byo-email')emailInfo=await api(`/api/byo/email-agent?filename=${encodeURIComponent(state.byoEmailFile||'')}`);
   if(state.page==='byo-history'&&state.historyDataset){
-    try{historyInfo=await api(`/api/byo/history?dataset=${encodeURIComponent(state.historyDataset)}&offset=${state.historyOffset||0}&changed_only=${!!state.historyOnlyChanges}&metric=${encodeURIComponent(state.historyMetric||'')}&metric_offset=${state.historyMetricOffset||0}${state.historySnapshot?`&snapshot=${state.historySnapshot}`:''}`);}
+    try{historyInfo=await api(`/api/byo/history?dataset=${encodeURIComponent(state.historyDataset)}&offset=${state.historyOffset||0}&changed_only=${!!state.historyOnlyChanges}&metric=${encodeURIComponent(state.historyMetric||'')}&metric_offset=${state.historyMetricOffset||0}${state.historySnapshot?`&${historyPeriod()==='update'?'snapshot':'bucket'}=${encodeURIComponent(state.historySnapshot)}`:''}&period=${historyPeriod()}`);}
     catch(err){toast('Could not load history: '+String(err.message||err));}
   }
   let html='';
@@ -10655,14 +10661,14 @@ def get_byo_workspace(request: Request) -> Dict[str, Any]:
 @app.get("/api/byo/history")
 def get_byo_history(request: Request, dataset: str, snapshot: Optional[int] = None,
                     offset: int = 0, changed_only: bool = False, metric: str = "",
-                    metric_offset: int = 0) -> Any:
+                    metric_offset: int = 0, period: str = "update", bucket: str = "") -> Any:
     username = get_session_user(request)
     if not username:
         return JSONResponse({"error": "Sign in to view dataset history."}, status_code=401)
     try:
         weekly_history.initialize(BYO_HISTORY_DB)
         result = weekly_history.history(BYO_HISTORY_DB, username, dataset, snapshot, offset, changed_only,
-                                        metric, metric_offset)
+                                        metric, metric_offset, period, bucket)
         result["email"] = weekly_history.recipients(BYO_HISTORY_DB, username, dataset)
         result["smtp_issues"] = smtp_configuration_issues()
         if dataset not in weekly_history.DEMO_DATASETS:

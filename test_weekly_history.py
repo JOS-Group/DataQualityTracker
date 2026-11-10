@@ -143,5 +143,62 @@ class WeeklyHistoryTests(unittest.TestCase):
         self.assertEqual(history.recipients(self.path, "bob", "file.csv")["pending"], 0)
 
 
+class PeriodHistoryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name) / "history.db"
+        history.initialize(self.path)
+
+    def add(self, day, rows):
+        data = {"columns": ["ID", "Value"], "rows": [{"ID": a, "Value": b} for a, b in rows]}
+        with history.connect(self.path) as conn:
+            conn.execute("INSERT INTO snapshots(owner,dataset,captured_at,key_column,data) VALUES(?,?,?,?,?)",
+                         ("u", "d.csv", datetime.combine(day, datetime.min.time(), timezone.utc).isoformat(),
+                          "ID", __import__("json").dumps(data)))
+
+    def test_months_without_uploads_report_no_change_and_carry_forward(self):
+        today = datetime.now(timezone.utc).date()
+        first = (today.replace(day=1) - timedelta(days=62)).replace(day=10)
+        third = first.replace(day=1)
+        for _ in range(2):
+            third = (third + timedelta(days=32)).replace(day=1)
+        self.add(first, [("A", 1)])
+        self.add(third.replace(day=5), [("A", 2), ("B", 3)])
+        data = history.history(self.path, "u", "d.csv", period="month")
+        statuses = [(x["status"], x["snapshots"]) for x in data["timeline"]]
+        self.assertEqual(statuses[:3], [("baseline", 1), ("no_change", 0), ("changed", 1)])
+        self.assertTrue(all(s == ("no_change", 0) for s in statuses[3:]))
+        skipped = history.history(self.path, "u", "d.csv", period="month", bucket=data["timeline"][1]["id"])
+        self.assertIsNone(skipped["comparison"])
+        self.assertEqual(skipped["bucket"]["status"], "no_change")
+        self.assertEqual(skipped["bucket"]["as_of"], data["timeline"][0]["captured_at"])
+        changed = history.history(self.path, "u", "d.csv", period="month", bucket=data["timeline"][2]["id"])
+        self.assertEqual(changed["comparison"]["added"], 1)
+        self.assertEqual(changed["comparison"]["changed_values"], 1)
+
+    def test_period_uses_latest_snapshot_and_update_view_is_unchanged(self):
+        base = datetime.now(timezone.utc).date().replace(month=1, day=1) - timedelta(days=1)
+        self.add(base - timedelta(days=5), [("A", 1)])
+        self.add(base + timedelta(days=3), [("A", 2)])
+        self.add(base + timedelta(days=4), [("A", 3)])
+        every = history.history(self.path, "u", "d.csv")
+        self.assertEqual(len(every["timeline"]), 3)
+        self.assertIsNone(every["bucket"])
+        years = history.history(self.path, "u", "d.csv", period="year")
+        self.assertEqual([x["status"] for x in years["timeline"]][:2], ["baseline", "changed"])
+        self.assertEqual(years["comparison"]["changed_values"], 1)
+        with self.assertRaises(ValueError):
+            history.history(self.path, "u", "d.csv", period="year", bucket="1999")
+        with self.assertRaises(ValueError):
+            history.history(self.path, "u", "d.csv", period="decade")
+
+    def test_long_demo_has_empty_months(self):
+        data = history.history(self.path, "u", history.DEMO_LONG, period="month")
+        self.assertGreater(len(data["timeline"]), 12)
+        self.assertIn("no_change", {x["status"] for x in data["timeline"]})
+        self.assertGreaterEqual(len(history.history(self.path, "u", history.DEMO_LONG, period="year")["timeline"]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -61,6 +61,8 @@ def initialize(path):
             seed_demo(conn)
         if not conn.execute("SELECT 1 FROM snapshots WHERE owner=? AND dataset=?", (DEMO_TRENDS, DEMO_TRENDS)).fetchone():
             seed_trends_demo(conn)
+        if not conn.execute("SELECT 1 FROM snapshots WHERE owner=? AND dataset=?", (DEMO_LONG, DEMO_LONG)).fetchone():
+            seed_long_demo(conn)
 
 
 def seed_demo(conn):
@@ -97,7 +99,62 @@ def seed_demo(conn):
 
 
 DEMO_TRENDS = "__demo_trends__"
-DEMO_DATASETS = (DEMO, DEMO_TRENDS)
+DEMO_LONG = "__demo_long__"
+DEMO_DATASETS = (DEMO, DEMO_TRENDS, DEMO_LONG)
+PERIODS = ("update", "week", "month", "year")
+_UNITS = {"update": "update", "week": "week", "month": "month", "year": "year"}
+
+
+def seed_long_demo(conn):
+    """About 16 months of irregular uploads, so month and year views include periods with no change."""
+    import random
+    rng = random.Random(20260110)
+    columns = ["Claim ID", "Bene ID", "Claim From DT", "Provider ID", "Diagnosis Code",
+               "Claim Type", "Claim Pmt Amt", "Bene Pmt Amt"]
+    diagnoses = ["I10", "E11.9", "J44.9", "M54.5", "I25.1", "E78.5", "J18.9", "I50.9"]
+    next_id = [3001]
+
+    def new_row():
+        number = next_id[0]
+        next_id[0] += 1
+        return {"Claim ID": f"CLM-{number:04}", "Bene ID": f"BENE-{number:04}",
+                "Claim From DT": f"2025-{rng.randint(1, 12):02}-{rng.randint(1, 28):02}",
+                "Provider ID": f"PRV-{rng.randint(1, 40):03}", "Diagnosis Code": rng.choice(diagnoses),
+                "Claim Type": rng.choice(["Inpatient", "Outpatient"]),
+                "Claim Pmt Amt": round(rng.uniform(600, 1800)), "Bene Pmt Amt": rng.choice([40, 40, 55])}
+
+    # Days before today: weekly at first, then a long gap, then roughly monthly with a two-month skip.
+    offsets = [500, 493, 486, 479, 472, 410, 380, 318, 255, 248, 190, 160, 100, 93, 86, 40, 3]
+    rows = [new_row() for _ in range(60)]
+    for step, days in enumerate(offsets):
+        if step:
+            rows = [dict(r) for r in rows]
+            for _ in range(rng.randint(2, 5)):
+                rows.append(new_row())
+            for r in rng.sample([x for x in rows if x["Claim Pmt Amt"] is not None], 3):
+                r["Claim Pmt Amt"] = max(100, r["Claim Pmt Amt"] + rng.randint(-60, 90))
+            if rng.random() < 0.4:
+                rng.choice(rows)["Provider ID"] = None
+        if step == 8:
+            for r in rng.sample(rows, 14):
+                r["Claim Pmt Amt"] = None
+        if step == 9:
+            for r in rows:
+                if r["Claim Pmt Amt"] is None and rng.random() < 0.8:
+                    r["Claim Pmt Amt"] = round(rng.uniform(600, 1800))
+        if step == 13:
+            for source in rng.sample(rows[:40], 6):
+                copy = dict(source)
+                copy["Claim ID"] = f"CLM-{next_id[0]:04}"
+                next_id[0] += 1
+                rows.append(copy)
+        if step == len(offsets) - 1:
+            rows = [r for r in rows if rng.random() > 0.3]
+        captured = datetime.combine(datetime.now(timezone.utc).date() - timedelta(days=days),
+                                    datetime.min.time(), timezone.utc)
+        conn.execute("INSERT INTO snapshots(owner,dataset,captured_at,key_column,data) VALUES(?,?,?,?,?)",
+                     (DEMO_LONG, DEMO_LONG, captured.isoformat(), "Claim ID",
+                      json.dumps({"columns": columns, "rows": [dict(r) for r in rows]})))
 
 
 def seed_trends_demo(conn):
@@ -206,7 +263,7 @@ def _times(ratio):
     return f"{text}×"
 
 
-def detect_anomalies(snapshots, metrics, threshold=2.0):
+def detect_anomalies(snapshots, metrics, threshold=2.0, unit="week"):
     found = []
     columns = list(dict.fromkeys(c for m in metrics for c in m["nulls"]))
     means_columns = list(dict.fromkeys(c for m in metrics for c in m["means"]))
@@ -215,7 +272,8 @@ def detect_anomalies(snapshots, metrics, threshold=2.0):
 
         def add(metric, column, z, message, bad):
             if z is not None and abs(z) >= threshold:
-                found.append({"snapshot_id": snap["id"], "date": snap["captured_at"], "metric": metric,
+                found.append({"snapshot_id": snap["id"], "date": snap["captured_at"], "label": snap.get("label"),
+                              "metric": metric,
                               "column": column, "z": round(z, 1), "severity": "high" if abs(z) >= 3 else "medium",
                               "direction": "bad" if bad else "good", "message": message})
 
@@ -224,7 +282,7 @@ def detect_anomalies(snapshots, metrics, threshold=2.0):
         if z is not None and prev["rows"]:
             change = 100 * (cur["rows"] - prev["rows"]) / prev["rows"]
             word = "dropped" if change < 0 else "jumped"
-            add("rows", None, z, f"Row volume {word} {abs(change):.0f}% this week ({prev['rows']:,} → {cur['rows']:,}).", change < 0)
+            add("rows", None, z, f"Row volume {word} {abs(change):.0f}% this {unit} ({prev['rows']:,} → {cur['rows']:,}).", change < 0)
 
         for column in columns:
             before, after = prev["nulls"].get(column, 0), cur["nulls"].get(column, 0)
@@ -233,24 +291,24 @@ def detect_anomalies(snapshots, metrics, threshold=2.0):
             if before == after:
                 continue
             if after > before:
-                text = (f"{column} nulls jumped {_times(after / before)} this week ({before:,} → {after:,} rows)."
-                        if before else f"{column} nulls appeared this week: {after:,} rows are now empty.")
+                text = (f"{column} nulls jumped {_times(after / before)} this {unit} ({before:,} → {after:,} rows)."
+                        if before else f"{column} nulls appeared this {unit}: {after:,} rows are now empty.")
             else:
-                text = f"{column} nulls fell from {before:,} to {after:,} rows this week."
+                text = f"{column} nulls fell from {before:,} to {after:,} rows this {unit}."
             add("nulls", column, z, text, after > before)
 
         series = [m["duplicate_rate"] for m in metrics[:i + 1]]
         z = _zscore(series, i, 0.5)
         if prev["duplicates"] != cur["duplicates"]:
             add("duplicates", None, z, f"Duplicate rows {'rose' if cur['duplicates'] > prev['duplicates'] else 'fell'} "
-                f"from {prev['duplicates']:,} to {cur['duplicates']:,} this week ({cur['duplicate_rate']:.1f}% of rows).",
+                f"from {prev['duplicates']:,} to {cur['duplicates']:,} this {unit} ({cur['duplicate_rate']:.1f}% of rows).",
                 cur["duplicates"] > prev["duplicates"])
 
         series = [m["completeness"] for m in metrics[:i + 1]]
         z = _zscore(series, i, 0.3)
         if prev["completeness"] != cur["completeness"]:
             add("completeness", None, z, f"Completeness {'improved' if cur['completeness'] > prev['completeness'] else 'fell'} "
-                f"from {prev['completeness']:.1f}% to {cur['completeness']:.1f}% this week.", cur["completeness"] < prev["completeness"])
+                f"from {prev['completeness']:.1f}% to {cur['completeness']:.1f}% this {unit}.", cur["completeness"] < prev["completeness"])
 
         for column in means_columns:
             if column not in prev["means"] or column not in cur["means"] or not prev["means"][column]:
@@ -260,7 +318,7 @@ def detect_anomalies(snapshots, metrics, threshold=2.0):
                 continue
             z = _zscore(values, i, max(0.02 * abs(prev["means"][column]), 1e-9))
             change = 100 * (cur["means"][column] - prev["means"][column]) / abs(prev["means"][column])
-            add("distribution", column, z, f"Average {column} shifted {change:+.0f}% this week "
+            add("distribution", column, z, f"Average {column} shifted {change:+.0f}% this {unit} "
                 f"({prev['means'][column]:,.0f} → {cur['means'][column]:,.0f}).", True)
     return found
 
@@ -379,34 +437,142 @@ def compare(before, after, key):
             "row_count": len(new), "details": details, "drilldowns": drilldowns}
 
 
-def history(path, owner, dataset, selected=None, offset=0, changed_only=False, metric="", metric_offset=0):
+_pair_cache = {}
+
+
+def _pair_summary(path, a, b):
+    """Summary of the changes between two immutable snapshots, cached because long histories repeat pairs."""
+    key = (str(path), a["id"], hash(a["raw"]), b["id"], hash(b["raw"]))
+    hit = _pair_cache.get(key)
+    if hit is None:
+        if len(_pair_cache) > 4000:
+            _pair_cache.clear()
+        full = compare(a["data"], b["data"], b["key"])
+        hit = {k: v for k, v in full.items() if k not in ("details", "drilldowns")}
+        _pair_cache[key] = hit
+    return dict(hit)
+
+
+def _empty_summary(row_count):
+    return {"added": 0, "removed": 0, "changed_rows": 0, "changed_values": 0, "changed_columns": 0,
+            "added_columns": [], "removed_columns": [], "new_nulls": 0, "new_invalid": 0,
+            "resolved_nulls": 0, "schema_changes": 0, "row_count": row_count}
+
+
+def _is_unchanged(summary):
+    return not (summary["added"] or summary["removed"] or summary["changed_values"] or summary["schema_changes"])
+
+
+def _period_start(day, period):
+    if period == "week":
+        return day - timedelta(days=day.weekday())
+    if period == "month":
+        return day.replace(day=1)
+    return day.replace(month=1, day=1)
+
+
+def _period_next(start, period):
+    if period == "week":
+        return start + timedelta(days=7)
+    if period == "month":
+        return date(start.year + (start.month == 12), start.month % 12 + 1, 1)
+    return date(start.year + 1, 1, 1)
+
+
+def _period_label(start, period):
+    if period == "week":
+        return f"Week of {start:%b} {start.day}, {start.year}"
+    if period == "month":
+        return f"{start:%B %Y}"
+    return str(start.year)
+
+
+def _period_key(start, period):
+    return {"week": start.isoformat(), "month": f"{start:%Y-%m}"}.get(period, str(start.year))
+
+
+def _snapshot_time(snapshot):
+    moment = datetime.fromisoformat(snapshot["captured_at"])
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _entries(snapshots, period, today):
+    """One entry per snapshot (period 'update') or per calendar week/month/year.
+
+    A period uses the latest snapshot captured up to its end, so a period with no new upload
+    carries the previous version forward and reports no change.
+    """
+    if period == "update":
+        return [{"id": s["id"], "label": None, "rep": i, "prev": i - 1 if i else None, "count": 1,
+                 "start": None, "end": None} for i, s in enumerate(snapshots)]
+    if not snapshots:
+        return []
+    times = [_snapshot_time(s) for s in snapshots]
+    cursor = _period_start(times[0].date(), period)
+    last = max(times[-1].date(), today)
+    entries = []
+    while cursor <= last:
+        following = _period_next(cursor, period)
+        start_at = datetime.combine(cursor, datetime.min.time(), timezone.utc)
+        end_at = datetime.combine(following, datetime.min.time(), timezone.utc)
+        rep = max(i for i, t in enumerate(times) if t < end_at)
+        entries.append({"id": _period_key(cursor, period), "label": _period_label(cursor, period), "rep": rep,
+                        "prev": entries[-1]["rep"] if entries else None,
+                        "count": sum(start_at <= t < end_at for t in times),
+                        "start": start_at.isoformat(), "end": end_at.isoformat()})
+        cursor = following
+    return entries
+
+
+def history(path, owner, dataset, selected=None, offset=0, changed_only=False, metric="", metric_offset=0,
+            period="update", bucket=""):
+    if period not in PERIODS:
+        raise ValueError("Unknown time period.")
     actual_owner = dataset if dataset in DEMO_DATASETS else owner
     with connect(path) as conn:
         schedule = conn.execute("SELECT key_column,next_run,error FROM schedules WHERE owner=? AND dataset=?",
                                 (actual_owner, dataset)).fetchone()
         rows = conn.execute("SELECT id,captured_at,key_column,data FROM snapshots WHERE owner=? AND dataset=? ORDER BY captured_at,id",
                             (actual_owner, dataset)).fetchall()
-    snapshots = [{"id": r["id"], "captured_at": r["captured_at"], "key": r["key_column"],
+    snapshots = [{"id": r["id"], "captured_at": r["captured_at"], "key": r["key_column"], "raw": r["data"],
                   "data": json.loads(r["data"])} for r in rows]
     metrics = [snapshot_metrics(s["data"], s["key"]) for s in snapshots]
-    anomalies = detect_anomalies(snapshots, metrics)
-    trends = {"weeks": [{"id": s["id"], "captured_at": s["captured_at"], "rows": m["rows"],
-                         "completeness": m["completeness"], "duplicate_rate": m["duplicate_rate"],
-                         "duplicates": m["duplicates"], "null_rate": m["null_rate"]}
-                        for s, m in zip(snapshots, metrics)],
+    entries = _entries(snapshots, period, datetime.now(timezone.utc).date())
+    if period == "update":
+        scored = [(s, m) for s, m in zip(snapshots, metrics)]
+    else:
+        scored = [({"id": e["id"], "captured_at": snapshots[e["rep"]]["captured_at"], "label": e["label"]},
+                   metrics[e["rep"]]) for e in entries if e["prev"] is None or e["prev"] != e["rep"]]
+    anomalies = detect_anomalies([s for s, _ in scored], [m for _, m in scored], unit=_UNITS[period])
+    trends = {"weeks": [{"id": e["id"], "label": e["label"], "captured_at": snapshots[e["rep"]]["captured_at"],
+                         "rows": metrics[e["rep"]]["rows"], "completeness": metrics[e["rep"]]["completeness"],
+                         "duplicate_rate": metrics[e["rep"]]["duplicate_rate"],
+                         "duplicates": metrics[e["rep"]]["duplicates"], "null_rate": metrics[e["rep"]]["null_rate"]}
+                        for e in entries],
               "anomalies": anomalies}
     timeline = []
-    for i, snap in enumerate(snapshots):
-        summary = compare(snapshots[i - 1]["data"], snap["data"], snap["key"]) if i else None
-        if summary:
-            summary = {k: v for k, v in summary.items() if k not in ("details", "drilldowns")}
-        timeline.append({"id": snap["id"], "captured_at": snap["captured_at"], "summary": summary,
-                         "anomaly_count": sum(a["snapshot_id"] == snap["id"] for a in anomalies)})
-    if selected is not None and not any(s["id"] == selected for s in snapshots):
-        raise ValueError("Snapshot not found for this dataset.")
-    index = next((i for i, s in enumerate(snapshots) if s["id"] == selected), len(snapshots) - 1)
-    current = snapshots[index] if index >= 0 else None
-    previous = snapshots[index - 1] if index > 0 else None
+    for e in entries:
+        snap = snapshots[e["rep"]]
+        if e["prev"] is None:
+            summary, status = None, "baseline"
+        elif e["prev"] == e["rep"]:
+            summary, status = _empty_summary(metrics[e["rep"]]["rows"]), "no_change"
+        else:
+            summary = _pair_summary(path, snapshots[e["prev"]], snap)
+            status = "no_change" if period != "update" and _is_unchanged(summary) else "changed"
+        e["status"] = status
+        timeline.append({"id": e["id"], "captured_at": snap["captured_at"], "summary": summary,
+                         "label": e["label"], "status": status, "snapshots": e["count"],
+                         "anomaly_count": sum(a["snapshot_id"] == e["id"] for a in anomalies)})
+    target = selected if period == "update" else (bucket or None)
+    if target is not None and not any(e["id"] == target for e in entries):
+        raise ValueError("Snapshot not found for this dataset." if period == "update"
+                         else "That time period was not found for this dataset.")
+    index = next((i for i, e in enumerate(entries) if e["id"] == target), len(entries) - 1)
+    entry = entries[index] if index >= 0 else None
+    current = snapshots[entry["rep"]] if entry else None
+    earlier = snapshots[entry["prev"]] if entry and entry["prev"] is not None else None
+    previous = earlier if entry and entry["status"] == "changed" else None
     comparison = compare(previous["data"], current["data"], current["key"]) if previous else None
     metric_data = None
     if comparison:
@@ -424,16 +590,22 @@ def history(path, owner, dataset, selected=None, offset=0, changed_only=False, m
         comparison["details_total"] = len(details)
         comparison["offset"] = max(0, offset)
         comparison["details"] = details[comparison["offset"]:comparison["offset"] + 50]
+    bucket_info = None
+    if period != "update" and entry:
+        bucket_info = {"key": entry["id"], "label": entry["label"], "status": entry["status"],
+                       "as_of": current["captured_at"], "prev_as_of": earlier["captured_at"] if earlier else None,
+                       "snapshots": entry["count"], "start": entry["start"], "end": entry["end"]}
     return {"demo": dataset in DEMO_DATASETS, "trends": trends, "schedule": dict(schedule) if schedule else None,
-            "timeline": timeline, "selected": current["id"] if current else None,
+            "period": period, "bucket": bucket_info, "unit": _UNITS[period],
+            "timeline": timeline, "selected": entry["id"] if entry else None,
             "identity_column": current["key"] if current else None,
-            "before_date": previous["captured_at"] if previous else None,
+            "before_date": earlier["captured_at"] if earlier else None,
             "after_date": current["captured_at"] if current else None,
             "comparison": comparison,
             "metric_data": metric_data,
             "columns": list(dict.fromkeys((previous["data"]["columns"] if previous else []) +
                                            (current["data"]["columns"] if current else []))),
-            "baseline_rows": current["data"]["rows"][:100] if current and not previous else []}
+            "baseline_rows": current["data"]["rows"][:100] if current and entry["status"] == "baseline" else []}
 
 
 def recipients(path, owner, dataset):
