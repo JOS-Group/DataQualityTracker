@@ -6658,7 +6658,7 @@ HTML = r'''
     .aiInsightsHero{position:relative}
     .pageHelpBtn{position:absolute;top:18px;right:22px;z-index:3;width:34px;height:34px;border-radius:50%;border:1px solid rgba(231,195,92,.6);background:linear-gradient(135deg,#f3d77a,#c9a227);color:#1b2a4a;font:inherit;font-weight:900;font-size:1rem;cursor:pointer;display:grid;place-items:center;box-shadow:0 6px 16px rgba(0,0,0,.2);transition:transform .15s,box-shadow .15s}
     .pageHelpBtn:hover,.pageHelpBtn:focus-visible{transform:translateY(-1px) scale(1.06);box-shadow:0 10px 22px rgba(201,162,39,.45)}
-    @media(max-width:700px){.pageHelpBtn{right:14px!important}}
+    .pageHelpBtn.inline{position:static;display:inline-grid;vertical-align:middle;margin-left:14px;width:30px;height:30px;font-size:.9rem;transform:translateY(-2px)}.pageHelpBtn.inline:hover,.pageHelpBtn.inline:focus-visible{transform:translateY(-3px) scale(1.06)}
     .pageHelpBackdrop{position:fixed;inset:0;z-index:2000;display:grid;place-items:center;padding:20px;background:rgba(15,20,30,.55);backdrop-filter:blur(3px);animation:pageHelpFade .15s ease}
     @keyframes pageHelpFade{from{opacity:0}to{opacity:1}}
     .pageHelpDialog{position:relative;width:min(640px,100%);max-height:calc(100vh - 40px);overflow:auto;background:var(--panel,#fff);color:var(--text,#172033);border:1px solid #d9bb6a;border-top:4px solid #c9a227;border-radius:20px;padding:26px 28px;box-shadow:0 30px 80px rgba(0,0,0,.35)}
@@ -7233,16 +7233,15 @@ function ensurePageHelp(appEl){
   document.getElementById('pageHelpModal')?.remove();
   if(!appEl||state.page==='welcome'||state.page==='learn')return;
   const entry=pageHelpEntry(),hero=appEl.querySelector('.hero,.aiInsightsHero');
-  if(!entry||!hero||hero.querySelector(':scope>.pageHelpBtn'))return;
+  if(!entry||!hero||hero.querySelector('.pageHelpBtn'))return;
   const btn=document.createElement('button');
   btn.type='button';btn.className='pageHelpBtn';btn.setAttribute('aria-label','About this page');btn.title='About this page';
   btn.innerHTML='<span aria-hidden="true">?</span>';
   btn.onclick=openPageHelp;
-  hero.insertBefore(btn,hero.firstChild);
-  const persona=hero.querySelector(':scope>.heroPersona');
-  if(persona)btn.style.right=(22+(persona.offsetWidth||170)+10)+'px';
-}
-function openPageHelp(){
+  const h1=hero.querySelector('h1');
+  if(h1){btn.classList.add('inline');h1.appendChild(btn);}
+  else hero.appendChild(btn);
+}function openPageHelp(){
   const entry=pageHelpEntry();if(!entry)return;
   const t=entry.tab;
   document.getElementById('pageHelpModal')?.remove();
