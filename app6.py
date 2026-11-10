@@ -6513,6 +6513,53 @@ HTML = r'''
   .historyNotice{padding:12px 14px;border-radius:10px;background:rgba(232,179,62,.13);margin:12px 0}
   @media(max-width:850px){.historyLayout,.historyRaw{grid-template-columns:1fr}}
     .grid.grid6.byoStatGrid{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}.byoStatGrid .metric{min-width:0}.byoStatGrid .metric .label,.byoStatGrid .metric .sub{overflow-wrap:anywhere}.byoStatGrid .metric .value{font-size:clamp(1.35rem,2.2vw,1.9rem);overflow-wrap:anywhere}
+
+    /* Global page search */
+    .navSearch{position:relative;flex:0 0 auto;margin-right:10px;z-index:175}
+    .navSearchField{display:flex;align-items:center;gap:8px;width:230px;height:40px;padding:0 10px 0 13px;border:2px solid var(--accent2);border-radius:999px;background:var(--panel);color:var(--muted);cursor:text;box-shadow:0 6px 18px rgba(111,82,0,.10);transition:width .25s cubic-bezier(.2,.8,.2,1),box-shadow .2s ease,border-color .2s ease}
+    .navSearch.open .navSearchField,.navSearchField:focus-within{width:330px;border-color:var(--accent);box-shadow:0 0 0 4px rgba(201,154,18,.16),0 10px 26px rgba(111,82,0,.16)}
+    .navSearchIcon{width:17px;height:17px;flex:0 0 17px;fill:none;stroke:var(--accent);stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+    .navSearch input.navSearchInput,:root[data-theme="dark"] .navSearch input.navSearchInput{flex:1;min-width:0;width:100%;height:100%;border:0!important;outline:none!important;box-shadow:none!important;background:transparent!important;color:var(--text)!important;font:inherit;font-size:.9rem;font-weight:600;padding:0}
+    .navSearch input.navSearchInput::placeholder{color:var(--muted)!important;font-weight:500;opacity:.85}
+    .navSearchKbd,.navSearchFoot kbd{font:inherit;font-size:.68rem;font-weight:800;color:var(--muted);border:1px solid var(--line);border-bottom-width:2px;border-radius:6px;padding:2px 6px;background:rgba(170,170,170,.08);white-space:nowrap}
+    .navSearchClear{display:none;width:22px;height:22px;flex:0 0 22px;border:0;border-radius:50%;background:rgba(170,170,170,.18);color:var(--muted);font-size:1rem;line-height:1;cursor:pointer;padding:0}
+    .navSearchClear:hover{background:var(--accent2);color:#2b1e09}
+    .navSearch.hasText .navSearchClear{display:block}.navSearch.hasText .navSearchKbd,.navSearch.open .navSearchKbd{display:none}
+    .navSearchPanel{position:absolute;top:50px;left:0;width:540px;max-width:calc(100vw - 24px);background:var(--panel);border:1px solid var(--line);border-radius:20px;box-shadow:0 28px 78px rgba(15,23,42,.28);overflow:hidden;opacity:0;visibility:hidden;transform:translateY(-8px) scale(.98);transform-origin:top right;pointer-events:none;transition:opacity .18s ease,transform .18s ease,visibility .18s ease}
+    .navSearch.open .navSearchPanel{opacity:1;visibility:visible;transform:none;pointer-events:auto}
+    .navSearchHead{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,rgba(212,175,55,.10),transparent)}
+    .navSearchScope{position:relative;display:grid;grid-template-columns:1fr 1fr;width:100%;padding:3px;border:1px solid var(--line);border-radius:999px;background:rgba(170,170,170,.08)}
+    .navSearchScope button{position:relative;z-index:1;border:0;background:transparent;color:var(--muted);font:inherit;font-size:.8rem;font-weight:800;padding:7px 10px;border-radius:999px;cursor:pointer;transition:color .2s ease}
+    .navSearchScope button.active{color:#2b1e09}
+    .navSearchThumb{position:absolute;top:3px;bottom:3px;left:3px;width:calc(50% - 3px);border-radius:999px;background:linear-gradient(135deg,#e7c957,#d5aa28);box-shadow:0 4px 12px rgba(111,82,0,.28);transition:transform .25s cubic-bezier(.2,.8,.2,1)}
+    .navSearchScope[data-scope="all"] .navSearchThumb{transform:translateX(100%)}
+    .navSearchResults{max-height:min(420px,60vh);overflow-y:auto;padding:8px}
+    .searchRow{display:flex;align-items:center;gap:12px;width:100%;padding:10px 12px;border:1px solid transparent;border-radius:14px;cursor:pointer;color:var(--text);animation:searchRowIn .2s ease both;animation-delay:calc(var(--i,0)*18ms)}
+    .searchRow:hover,.searchRow.active{background:rgba(212,175,55,.16);border-color:rgba(212,175,55,.45)}
+    .searchRow.active{box-shadow:inset 3px 0 var(--accent)}
+    .searchRowIcon{display:grid;place-items:center;width:34px;height:34px;flex:0 0 34px;border-radius:11px;background:linear-gradient(135deg,rgba(212,175,55,.28),rgba(212,175,55,.08));color:var(--accent);font-size:.95rem;font-weight:900}
+    .searchRowText{flex:1;min-width:0}
+    .searchRowTitle{display:block;font-weight:800;font-size:.92rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .searchRowTitle mark{background:rgba(212,175,55,.38);color:inherit;border-radius:4px;padding:0 1px}
+    .searchRowSub{display:block;margin-top:2px;color:var(--muted);font-size:.76rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .searchRowEnter{opacity:0;color:var(--muted);font-size:.9rem;transition:opacity .15s ease}.searchRow.active .searchRowEnter{opacity:1}
+    .wsTag{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:.7rem;font-weight:900;letter-spacing:.02em;white-space:nowrap;border:1px solid currentColor;background:rgba(170,170,170,.10)}
+    .wsTag:before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+    .wsTag[data-ws="medicare"]{color:#9a7400;background:rgba(212,175,55,.16)}
+    .wsTag[data-ws="medicaid"]{color:#0f766e;background:rgba(20,184,166,.14)}
+    .wsTag[data-ws="byo"]{color:#6d28d9;background:rgba(139,92,246,.13)}
+    .wsTag[data-ws="shared"]{color:#64748b}
+    :root[data-theme="dark"] .wsTag[data-ws="medicare"]{color:#f0d271}
+    :root[data-theme="dark"] .wsTag[data-ws="medicaid"]{color:#5eead4}
+    :root[data-theme="dark"] .wsTag[data-ws="byo"]{color:#c4b5fd}
+    :root[data-theme="dark"] .wsTag[data-ws="shared"]{color:#a8b0bd}
+    .searchLabel{padding:6px 12px 4px;color:var(--muted);font-size:.68rem;font-weight:900;letter-spacing:.09em;text-transform:uppercase}
+    .searchEmpty{padding:30px 16px;text-align:center;color:var(--muted)}.searchEmpty b{display:block;color:var(--text);margin:6px 0 4px;font-size:.95rem}.searchEmpty span{font-size:.82rem}.searchEmpty .searchEmptyIcon{font-size:1.6rem}
+    .navSearchFoot{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 14px;border-top:1px solid var(--line);color:var(--muted);font-size:.74rem;background:rgba(170,170,170,.05)}
+    .navSearchHints{display:inline-flex;align-items:center;gap:5px}
+    @keyframes searchRowIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+    @media(max-width:1180px){.navSearchField{width:200px}.navSearch.open .navSearchField,.navSearchField:focus-within{width:260px}}
+    @media(max-width:620px){.navSearch{margin-right:6px}.navSearchField{width:44px;padding:0 0 0 13px}.navSearchKbd{display:none}.navSearch.open .navSearchField,.navSearchField:focus-within{width:190px;padding:0 10px 0 13px}.navSearchHints{display:none}.searchRowSub{display:none}}
 </style>
 </head>
 <body data-workspace="medicare">
@@ -6532,6 +6579,25 @@ HTML = r'''
       </div>
       <div class="navMenus" id="navlinks"></div>
       <div class="navUtilities" id="navUtilities" aria-label="Appearance controls">
+        <div class="navSearch" id="navSearch" style="display:none">
+          <label class="navSearchField" for="navSearchInput">
+            <svg class="navSearchIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg>
+            <input class="navSearchInput" id="navSearchInput" type="text" autocomplete="off" spellcheck="false" placeholder="Search pages…" aria-label="Search pages" role="combobox" aria-expanded="false" aria-controls="navSearchResults" aria-autocomplete="list" oninput="searchInput()" onfocus="openSearch()" onkeydown="searchKey(event)">
+            <kbd class="navSearchKbd" id="navSearchKbd">Ctrl K</kbd>
+            <button class="navSearchClear" id="navSearchClear" type="button" aria-label="Clear search" onmousedown="event.preventDefault()" onclick="clearSearch()">×</button>
+          </label>
+          <div class="navSearchPanel" id="navSearchPanel" role="dialog" aria-label="Page search">
+            <div class="navSearchHead">
+              <div class="navSearchScope" id="navSearchScope" role="group" aria-label="Search scope" data-scope="all">
+                <span class="navSearchThumb" aria-hidden="true"></span>
+                <button type="button" data-scope="current" onmousedown="event.preventDefault()" onclick="setSearchScope('current')">This workspace</button>
+                <button type="button" data-scope="all" onmousedown="event.preventDefault()" onclick="setSearchScope('all')">All workspaces</button>
+              </div>
+            </div>
+            <div class="navSearchResults" id="navSearchResults" role="listbox"></div>
+            <div class="navSearchFoot"><span id="navSearchCount"></span><span class="navSearchHints"><kbd>↑</kbd><kbd>↓</kbd> navigate <kbd>↵</kbd> open <kbd>Esc</kbd> close</span></div>
+          </div>
+        </div>
         <button class="dartThemeToggle" id="dartThemeToggle" type="button" role="switch" aria-checked="false" aria-label="Switch to dark mode" title="Switch to dark mode" onclick="event.stopPropagation();toggleTheme()">
           <span class="dartThemeBulb" id="dartThemeBulb" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M9 18h6"></path><path d="M10 22h4"></path><path d="M8.6 14.7A7 7 0 1 1 15.4 14.7c-.9.7-1.4 1.6-1.4 2.3h-4c0-.7-.5-1.6-1.4-2.3Z"></path><path d="M12 2V1"></path><path d="m4.9 4.9-.7-.7"></path><path d="M2 12H1"></path><path d="m19.1 4.9.7-.7"></path><path d="M22 12h1"></path></svg></span>
           <span class="dartThemeLabel" id="dartThemeLabel">Light</span>
@@ -6705,8 +6771,9 @@ async function postJson(path,body){return api(path,{method:'POST',headers:{'Cont
 async function putJson(path,body){return api(path,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});}
 async function del(path){return api(path,{method:'DELETE'});}
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2200)}
-function activeNavGroups(){
-  const raw=navSets[state.workspace]||navSets.medicare;
+function activeNavGroups(){return navGroupsFor(state.workspace);}
+function navGroupsFor(ws){
+  const raw=navSets[ws]||navSets.medicare;
   return raw
     .filter(g=>!g[2]?.hidden&&g[0]!=='Operations')
     .map(g=>{
@@ -6731,9 +6798,149 @@ function setNav(){
   const label=document.getElementById('workspaceLabel');if(label)label.textContent=state.page==='welcome'?'All workspaces':workspaceLabels[state.workspace]||'Medicare';
   document.querySelectorAll('.workspaceOption').forEach(x=>x.classList.toggle('active',state.page!=='welcome'&&x.dataset.workspace===state.workspace));
   const switcher=document.getElementById('workspaceSwitcher');if(switcher)switcher.style.display='';
+  const searchBox=document.getElementById('navSearch');if(searchBox){searchBox.style.display='';if(searchBox.classList.contains('open'))renderSearchResults();}
   const nav=document.getElementById('navlinks');
   nav.innerHTML=groups.map(g=>`<div class="menu ${pageInGroup(g)?'current':''}"><button class="menuBtn ${pageInGroup(g)?'active':''}" onclick="toggleMenu(event,this.parentElement)" aria-haspopup="true" aria-expanded="false">${g[0]} ▾</button><div class="menuPanel">${g[1].map(([id,text])=>`<a onclick="showPage('${id}');closeAllMenus()">${text}</a>`).join('')}</div></div>`).join('');
 }
+function isSubseq(needle,hay){let i=0;for(let k=0;k<hay.length&&i<needle.length;k++){if(hay[k]===needle[i])i++;}return i===needle.length;}
+const searchState={active:0,items:[],scope:(()=>{try{return localStorage.getItem('dart_search_scope')==='current'?'current':'all';}catch(_e){return 'all';}})()};
+function searchTagLabel(ws){return ws==='shared'?'Shared':(workspaceLabels[ws]||ws);}
+function searchIndex(){
+  const allScope=searchState.scope==='all';
+  const wsList=allScope?Object.keys(navSets):[state.workspace];
+  const counts={};
+  Object.keys(navSets).forEach(ws=>navGroupsFor(ws).forEach(g=>g[1].forEach(([id])=>{counts[id]=(counts[id]||0)+1;})));
+  const seen=new Set(),out=[];
+  wsList.forEach(ws=>navGroupsFor(ws).forEach(g=>g[1].forEach(([id,label])=>{
+    const shared=counts[id]>1;
+    if(shared&&allScope){if(seen.has(id))return;seen.add(id);}
+    out.push({id,label,group:g[0],ws:shared&&allScope?'shared':ws,target:shared?state.workspace:ws});
+  })));
+  return out;
+}
+function searchScore(item,tokens){
+  const label=item.label.toLowerCase(),group=item.group.toLowerCase(),wsl=searchTagLabel(item.ws).toLowerCase();
+  let total=0;
+  for(const t of tokens){
+    const idx=label.indexOf(t);
+    let s;
+    if(idx===0)s=100;
+    else if(idx>0&&label[idx-1]===' ')s=85;
+    else if(idx>0)s=60;
+    else if(group.includes(t))s=30;
+    else if(wsl.includes(t))s=25;
+    else if(item.id.includes(t))s=20;
+    else if(isSubseq(t,label))s=10;
+    else return -1;
+    total+=s;
+  }
+  if(label===tokens.join(' '))total+=50;
+  return total;
+}
+function searchHighlight(text,tokens){
+  const low=text.toLowerCase(),marks=new Array(text.length).fill(false);
+  tokens.forEach(t=>{const i=low.indexOf(t);if(i>=0)for(let k=i;k<i+t.length;k++)marks[k]=true;});
+  let out='',open=false;
+  for(let i=0;i<text.length;i++){
+    if(marks[i]&&!open){out+='<mark>';open=true;}
+    if(!marks[i]&&open){out+='</mark>';open=false;}
+    out+=esc(text[i]);
+  }
+  return out+(open?'</mark>':'');
+}
+function syncSearchScope(){
+  const scope=document.getElementById('navSearchScope');if(!scope)return;
+  scope.dataset.scope=searchState.scope;
+  scope.querySelectorAll('button').forEach(b=>{const on=b.dataset.scope===searchState.scope;b.classList.toggle('active',on);b.setAttribute('aria-pressed',on?'true':'false');});
+  const kbd=document.getElementById('navSearchKbd');if(kbd)kbd.textContent=/Mac|iPhone|iPad/.test(navigator.platform||'')?'⌘ K':'Ctrl K';
+}
+function setSearchScope(scope){
+  searchState.scope=scope==='current'?'current':'all';
+  try{localStorage.setItem('dart_search_scope',searchState.scope);}catch(_e){}
+  syncSearchScope();searchState.active=0;renderSearchResults();
+  const input=document.getElementById('navSearchInput');if(input)input.focus();
+}
+function renderSearchResults(){
+  const input=document.getElementById('navSearchInput'),box=document.getElementById('navSearchResults'),count=document.getElementById('navSearchCount');
+  if(!input||!box)return;
+  const tokens=input.value.trim().toLowerCase().split(' ').filter(Boolean);
+  let items=searchIndex();
+  if(tokens.length){
+    items=items.map((it,i)=>({it,i,s:searchScore(it,tokens)})).filter(x=>x.s>=0).sort((a,b)=>b.s-a.s||a.i-b.i).map(x=>x.it);
+  }else{
+    items.sort((a,b)=>(b.target===state.workspace)-(a.target===state.workspace));
+    if(searchState.scope==='all')items=items.slice(0,8);
+  }
+  items=items.slice(0,30);
+  searchState.items=items;
+  searchState.active=Math.min(searchState.active,Math.max(items.length-1,0));
+  if(!items.length){
+    box.innerHTML=`<div class="searchEmpty"><div class="searchEmptyIcon">🔍</div><b>No pages match “${esc(input.value.trim())}”</b><span>${searchState.scope==='current'?'Try switching to “All workspaces” to widen the search.':'Try a different word, such as a page or workspace name.'}</span></div>`;
+  }else{
+    const heading=tokens.length?'':`<div class="searchLabel">${searchState.scope==='current'?'Pages in '+esc(workspaceLabels[state.workspace]||'this workspace'):'Quick jump'}</div>`;
+    box.innerHTML=heading+items.map((it,i)=>`<div class="searchRow${i===searchState.active?' active':''}" role="option" aria-selected="${i===searchState.active}" id="searchOpt${i}" data-i="${i}" style="--i:${Math.min(i,10)}"><span class="searchRowIcon">${esc(it.label.charAt(0).toUpperCase())}</span><span class="searchRowText"><span class="searchRowTitle">${searchHighlight(it.label,tokens)}</span><span class="searchRowSub">${esc(it.group)}</span></span><span class="wsTag" data-ws="${it.ws}">${esc(searchTagLabel(it.ws))}</span><span class="searchRowEnter">↵</span></div>`).join('');
+  }
+  if(count)count.textContent=items.length?`${items.length} ${items.length===1?'page':'pages'}`:'No results';
+  input.setAttribute('aria-activedescendant',items.length?'searchOpt'+searchState.active:'');
+}
+function positionSearchPanel(){
+  const box=document.getElementById('navSearch'),panel=document.getElementById('navSearchPanel');if(!box||!panel)return;
+  const r=box.getBoundingClientRect(),w=Math.min(540,window.innerWidth-24);
+  const edge=Math.max(w+12,Math.min(r.right,window.innerWidth-12));
+  panel.style.width=w+'px';panel.style.left='auto';panel.style.right=(r.right-edge)+'px';
+}
+function openSearch(){
+  const box=document.getElementById('navSearch');if(!box)return;
+  if(!box.classList.contains('open')){closeAllMenus();closeWorkspaceMenu();box.classList.add('open');document.getElementById('navSearchInput').setAttribute('aria-expanded','true');searchState.active=0;}
+  positionSearchPanel();renderSearchResults();
+}
+function closeSearch(){
+  const box=document.getElementById('navSearch');if(!box)return;
+  box.classList.remove('open');const input=document.getElementById('navSearchInput');if(input)input.setAttribute('aria-expanded','false');
+}
+function searchInput(){
+  const input=document.getElementById('navSearchInput');
+  document.getElementById('navSearch').classList.toggle('hasText',input.value.length>0);
+  searchState.active=0;openSearch();
+}
+function clearSearch(){
+  const input=document.getElementById('navSearchInput');input.value='';
+  document.getElementById('navSearch').classList.remove('hasText');
+  searchState.active=0;renderSearchResults();input.focus();
+}
+function setSearchActive(i){
+  const rows=document.querySelectorAll('#navSearchResults .searchRow');if(!rows.length)return;
+  searchState.active=(i+rows.length)%rows.length;
+  rows.forEach((r,k)=>{const on=k===searchState.active;r.classList.toggle('active',on);r.setAttribute('aria-selected',on?'true':'false');if(on)r.scrollIntoView({block:'nearest'});});
+  const input=document.getElementById('navSearchInput');if(input)input.setAttribute('aria-activedescendant','searchOpt'+searchState.active);
+}
+function searchKey(e){
+  if(e.key==='ArrowDown'){e.preventDefault();openSearch();setSearchActive(searchState.active+1);}
+  else if(e.key==='ArrowUp'){e.preventDefault();openSearch();setSearchActive(searchState.active-1);}
+  else if(e.key==='Enter'){e.preventDefault();const it=searchState.items[searchState.active];if(it)searchGo(it);}
+  else if(e.key==='Escape'){e.preventDefault();closeSearch();e.target.blur();}
+}
+async function searchGo(item){
+  closeSearch();
+  const input=document.getElementById('navSearchInput');
+  if(input){input.value='';input.blur();document.getElementById('navSearch').classList.remove('hasText');}
+  if(item.target!==state.workspace){state.workspace=item.target;sessionStorage.setItem('dart_workspace',item.target);}
+  state.page=item.id;setNav();await render();
+}
+(function initSearch(){
+  const results=document.getElementById('navSearchResults');if(!results)return;
+  results.addEventListener('mousemove',e=>{const row=e.target.closest('.searchRow');if(row&&Number(row.dataset.i)!==searchState.active)setSearchActive(Number(row.dataset.i));});
+  results.addEventListener('click',e=>{const row=e.target.closest('.searchRow');if(!row)return;const it=searchState.items[Number(row.dataset.i)];if(it)searchGo(it);});
+  document.addEventListener('click',e=>{if(!e.target.closest('#navSearch'))closeSearch();},true);
+  document.addEventListener('keydown',e=>{
+    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){
+      const box=document.getElementById('navSearch');
+      if(box&&box.style.display!=='none'){e.preventDefault();document.getElementById('navSearchInput').focus();openSearch();}
+    }else if(e.key==='Escape')closeSearch();
+  });
+  window.addEventListener('resize',()=>{if(document.getElementById('navSearch').classList.contains('open'))positionSearchPanel();});
+  syncSearchScope();
+})();
 async function boot(){
   state.meta=await api('/api/meta');
   if(!state.meta.auth_user){renderAuth();return;}
@@ -6811,6 +7018,7 @@ function renderAuth(){
   if(modal) modal.remove();
   document.body.dataset.workspace='auth';
   if(document.getElementById('workspaceSwitcher'))document.getElementById('workspaceSwitcher').style.display='none';
+  if(document.getElementById('navSearch'))document.getElementById('navSearch').style.display='none';
   document.getElementById('navlinks').innerHTML='';
   document.getElementById('footer').innerHTML='';
   document.getElementById('app').innerHTML=`<div class="hero"><h1>DART</h1><p><b>Data Assurance Reconciliation Tracker</b>. Sign in or create an account to access the workspace.</p></div><div class="grid grid2"><form class="panel" id="loginForm"><h2>Login</h2><div class="field"><label>Username</label><input id="loginUser" autocomplete="username"></div><div class="field"><label>Password</label><input id="loginPass" type="password" autocomplete="current-password"></div><br><button class="btn" type="submit">Login</button></form><form class="panel" id="signupForm"><h2>Create profile</h2><p class="muted">Create an account to save your workspace persona and credentials.</p><div class="field"><label>Username</label><input id="signupUser" autocomplete="username"></div><div class="field"><label>Password</label><input id="signupPass" type="password" autocomplete="new-password"></div><div class="field"><label>Display name</label><input id="signupName" placeholder="Nick Holmes"></div><div class="field"><label>Email</label><input id="signupEmail" placeholder="name@example.com"></div><div class="field"><label>Organization</label><input id="signupOrg" placeholder="Team or organization"></div><br><button class="btn" type="submit">Create profile</button></form></div>`;
@@ -6871,6 +7079,7 @@ async function saveProfile(e){if(e)e.preventDefault();await postJson('/api/profi
 function renderOnboarding(){
   document.body.dataset.workspace='onboarding';
   if(document.getElementById('workspaceSwitcher'))document.getElementById('workspaceSwitcher').style.display='none';
+  if(document.getElementById('navSearch'))document.getElementById('navSearch').style.display='none';
   document.getElementById('navlinks').innerHTML='';document.getElementById('footer').innerHTML='';
   document.getElementById('app').innerHTML=`<div class="hero"><span class="workspaceBadge">One-time setup</span><h1>Build your DART workspace</h1><p>Your persona now controls where DART opens, which actions are emphasized, how much detail is surfaced, and how AI/briefing content is framed. No features are removed—you can still navigate anywhere.</p></div><form class="panel" id="personaForm"><h2>Personalize the experience</h2><div class="grid grid2"><div class="field"><label>Program</label><select id="program"><option>Medicare</option><option>Medicaid</option><option>Both</option><option>Other / General</option></select></div><div class="field"><label>Primary role</label><select id="role"><option>Executive / Leadership</option><option>Data / Analytics</option><option>Program / Policy</option><option>Operations</option><option>Quality / Compliance</option><option>IT / Engineering</option><option>Research</option><option>Other</option></select></div><div class="field"><label>Focus areas</label><input id="focus" value="Data quality, Claims, Reporting impact, AI insights"></div><div class="field"><label>Audience</label><select id="audience"><option>Leadership</option><option>Myself</option><option>Analysts</option><option>Program teams</option><option>Technical teams</option><option>External stakeholders</option></select></div><div class="field"><label>Detail level</label><select id="depth"><option>Executive</option><option selected>Balanced</option><option>Technical</option></select></div><div class="field"><label>First question</label><input id="first_question" placeholder="Which areas need the most attention?"></div><div class="field"><label>Preferred workspace</label><select id="preferred_workspace"><option value="medicare">Medicare</option><option value="medicaid">Medicaid</option><option value="byo">Build Your Own</option></select></div><div class="field"><label>Start page</label><select id="landing_page">${personaLandingOptions('auto')}</select><div class="personaPrefNote">Choose “Recommended for my role” and DART will pick the most useful start page automatically.</div></div></div><br><button class="btn" type="submit">Build Workspace</button></form>`;
   document.getElementById('personaForm').onsubmit=savePersona;refreshThemeVisuals(document.getElementById('app'));
