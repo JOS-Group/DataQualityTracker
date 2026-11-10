@@ -6512,6 +6512,31 @@ HTML = r'''
   .historyLegend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;opacity:.8;margin:10px 0}
   .historyNotice{padding:12px 14px;border-radius:10px;background:rgba(232,179,62,.13);margin:12px 0}
   @media(max-width:850px){.historyLayout,.historyRaw{grid-template-columns:1fr}}
+  .historyStrip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+  .stripTile{padding:16px;border:1px solid var(--line);border-radius:14px;background:linear-gradient(160deg,rgba(231,202,123,.14),rgba(170,170,170,.04))}
+  .stripTile small{display:block;font-size:.72rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;opacity:.75}
+  .stripTile strong{display:block;font-size:1.7rem;margin:6px 0 8px}.stripHint{display:block;margin-top:8px;font-size:.75rem;opacity:.65}
+  .deltaChip{display:inline-block;padding:3px 10px;border-radius:999px;font-size:.78rem;font-weight:800;background:rgba(150,150,150,.16);color:inherit}
+  .deltaChip.bad{background:rgba(220,70,70,.16);color:#b02a2a}.deltaChip.good{background:rgba(40,160,110,.16);color:#17784f}
+  :root[data-theme="dark"] .deltaChip.bad{color:#ff9b9b}:root[data-theme="dark"] .deltaChip.good{color:#7fe0b4}
+  .historySparks{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
+  .sparkCard{padding:14px 16px;border:1px solid var(--line);border-radius:14px}.sparkCard small{display:block;font-size:.72rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;opacity:.75}
+  .sparkCard strong{display:block;font-size:1.4rem;margin:4px 0}.sparkRange{display:block;font-size:.72rem;opacity:.6}
+  .historySpark{width:100%;height:70px;display:block;overflow:visible}
+  .sparkLine{fill:none;stroke:#b78a24;stroke-width:2.2;stroke-linejoin:round;stroke-linecap:round}.sparkArea{fill:rgba(224,181,70,.16);stroke:none}
+  .sparkDot{fill:#b78a24;cursor:pointer}.sparkFlag{fill:#d64545;cursor:pointer;stroke:#fff;stroke-width:1.5}.sparkSel{stroke:#1b2a4a;stroke-width:2}
+  :root[data-theme="dark"] .sparkSel{stroke:#fff}
+  .flagTotal{padding:6px 14px;border-radius:999px;font-weight:800;font-size:.82rem;background:rgba(150,150,150,.16)}.flagTotal.hot{background:rgba(214,69,69,.15);color:#b02a2a}
+  :root[data-theme="dark"] .flagTotal.hot{color:#ff9b9b}
+  .flagList{display:grid;gap:8px}
+  .flagItem{display:flex;gap:12px;align-items:flex-start;text-align:left;width:100%;padding:12px 14px;border:1px solid var(--line);border-left:4px solid #d64545;border-radius:12px;background:transparent;color:inherit;cursor:pointer;font:inherit}
+  .flagItem.good{border-left-color:#2aa06e}.flagItem:hover,.flagItem.active{background:rgba(224,181,70,.12)}
+  .flagSev{flex:none;padding:2px 9px;border-radius:999px;font-size:.68rem;font-weight:800;text-transform:uppercase;letter-spacing:.06em;background:rgba(214,69,69,.15);color:#b02a2a;margin-top:2px}
+  .flagItem.good .flagSev{background:rgba(40,160,110,.16);color:#17784f}
+  :root[data-theme="dark"] .flagSev{color:#ff9b9b}:root[data-theme="dark"] .flagItem.good .flagSev{color:#7fe0b4}
+  .flagText{display:block;font-weight:700;line-height:1.45}.flagText small{display:block;font-weight:500;opacity:.65;margin-top:3px}
+  .weekFlag{display:inline-block;margin-top:6px;padding:2px 9px;border-radius:999px;font-size:.72rem;font-weight:800;background:rgba(214,69,69,.15);color:#b02a2a}
+  :root[data-theme="dark"] .weekFlag{color:#ff9b9b}
     .grid.grid6.byoStatGrid{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}.byoStatGrid .metric{min-width:0}.byoStatGrid .metric .label,.byoStatGrid .metric .sub{overflow-wrap:anywhere}.byoStatGrid .metric .value{font-size:clamp(1.35rem,2.2vw,1.9rem);overflow-wrap:anywhere}
 
     /* Global page search */
@@ -9435,19 +9460,60 @@ async function pauseHistorySchedule(){
   try{await postJson('/api/byo/history/pause',{dataset:state.historyDataset});toast('Schedule paused; history retained');await render();}
   catch(err){toast('Could not pause schedule: '+String(err.message||err));}
 }
+function historySpark(weeks,key,selected,flagged,fmt){
+  const vals=weeks.map(w=>Number(w[key]));if(vals.length<2)return '<div class="empty">Needs at least two snapshots.</div>';
+  const W=240,H=64,P=8,lo=Math.min(...vals),hi=Math.max(...vals),span=(hi-lo)||1;
+  const pts=vals.map((v,i)=>[P+i*(W-2*P)/(vals.length-1),hi===lo?H/2:H-P-(v-lo)/span*(H-2*P)]);
+  const line=pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+  const area=`${P},${H-P/2} ${line} ${W-P},${H-P/2}`;
+  const dots=pts.map((p,i)=>{const id=weeks[i].id,bad=flagged.has(id),sel=id===selected;
+    return `<circle class="${bad?'sparkFlag':'sparkDot'} ${sel?'sparkSel':''}" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${bad||sel?4.5:2.6}" onclick="selectHistoryWeek(${Number(id)})"><title>${esc(historyDate(weeks[i].captured_at))}: ${esc(fmt(vals[i]))}${bad?' · flagged':''}</title></circle>`;}).join('');
+  return `<svg class="historySpark" viewBox="0 0 ${W} ${H}" role="img" aria-label="Trend across ${vals.length} weeks"><polygon class="sparkArea" points="${area}"/><polyline class="sparkLine" points="${line}"/>${dots}</svg>`;
+}
+function historyDelta(diff,fmt,badWhenUp){
+  if(!diff)return '<span class="deltaChip flat">● No change</span>';
+  const up=diff>0,bad=badWhenUp===null?false:(badWhenUp?up:!up),cls=badWhenUp===null?'flat':bad?'bad':'good';
+  return `<span class="deltaChip ${cls}">${up?'▲':'▼'} ${esc(fmt(Math.abs(diff)))}</span>`;
+}
+function historyInsights(data){
+  const trends=data.trends;if(!trends||!(trends.weeks||[]).length)return '';
+  const weeks=trends.weeks,anomalies=trends.anomalies||[],idx=weeks.findIndex(w=>w.id===data.selected),cur=weeks[idx],prev=weeks[idx-1];
+  const flagged=new Set(anomalies.filter(a=>a.direction==='bad').map(a=>a.snapshot_id));
+  let strip='';
+  if(data.comparison&&prev){
+    const c=data.comparison,before=(data.timeline||[])[idx-1]?.summary||null;
+    const count=v=>intFmt(Math.round(v)),pct=v=>v.toFixed(2)+' pp';
+    const tile=(label,value,delta,hint)=>`<div class="stripTile"><small>${esc(label)}</small><strong>${value}</strong>${delta}<span class="stripHint">${esc(hint)}</span></div>`;
+    strip=`<div class="panel"><div class="medSectionHead"><div><h3>Week-over-week at a glance</h3><p class="muted">${esc(historyDate(data.before_date))} → ${esc(historyDate(data.after_date))}. Arrows show the change against the previous week; red is worse, green is better.</p></div></div><div class="historyStrip">
+      ${tile('Total rows',intFmt(cur.rows),historyDelta(cur.rows-prev.rows,count,null),'vs '+intFmt(prev.rows)+' last week')}
+      ${tile('Rows added',intFmt(c.added),before?historyDelta(c.added-before.added,count,null):'<span class="deltaChip flat">● First comparison</span>','new identities')}
+      ${tile('Rows removed',intFmt(c.removed),before?historyDelta(c.removed-before.removed,count,true):'<span class="deltaChip flat">● First comparison</span>','no longer present')}
+      ${tile('Rows changed',intFmt(c.changed_rows),before?historyDelta(c.changed_rows-before.changed_rows,count,null):'<span class="deltaChip flat">● First comparison</span>',intFmt(c.changed_values)+' values')}
+      ${tile('Null rate',cur.null_rate.toFixed(2)+'%',historyDelta(Math.round((cur.null_rate-prev.null_rate)*100)/100,pct,true),'share of empty cells')}
+      ${tile('Duplicate rows',intFmt(cur.duplicates),historyDelta(cur.duplicates-prev.duplicates,count,true),cur.duplicate_rate.toFixed(1)+'% of rows')}
+    </div></div><br>`;
+  }
+  const charts=[['rows','Row count',v=>intFmt(Math.round(v))],['completeness','Completeness',v=>v.toFixed(2)+'%'],['duplicate_rate','Duplicate rate',v=>v.toFixed(1)+'%']];
+  const last=weeks[weeks.length-1];
+  const sparks=`<div class="panel"><div class="medSectionHead"><div><h3>Trends across ${weeks.length} weeks</h3><p class="muted">Spot slow drift at a glance. Red dots mark weeks flagged as unusual; select any dot to open that week.</p></div></div><div class="historySparks">${charts.map(ch=>`<div class="sparkCard"><small>${ch[1]}</small><strong>${esc(ch[2](Number(last[ch[0]])))}</strong>${historySpark(weeks,ch[0],data.selected,flagged,ch[2])}<span class="sparkRange">${esc(historyDate(weeks[0].captured_at))} – ${esc(historyDate(last.captured_at))}</span></div>`).join('')}</div></div><br>`;
+  const ordered=anomalies.slice().sort((a,b)=>b.date.localeCompare(a.date)||b.z*b.z-a.z*a.z);
+  const flags=`<div class="panel"><div class="medSectionHead"><div><h3>Anomaly flags</h3><p class="muted">A week is flagged when a change is more than about 2σ away from this dataset’s usual week-to-week movement.${weeks.length<5?' At least five snapshots are needed before flags appear.':''}</p></div><span class="flagTotal ${anomalies.length?'hot':''}">${anomalies.length} flagged</span></div>
+    ${ordered.length?`<div class="flagList">${ordered.map(a=>`<button type="button" class="flagItem ${a.direction} ${a.snapshot_id===data.selected?'active':''}" onclick="selectHistoryWeek(${Number(a.snapshot_id)})"><span class="flagSev">${a.severity==='high'?'High':'Medium'}</span><span class="flagText">${esc(a.message)}<small>${esc(historyDate(a.date))} · ${a.direction==='bad'?'Needs attention':'Improvement'} · ${Math.abs(a.z).toFixed(1)}σ</small></span></button>`).join('')}</div>`:'<div class="empty">No unusual weeks detected. Everything is within its normal range.</div>'}</div><br>`;
+  return strip+sparks+flags;
+}
 function historyPage(info,data){
-  const dataset=state.historyDataset||'', demo=dataset==='__demo_claims__', schedule=data?.schedule;
+  const dataset=state.historyDataset||'', demo=dataset.startsWith('__demo_'), schedule=data?.schedule;
   const options=(info.datasets||[]).filter(d=>d.status==='Ready').map(d=>`<option value="${esc(d.name)}" ${dataset===d.name?'selected':''}>${esc(d.name)}</option>`).join('');
-  const picker=`<div class="panel historyPicker"><div class="historyPickerIntro"><h3>Explore your dataset history</h3><p class="muted">Choose a saved dataset or try the four-week sample.</p></div><div class="field"><label for="historyDataset">Dataset</label><select id="historyDataset" onchange="selectHistoryDataset(this.value)"><option value="">Select a dataset...</option><optgroup label="Demo"><option value="__demo_claims__" ${demo?'selected':''}>Medicare Claims — sample history (4 weeks)</option></optgroup><optgroup label="Your saved datasets">${options}</optgroup></select></div></div>`;
+  const picker=`<div class="panel historyPicker"><div class="historyPickerIntro"><h3>Explore your dataset history</h3><p class="muted">Choose a saved dataset or try a sample history.</p></div><div class="field"><label for="historyDataset">Dataset</label><select id="historyDataset" onchange="selectHistoryDataset(this.value)"><option value="">Select a dataset...</option><optgroup label="Demo"><option value="__demo_claims__" ${dataset==='__demo_claims__'?'selected':''}>Medicare Claims — sample history (4 weeks)</option><option value="__demo_trends__" ${dataset==='__demo_trends__'?'selected':''}>Claims trends &amp; anomalies — sample history (10 weeks)</option></optgroup><optgroup label="Your saved datasets">${options}</optgroup></select></div></div>`;
   let content='';
   if(dataset&&data){
     const columns=data.dataset_columns||[];
     const today=new Date().toISOString().slice(0,10);
-    const schedulePanel=demo?`<div class="historyNotice"><b>Illustrative demo data.</b> These four synthetic snapshots are not live Medicare data and are not scheduled.</div>`:
+    const schedulePanel=demo?`<div class="historyNotice"><b>Illustrative demo data.</b> These synthetic snapshots are not live Medicare data and are not scheduled.</div>`:
       `<div class="panel"><h3>Weekly refresh</h3><p class="muted">A baseline is captured when you save. The first refresh runs at 00:00 UTC on the selected date, then every 7 days, using the saved local dataset. The server must be running; missed weeks cannot be recreated.</p>
       ${schedule?`<p><b>Next refresh:</b> ${esc(historyDate(schedule.next_run))} UTC · <b>Identity:</b> ${esc(schedule.key_column)}</p>${schedule.error?`<div class="historyNotice"><b>Last refresh failed:</b> ${esc(schedule.error)}. The worker will retry.</div>`:''}`:''}
       <form onsubmit="saveHistorySchedule(event)"><div class="grid grid2"><div class="field"><label for="historyKey">Unique row / claim ID</label><select id="historyKey" required>${(schedule?[schedule.key_column]:(data.key_candidates||[])).map(c=>`<option value="${esc(c)}" ${c===(schedule?.key_column||data.identity_column||columns.find(x=>x.toLowerCase()==='claim id')||columns[0])?'selected':''}>${esc(c)}</option>`).join('')}</select></div><div class="field"><label for="historyStart">First refresh date (UTC)</label><input id="historyStart" type="date" min="${today}" value="${schedule?esc(schedule.next_run.slice(0,10)):today}" required></div></div><br><button class="btn" type="submit">${schedule?'Update schedule':'Capture baseline & schedule'}</button> ${schedule?'<button class="btn secondary" type="button" onclick="refreshHistoryNow()">Refresh now</button> <button class="btn ghost" type="button" onclick="pauseHistorySchedule()">Pause schedule</button>':''}</form>${!schedule&&!(data.key_candidates||[]).length?'<div class="historyNotice">No column in this dataset has unique, non-empty values, so rows cannot be tracked week to week. Add or fix an ID column in the Raw Data Editor first.</div>':''}<p class="muted">The identity must be unique and non-empty in every snapshot; it cannot change after history is created. Pausing keeps existing history.</p></div>`;
-    const timeline=(data.timeline||[]).slice().reverse().map((w,i)=>`<button class="historyWeek ${w.id===data.selected?'active':''}" onclick="selectHistoryWeek(${Number(w.id)})"><b>${i===0?'Latest · ':''}${esc(historyDate(w.captured_at))}</b><small>${w.summary?`${intFmt(w.summary.changed_values)} values changed · +${intFmt(w.summary.added)} / −${intFmt(w.summary.removed)} rows`:'Baseline snapshot'}</small></button>`).join('');
+    const timeline=(data.timeline||[]).slice().reverse().map((w,i)=>`<button class="historyWeek ${w.id===data.selected?'active':''}" onclick="selectHistoryWeek(${Number(w.id)})"><b>${i===0?'Latest · ':''}${esc(historyDate(w.captured_at))}</b><small>${w.summary?`${intFmt(w.summary.changed_values)} values changed · +${intFmt(w.summary.added)} / −${intFmt(w.summary.removed)} rows`:'Baseline snapshot'}</small>${w.anomaly_count?`<span class="weekFlag">⚠ ${w.anomaly_count} flag${w.anomaly_count>1?'s':''}</span>`:''}</button>`).join('');
     let detail='<div class="panel workspaceEmpty"><h3>No snapshots yet</h3><p class="muted">Save a schedule to capture the first baseline.</p></div>';
     if(data.selected&&!data.comparison){
       const base=(data.baseline_rows||[]).map(r=>({status:'Baseline',fields:[],after:r}));
@@ -9462,7 +9528,7 @@ function historyPage(info,data){
       <div class="historyLegend"><button class="btn ghost small" ${c.offset===0?'disabled':''} onclick="historyPageOffset(${Math.max(0,c.offset-50)})">Previous</button><span>Showing ${c.details_total?c.offset+1:0}–${Math.min(c.offset+50,c.details_total)} of ${intFmt(c.details_total)} identities</span><button class="btn ghost small" ${c.offset+50>=c.details_total?'disabled':''} onclick="historyPageOffset(${c.offset+50})">Next</button></div>
       <div class="historyRaw"><div><h4>Before · ${esc(historyDate(data.before_date))}</h4>${historyTable(rows,data.columns,'before')}</div><div><h4>After · ${esc(historyDate(data.after_date))}</h4>${historyTable(rows,data.columns,'after')}</div></div></div>`;
     }
-    content=`<br>${schedulePanel}<br><div class="historyLayout"><div class="panel"><h3>Snapshot timeline</h3><p class="muted">Select a week to explore its changes.</p><div class="historyTimeline">${timeline||'<div class="empty">No snapshots yet.</div>'}</div></div><div>${detail}${data.comparison?'':`<br>${historyEmailPanel(data)}`}</div></div>`;
+    content=`<br>${schedulePanel}<br>${historyInsights(data)}<div class="historyLayout"><div class="panel"><h3>Snapshot timeline</h3><p class="muted">Select a week to explore its changes.</p><div class="historyTimeline">${timeline||'<div class="empty">No snapshots yet.</div>'}</div></div><div>${detail}${data.comparison?'':`<br>${historyEmailPanel(data)}`}</div></div>`;
   }
   return `<div class="hero"><span class="workspaceBadge">Build Your Own · Data Tools</span><h1>Weekly Dataset History</h1><p>Follow your data over time. Explore new claims, quality changes, and the exact values behind each weekly refresh.</p></div>${picker}${content}`;
 }
@@ -10553,7 +10619,7 @@ def get_byo_history(request: Request, dataset: str, snapshot: Optional[int] = No
                                         metric, metric_offset)
         result["email"] = weekly_history.recipients(BYO_HISTORY_DB, username, dataset)
         result["smtp_issues"] = smtp_configuration_issues()
-        if dataset != weekly_history.DEMO:
+        if dataset not in weekly_history.DEMO_DATASETS:
             frame = _read_byo_dataset(_byo_path(dataset))
             result["dataset_columns"] = [str(c) for c in frame.columns]
             result["key_candidates"] = weekly_history.key_candidates(frame)
@@ -10572,7 +10638,7 @@ async def update_byo_history_recipient(request: Request) -> Any:
     action = str(payload.get("action", "add"))
     addresses, invalid = validate_recipients(payload.get("email", ""))
     try:
-        if dataset != weekly_history.DEMO:
+        if dataset not in weekly_history.DEMO_DATASETS:
             if _safe_byo_filename(dataset) != dataset:
                 raise ValueError("Choose a saved dataset.")
             _byo_path(dataset)
@@ -10598,7 +10664,7 @@ async def schedule_byo_history(request: Request) -> Any:
     payload = await request.json()
     dataset = str(payload.get("dataset", ""))
     try:
-        if dataset == weekly_history.DEMO or _safe_byo_filename(dataset) != dataset:
+        if dataset in weekly_history.DEMO_DATASETS or _safe_byo_filename(dataset) != dataset:
             raise ValueError("Choose a saved dataset, not the sample.")
         frame = _read_byo_dataset(_byo_path(dataset))
         weekly_history.initialize(BYO_HISTORY_DB)
@@ -10617,7 +10683,7 @@ async def refresh_byo_history(request: Request) -> Any:
     payload = await request.json()
     dataset = str(payload.get("dataset", ""))
     try:
-        if dataset == weekly_history.DEMO or _safe_byo_filename(dataset) != dataset:
+        if dataset in weekly_history.DEMO_DATASETS or _safe_byo_filename(dataset) != dataset:
             raise ValueError("Choose a saved dataset, not the sample.")
         frame = _read_byo_dataset(_byo_path(dataset))
         weekly_history.initialize(BYO_HISTORY_DB)

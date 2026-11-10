@@ -59,6 +59,8 @@ def initialize(path):
         conn.execute("BEGIN IMMEDIATE")
         if not conn.execute("SELECT 1 FROM snapshots WHERE owner=? AND dataset=?", (DEMO, DEMO)).fetchone():
             seed_demo(conn)
+        if not conn.execute("SELECT 1 FROM snapshots WHERE owner=? AND dataset=?", (DEMO_TRENDS, DEMO_TRENDS)).fetchone():
+            seed_trends_demo(conn)
 
 
 def seed_demo(conn):
@@ -92,6 +94,175 @@ def seed_demo(conn):
         conn.execute("INSERT INTO snapshots(owner,dataset,captured_at,key_column,data) VALUES(?,?,?,?,?)",
                      (DEMO, DEMO, captured.isoformat(), "Claim ID",
                       json.dumps({"columns": columns, "rows": [dict(zip(columns, r)) for r in records]})))
+
+
+DEMO_TRENDS = "__demo_trends__"
+DEMO_DATASETS = (DEMO, DEMO_TRENDS)
+
+
+def seed_trends_demo(conn):
+    """Ten synthetic weeks with planted anomalies so trends and flags have something to show."""
+    import random
+    rng = random.Random(20260105)
+    columns = ["Claim ID", "Bene ID", "Claim From DT", "Provider ID", "Diagnosis Code",
+               "Claim Type", "Claim Pmt Amt", "Bene Pmt Amt"]
+    diagnoses = ["I10", "E11.9", "J44.9", "M54.5", "I25.1", "E78.5", "J18.9", "I50.9"]
+    next_id = [2001]
+
+    def new_row(payment_scale=1.0):
+        number = next_id[0]
+        next_id[0] += 1
+        return {"Claim ID": f"CLM-{number:04}", "Bene ID": f"BENE-{number:04}",
+                "Claim From DT": f"2026-01-{rng.randint(1, 28):02}", "Provider ID": f"PRV-{rng.randint(1, 40):03}",
+                "Diagnosis Code": rng.choice(diagnoses), "Claim Type": rng.choice(["Inpatient", "Outpatient"]),
+                "Claim Pmt Amt": round(rng.uniform(600, 1800) * payment_scale), "Bene Pmt Amt": rng.choice([40, 40, 40, 55])}
+
+    rows = [new_row() for _ in range(80)]
+    for r in rng.sample(rows, 3):
+        r["Claim Pmt Amt"] = None
+    weeks = []
+    for week in range(10):
+        if week:
+            rows = [dict(r) for r in rows]
+            for _ in range(rng.randint(2, 4)):
+                rows.append(new_row())
+            for r in rows:
+                if r["Claim Pmt Amt"] is not None:
+                    r["Claim Pmt Amt"] = max(100, r["Claim Pmt Amt"] + rng.randint(-60, 90)) if rng.random() < 0.05 else r["Claim Pmt Amt"]
+            if rng.random() < 0.5:
+                rng.choice(rows)["Provider ID"] = None
+        if week == 5:
+            for source in rng.sample(rows[:60], 6):
+                copy = dict(source)
+                copy["Claim ID"] = f"CLM-{next_id[0]:04}"
+                next_id[0] += 1
+                rows.append(copy)
+        if week == 7:
+            for r in rng.sample(rows, 14):
+                r["Claim Pmt Amt"] = None
+        if week == 9:
+            rows = [r for r in rows if rng.random() > 0.3]
+            for r in rows:
+                if r["Claim Pmt Amt"] is not None:
+                    r["Claim Pmt Amt"] = round(r["Claim Pmt Amt"] * 1.45)
+        elif week == 8:
+            for r in rows:
+                if r["Claim Pmt Amt"] is None and rng.random() < 0.7:
+                    r["Claim Pmt Amt"] = round(rng.uniform(600, 1800))
+        weeks.append([dict(r) for r in rows])
+    first = datetime.now(timezone.utc).date() - timedelta(days=63)
+    for i, records in enumerate(weeks):
+        captured = datetime.combine(first + timedelta(days=7 * i), datetime.min.time(), timezone.utc)
+        conn.execute("INSERT INTO snapshots(owner,dataset,captured_at,key_column,data) VALUES(?,?,?,?,?)",
+                     (DEMO_TRENDS, DEMO_TRENDS, captured.isoformat(), "Claim ID",
+                      json.dumps({"columns": columns, "rows": records})))
+
+
+def _is_null(value):
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def snapshot_metrics(data, key):
+    rows, columns = data["rows"], data["columns"]
+    count = len(rows)
+    nulls = {c: sum(_is_null(r.get(c)) for r in rows) for c in columns}
+    total_cells = count * len(columns)
+    null_total = sum(nulls.values())
+    others = [c for c in columns if c != key]
+    signatures = [json.dumps([r.get(c) for c in others], default=str) for r in rows]
+    duplicates = count - len(set(signatures))
+    means = {}
+    for c in others:
+        present = [r.get(c) for r in rows if not _is_null(r.get(c))]
+        numeric = [_number(v) for v in present]
+        if present and all(v is not None for v in numeric):
+            means[c] = sum(numeric) / len(numeric)
+    return {"rows": count, "nulls": nulls, "null_total": null_total,
+            "null_rate": round(100 * null_total / total_cells, 2) if total_cells else 0.0,
+            "completeness": round(100 - 100 * null_total / total_cells, 2) if total_cells else 100.0,
+            "duplicates": duplicates, "duplicate_rate": round(100 * duplicates / count, 2) if count else 0.0,
+            "means": means}
+
+
+def _zscore(series, i, floor):
+    """Score the latest week-over-week change against the earlier changes in the series."""
+    deltas = [series[j] - series[j - 1] for j in range(1, i + 1)]
+    current, prior = deltas[-1], deltas[:-1]
+    if len(prior) < 3:
+        return None
+    mean = sum(prior) / len(prior)
+    spread = (sum((d - mean) ** 2 for d in prior) / len(prior)) ** 0.5
+    return (current - mean) / max(spread, floor)
+
+
+def _times(ratio):
+    text = f"{ratio:.1f}".rstrip("0").rstrip(".")
+    return f"{text}×"
+
+
+def detect_anomalies(snapshots, metrics, threshold=2.0):
+    found = []
+    columns = list(dict.fromkeys(c for m in metrics for c in m["nulls"]))
+    means_columns = list(dict.fromkeys(c for m in metrics for c in m["means"]))
+    for i in range(1, len(snapshots)):
+        snap, cur, prev = snapshots[i], metrics[i], metrics[i - 1]
+
+        def add(metric, column, z, message, bad):
+            if z is not None and abs(z) >= threshold:
+                found.append({"snapshot_id": snap["id"], "date": snap["captured_at"], "metric": metric,
+                              "column": column, "z": round(z, 1), "severity": "high" if abs(z) >= 3 else "medium",
+                              "direction": "bad" if bad else "good", "message": message})
+
+        series = [m["rows"] for m in metrics[:i + 1]]
+        z = _zscore(series, i, max(1.0, 0.01 * prev["rows"]))
+        if z is not None and prev["rows"]:
+            change = 100 * (cur["rows"] - prev["rows"]) / prev["rows"]
+            word = "dropped" if change < 0 else "jumped"
+            add("rows", None, z, f"Row volume {word} {abs(change):.0f}% this week ({prev['rows']:,} → {cur['rows']:,}).", change < 0)
+
+        for column in columns:
+            before, after = prev["nulls"].get(column, 0), cur["nulls"].get(column, 0)
+            rates = [100 * m["nulls"].get(column, 0) / m["rows"] if m["rows"] else 0 for m in metrics[:i + 1]]
+            z = _zscore(rates, i, 0.75)
+            if before == after:
+                continue
+            if after > before:
+                text = (f"{column} nulls jumped {_times(after / before)} this week ({before:,} → {after:,} rows)."
+                        if before else f"{column} nulls appeared this week: {after:,} rows are now empty.")
+            else:
+                text = f"{column} nulls fell from {before:,} to {after:,} rows this week."
+            add("nulls", column, z, text, after > before)
+
+        series = [m["duplicate_rate"] for m in metrics[:i + 1]]
+        z = _zscore(series, i, 0.5)
+        if prev["duplicates"] != cur["duplicates"]:
+            add("duplicates", None, z, f"Duplicate rows {'rose' if cur['duplicates'] > prev['duplicates'] else 'fell'} "
+                f"from {prev['duplicates']:,} to {cur['duplicates']:,} this week ({cur['duplicate_rate']:.1f}% of rows).",
+                cur["duplicates"] > prev["duplicates"])
+
+        series = [m["completeness"] for m in metrics[:i + 1]]
+        z = _zscore(series, i, 0.3)
+        if prev["completeness"] != cur["completeness"]:
+            add("completeness", None, z, f"Completeness {'improved' if cur['completeness'] > prev['completeness'] else 'fell'} "
+                f"from {prev['completeness']:.1f}% to {cur['completeness']:.1f}% this week.", cur["completeness"] < prev["completeness"])
+
+        for column in means_columns:
+            if column not in prev["means"] or column not in cur["means"] or not prev["means"][column]:
+                continue
+            values = [m["means"].get(column) for m in metrics[:i + 1]]
+            if any(v is None for v in values):
+                continue
+            z = _zscore(values, i, max(0.02 * abs(prev["means"][column]), 1e-9))
+            change = 100 * (cur["means"][column] - prev["means"][column]) / abs(prev["means"][column])
+            add("distribution", column, z, f"Average {column} shifted {change:+.0f}% this week "
+                f"({prev['means'][column]:,.0f} → {cur['means'][column]:,.0f}).", True)
+    return found
 
 
 def frame_data(frame, key):
@@ -209,7 +380,7 @@ def compare(before, after, key):
 
 
 def history(path, owner, dataset, selected=None, offset=0, changed_only=False, metric="", metric_offset=0):
-    actual_owner = DEMO if dataset == DEMO else owner
+    actual_owner = dataset if dataset in DEMO_DATASETS else owner
     with connect(path) as conn:
         schedule = conn.execute("SELECT key_column,next_run,error FROM schedules WHERE owner=? AND dataset=?",
                                 (actual_owner, dataset)).fetchone()
@@ -217,12 +388,20 @@ def history(path, owner, dataset, selected=None, offset=0, changed_only=False, m
                             (actual_owner, dataset)).fetchall()
     snapshots = [{"id": r["id"], "captured_at": r["captured_at"], "key": r["key_column"],
                   "data": json.loads(r["data"])} for r in rows]
+    metrics = [snapshot_metrics(s["data"], s["key"]) for s in snapshots]
+    anomalies = detect_anomalies(snapshots, metrics)
+    trends = {"weeks": [{"id": s["id"], "captured_at": s["captured_at"], "rows": m["rows"],
+                         "completeness": m["completeness"], "duplicate_rate": m["duplicate_rate"],
+                         "duplicates": m["duplicates"], "null_rate": m["null_rate"]}
+                        for s, m in zip(snapshots, metrics)],
+              "anomalies": anomalies}
     timeline = []
     for i, snap in enumerate(snapshots):
         summary = compare(snapshots[i - 1]["data"], snap["data"], snap["key"]) if i else None
         if summary:
             summary = {k: v for k, v in summary.items() if k not in ("details", "drilldowns")}
-        timeline.append({"id": snap["id"], "captured_at": snap["captured_at"], "summary": summary})
+        timeline.append({"id": snap["id"], "captured_at": snap["captured_at"], "summary": summary,
+                         "anomaly_count": sum(a["snapshot_id"] == snap["id"] for a in anomalies)})
     if selected is not None and not any(s["id"] == selected for s in snapshots):
         raise ValueError("Snapshot not found for this dataset.")
     index = next((i for i, s in enumerate(snapshots) if s["id"] == selected), len(snapshots) - 1)
@@ -245,7 +424,7 @@ def history(path, owner, dataset, selected=None, offset=0, changed_only=False, m
         comparison["details_total"] = len(details)
         comparison["offset"] = max(0, offset)
         comparison["details"] = details[comparison["offset"]:comparison["offset"] + 50]
-    return {"demo": dataset == DEMO, "schedule": dict(schedule) if schedule else None,
+    return {"demo": dataset in DEMO_DATASETS, "trends": trends, "schedule": dict(schedule) if schedule else None,
             "timeline": timeline, "selected": current["id"] if current else None,
             "identity_column": current["key"] if current else None,
             "before_date": previous["captured_at"] if previous else None,
