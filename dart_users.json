@@ -28,6 +28,12 @@
         "landing_page": "home",
         "updated_at": "2026-08-26T21:03:17+00:00"
       },
+      "favorites": {
+        "medicare": [],
+        "byo": [
+          "byo-reconcile"
+        ]
+      },
       "aws": {
         "access_key_id": "",
         "secret_access_key": "",
@@ -46,7 +52,7 @@
         "share_url": "",
         "account_info": {}
       },
-      "updated_at": "2026-10-04T14:57:39.089509+00:00"
+      "updated_at": "2026-11-15T20:23:03.691783+00:00"
     },
     "demo": {
       "password": "",
@@ -58,6 +64,11 @@
         "role": ""
       },
       "persona": null,
+      "favorites": {
+        "medicaid": [
+          "medicaid-heatmap"
+        ]
+      },
       "aws": {
         "access_key_id": "",
         "secret_access_key": "",
@@ -76,7 +87,7 @@
         "share_url": "",
         "account_info": {}
       },
-      "updated_at": "2026-10-04T14:57:39.091511+00:00"
+      "updated_at": "2026-11-15T20:23:03.691783+00:00"
     },
     "landingcheck54bad525": {
       "password": "pw12345",
@@ -86,7 +97,28 @@
         "email": "",
         "organization": "",
         "role": ""
-      }
+      },
+      "persona": null,
+      "favorites": {},
+      "aws": {
+        "access_key_id": "",
+        "secret_access_key": "",
+        "region": "",
+        "bucket": "",
+        "session_token": "",
+        "account_info": {}
+      },
+      "microsoft": {
+        "tenant_id": "",
+        "client_id": "",
+        "client_secret": "",
+        "site_url": "",
+        "drive_name": "",
+        "folder_path": "",
+        "share_url": "",
+        "account_info": {}
+      },
+      "updated_at": "2026-11-15T20:23:03.691783+00:00"
     }
   }
 }

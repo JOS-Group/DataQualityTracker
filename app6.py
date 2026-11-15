@@ -394,6 +394,7 @@ def _init_users_db() -> None:
                     ms_folder_path TEXT DEFAULT '',
                     ms_share_url TEXT DEFAULT '',
                     ms_account_info_json TEXT DEFAULT '',
+                    favorites_json TEXT DEFAULT '',
                     updated_at TEXT
                 )
             """)
@@ -471,6 +472,7 @@ def _init_users_db() -> None:
                 ("ms_folder_path", "TEXT DEFAULT ''"),
                 ("ms_share_url", "TEXT DEFAULT ''"),
                 ("ms_account_info_json", "TEXT DEFAULT ''"),
+                ("favorites_json", "TEXT DEFAULT ''"),
             ]:
                 if col_name not in existing_cols:
                     try:
@@ -496,8 +498,8 @@ def _init_users_db() -> None:
                                 aws_region, aws_bucket, aws_session_token, aws_account_info_json,
                                 ms_tenant_id, ms_client_id, ms_client_secret, ms_site_url,
                                 ms_drive_name, ms_folder_path, ms_share_url, ms_account_info_json,
-                                updated_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                favorites_json, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             ON CONFLICT(username) DO UPDATE SET
                                 password = CASE WHEN excluded.password != '' THEN excluded.password ELSE users.password END,
                                 display_name = CASE WHEN excluded.display_name != '' THEN excluded.display_name ELSE users.display_name END,
@@ -519,6 +521,7 @@ def _init_users_db() -> None:
                                 ms_folder_path = CASE WHEN excluded.ms_folder_path != '' THEN excluded.ms_folder_path ELSE users.ms_folder_path END,
                                 ms_share_url = CASE WHEN excluded.ms_share_url != '' THEN excluded.ms_share_url ELSE users.ms_share_url END,
                                 ms_account_info_json = CASE WHEN excluded.ms_account_info_json != '' THEN excluded.ms_account_info_json ELSE users.ms_account_info_json END,
+                                favorites_json = CASE WHEN excluded.favorites_json != '' THEN excluded.favorites_json ELSE users.favorites_json END,
                                 updated_at = excluded.updated_at
                         """, (
                             uname,
@@ -543,6 +546,7 @@ def _init_users_db() -> None:
                             ms_data.get("folder_path", ""),
                             ms_data.get("share_url", ""),
                             json.dumps(ms_data.get("account_info", {})) if isinstance(ms_data.get("account_info"), dict) else "",
+                            json.dumps(udata.get("favorites", {})) if isinstance(udata.get("favorites"), dict) else "",
                             udata.get("updated_at", datetime.now(timezone.utc).isoformat()),
                         ))
                     conn.commit()
@@ -830,6 +834,12 @@ def load_users() -> Dict[str, Any]:
                             ms_account_info_obj = json.loads(r["ms_account_info_json"])
                     except Exception:
                         ms_account_info_obj = {}
+                    favorites_obj = {}
+                    try:
+                        if "favorites_json" in r.keys() and r["favorites_json"]:
+                            favorites_obj = json.loads(r["favorites_json"])
+                    except Exception:
+                        favorites_obj = {}
                     users_out[r["username"]] = {
                         "password": r["password"] or "",
                         "created_at": r["created_at"] or "local prototype",
@@ -840,6 +850,7 @@ def load_users() -> Dict[str, Any]:
                             "role": r["role"] or "",
                         },
                         "persona": persona_obj,
+                        "favorites": favorites_obj if isinstance(favorites_obj, dict) else {},
                         "aws": {
                             "access_key_id": r["aws_access_key_id"] or "",
                             "secret_access_key": r["aws_secret_access_key"] or "",
@@ -887,8 +898,8 @@ def save_users(data: Dict[str, Any]) -> None:
                         aws_region, aws_bucket, aws_session_token, aws_account_info_json,
                         ms_tenant_id, ms_client_id, ms_client_secret, ms_site_url,
                         ms_drive_name, ms_folder_path, ms_share_url, ms_account_info_json,
-                        updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        favorites_json, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(username) DO UPDATE SET
                         password = excluded.password,
                         display_name = excluded.display_name,
@@ -910,6 +921,7 @@ def save_users(data: Dict[str, Any]) -> None:
                         ms_folder_path = excluded.ms_folder_path,
                         ms_share_url = excluded.ms_share_url,
                         ms_account_info_json = excluded.ms_account_info_json,
+                        favorites_json = excluded.favorites_json,
                         updated_at = excluded.updated_at
                 """, (
                     uname,
@@ -934,6 +946,7 @@ def save_users(data: Dict[str, Any]) -> None:
                     ms_data.get("folder_path", ""),
                     ms_data.get("share_url", ""),
                     json.dumps(ms_data.get("account_info", {})) if isinstance(ms_data.get("account_info"), dict) else "",
+                    json.dumps(udata.get("favorites", {})) if isinstance(udata.get("favorites"), dict) else "",
                     datetime.now(timezone.utc).isoformat(),
                 ))
             conn.commit()
@@ -1964,6 +1977,7 @@ def public_user(username: Optional[str]) -> Optional[Dict[str, Any]]:
         return None
     profile = user.get("profile", {})
     persona = user.get("persona") if isinstance(user.get("persona"), dict) else None
+    favorites = user.get("favorites") if isinstance(user.get("favorites"), dict) else {}
     aws_cfg = get_user_aws_config(username)
     ms_cfg = get_user_microsoft_config(username)
     return {
@@ -1975,6 +1989,7 @@ def public_user(username: Optional[str]) -> Optional[Dict[str, Any]]:
         "created_at": user.get("created_at", "local prototype"),
         "storage_file": "dart_users.db",
         "has_persona": bool(persona),
+        "favorites": favorites,
         "aws_config": {
             "access_key_id": aws_cfg.get("access_key_id", ""),
             "has_secret_key": bool(aws_cfg.get("secret_access_key", "")),
@@ -6763,8 +6778,30 @@ HTML = r'''
     .suggestedCard{position:relative;display:flex;align-items:center;gap:13px;padding:15px 16px;border:1px solid #e8d79b;border-radius:16px;background:#fff;color:#233044;text-align:left;font:inherit;cursor:pointer;box-shadow:0 6px 18px rgba(26,35,48,.06);transition:transform .18s,box-shadow .18s,border-color .18s}.suggestedCard:hover,.suggestedCard:focus-visible{transform:translateY(-3px);border-color:#c99a12;box-shadow:0 14px 30px rgba(26,35,48,.14);outline:none}
     .suggestedRank{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;flex:none;font-size:.78rem;font-weight:800;background:linear-gradient(135deg,#0f1f3d,#1c3768);color:#f4d58d}.suggestedIcon{font-size:1.5rem;flex:none}.suggestedText{display:grid;gap:3px;min-width:0;flex:1}.suggestedText small{color:#667085;font-size:.8rem;line-height:1.4}.suggestedText em{justify-self:start;font-style:normal;font-size:.68rem;font-weight:800;text-transform:uppercase;letter-spacing:.05em;padding:2px 8px;border-radius:99px;background:#f4d58d;color:#5b4300}
     .suggestedCard .launchArrow{opacity:.5}.suggestedCard:hover .launchArrow{opacity:1;transform:none}.suggestedEmpty{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}.suggestedEmpty .suggestedHead{margin:0;display:contents}
-    .launchCard.isSuggested{border-color:#d6bb73}.suggestedStar{position:absolute;top:8px;right:12px;color:#c99a12;font-size:.95rem}.launchCard{position:relative}
+    .launchCard.isSuggested{border-color:#d6bb73}.suggestedStar{position:absolute;top:8px;right:44px;color:#c99a12;font-size:.95rem}.launchCard{position:relative}
     :root[data-theme="dark"] .suggested{background:linear-gradient(135deg,#1b1a14,#26220f 60%,#1b1a14);border-color:#5a4a1a;box-shadow:0 10px 28px rgba(0,0,0,.35)}:root[data-theme="dark"] .suggestedCard{background:#1d2630;border-color:#4a4222;color:#edf0f3}:root[data-theme="dark"] .suggestedText small{color:#a9b3bf}:root[data-theme="dark"] .suggestedCard:hover{border-color:#d4af37}:root[data-theme="dark"] .suggestedStar{color:#f4d58d}:root[data-theme="dark"] .suggestedHead .personaTag{background:#1d2630;color:#f4d58d;border-color:#4a4222}    .fieldWide{grid-column:1/-1}.focusChips{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}.focusChip{cursor:pointer;margin:0}.focusChip input{position:absolute;opacity:0;pointer-events:none}.focusChip span{display:inline-flex;align-items:center;border:1px solid #e2d4a5;background:#fff;color:#6f5400;border-radius:999px;padding:7px 13px;font-size:.84rem;font-weight:800;transition:all .15s ease}.focusChip:hover span{border-color:#c99a12}.focusChip input:checked+span{background:linear-gradient(135deg,#d4af37,#b8860b);border-color:#b8860b;color:#fff;box-shadow:0 4px 12px rgba(184,134,11,.28)}.focusChip input:focus-visible+span{outline:2px solid #b8860b;outline-offset:2px}
+
+    /* Favorites Section */
+    .favoritesPanel{margin:6px 0 22px;padding:20px 22px;border-radius:20px;border:1px solid #e1c66f;background:linear-gradient(135deg,#fffdf7,#fff8e6 60%,#fffdfa);box-shadow:0 10px 28px rgba(160,120,15,.10)}
+    .favoritesHead{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:14px}
+    .favoritesHead h2{margin:4px 0 4px;font-size:1.3rem;display:flex;align-items:center;gap:8px;color:#172638}
+    .favoritesHead h2 .favStarBadge{color:#c99a12;font-size:1.15rem}
+    .favoritesHead p{margin:0;max-width:640px}
+    .favoritesGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+    .favoritesEmptyHint{padding:14px 16px;border:1px dashed #d9bb6a;border-radius:14px;background:rgba(255,255,255,.7);color:#5b6878;font-size:.85rem;display:flex;align-items:center;gap:10px}
+    .favoritesEmptyHint b{color:#8f6c12}
+    :root[data-theme="dark"] .favoritesPanel{background:linear-gradient(135deg,#1b1a14,#252212 60%,#1b1a14);border-color:#5a4a1a;box-shadow:0 10px 28px rgba(0,0,0,.35)}
+    :root[data-theme="dark"] .favoritesHead h2{color:#edf0f3}
+    :root[data-theme="dark"] .favoritesEmptyHint{background:rgba(29,38,48,.6);border-color:#4a4222;color:#a9b3bf}
+    :root[data-theme="dark"] .favoritesEmptyHint b{color:#f4d58d}
+
+    .launchFavBtn{position:absolute;top:9px;right:10px;width:30px;height:30px;border-radius:50%;border:1px solid transparent;background:transparent;color:#b89228;font-size:1.15rem;line-height:1;display:grid;place-items:center;cursor:pointer;opacity:0;transform:scale(.85);transition:opacity .18s ease,transform .18s ease,background .18s ease,border-color .18s ease;z-index:3;padding:0}
+    .launchFavBtn.isFav{opacity:1;transform:scale(1);color:#c99a12;background:rgba(201,154,18,.12);border-color:rgba(201,154,18,.35)}
+    .launchCard:hover .launchFavBtn,.launchCard:focus-within .launchFavBtn{opacity:1;transform:scale(1);background:rgba(201,154,18,.08);border-color:rgba(201,154,18,.25)}
+    .launchFavBtn:hover{transform:scale(1.15)!important;color:#996c00!important;background:#fff2ba!important;border-color:#c99a12!important;box-shadow:0 2px 8px rgba(201,154,18,.3)}
+    :root[data-theme="dark"] .launchFavBtn{color:#edcf82}
+    :root[data-theme="dark"] .launchFavBtn.isFav{background:rgba(237,207,130,.15);border-color:rgba(237,207,130,.4);color:#f4d58d}
+    :root[data-theme="dark"] .launchFavBtn:hover{background:#352e18!important;color:#f4d58d!important;border-color:#d4af37!important}
     .suggestedFocus{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}.suggestedFocus i{font-style:normal;font-size:.68rem;font-weight:800;color:#6f5400;background:#fff4cc;border:1px solid #e1c66f;border-radius:999px;padding:2px 8px}
     .standingQ{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:0 0 14px;padding:16px 20px;border-radius:18px;border:1px solid #e1c66f;border-left:5px solid #c99a12;background:linear-gradient(135deg,#fffdf8,#fff4cc)}.standingQIcon{flex:none;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,#d4af37,#b8860b);color:#fff;font-weight:900;font-size:1.15rem}.standingQText{flex:1;min-width:220px}.standingQText p{margin:2px 0 0;font-size:1.05rem;font-weight:700;color:#3c310f}
     :root[data-theme="dark"] .focusChip span{background:#1d2630;border-color:#4a4222;color:#f4d58d}:root[data-theme="dark"] .suggestedFocus i{background:#26220f;border-color:#5a4a1a;color:#f4d58d}:root[data-theme="dark"] .standingQ{background:linear-gradient(135deg,#1b1a14,#26220f);border-color:#5a4a1a}:root[data-theme="dark"] .standingQText p{color:#f4e9c4}
@@ -6984,11 +7021,97 @@ function suggestedPanel(){
   const tags=[p.role||'General',(p.depth||'Balanced')+' detail'].map(x=>`<span class="personaTag">${esc(x)}</span>`).join('');
   return `<section class="suggested"><div class="suggestedHead"><div><span class="welcomeEyebrow">Suggested for you</span><h2>Best fit for ${esc(p.role||'your role')}</h2><p class="muted">${esc(e.lens_summary||'Pages chosen to match your persona.')}</p></div><div class="suggestedTags">${tags}<button type="button" class="btn ghost small" onclick="showPage('settings')">Adjust persona</button></div></div><div class="suggestedGrid">${recs.map((r,i)=>`<button type="button" class="suggestedCard" onclick="showPage('${r.id}')"><span class="suggestedRank">${i+1}</span><span class="suggestedIcon">${pageIcons[r.id]||'◆'}</span><span class="suggestedText"><b>${esc(r.label)}</b>${i===0?'<em>Best match</em>':''}<small>${esc(r.reason)}</small>${(r.focus||[]).length?`<span class="suggestedFocus">${(r.focus||[]).map(x=>`<i>${esc(x)}</i>`).join('')}</span>`:''}</span><span class="launchArrow">→</span></button>`).join('')}</div></section>`;
 }
+function favoritesForWorkspace(ws){
+  const favs=state.meta?.favorites||state.meta?.auth_user?.favorites||{};
+  const list=favs[ws]||[];
+  return Array.isArray(list)?list:[];
+}
+function isTabFavorited(ws,id){
+  return favoritesForWorkspace(ws).includes(id);
+}
+async function toggleFavorite(ws,id,event){
+  if(event){
+    event.stopPropagation();
+    event.preventDefault();
+  }
+  const curFavs=JSON.parse(JSON.stringify(state.meta?.favorites||state.meta?.auth_user?.favorites||{}));
+  const list=Array.isArray(curFavs[ws])?[...curFavs[ws]]:[];
+  const idx=list.indexOf(id);
+  const willFavorite=idx===-1;
+  if(willFavorite){
+    list.push(id);
+  }else{
+    list.splice(idx,1);
+  }
+  curFavs[ws]=list;
+  if(!state.meta)state.meta={};
+  state.meta.favorites=curFavs;
+  if(state.meta.auth_user)state.meta.auth_user.favorites=curFavs;
+  await render();
+  try{
+    const res=await postJson('/api/user/favorites',{workspace:ws,page_id:id,is_favorite:willFavorite,favorites:curFavs});
+    if(res&&res.favorites){
+      state.meta.favorites=res.favorites;
+      if(state.meta.auth_user)state.meta.auth_user.favorites=res.favorites;
+    }
+    toast(willFavorite?`Added to ${workspaceLabels[ws]||ws} Favorites ★`:`Removed from ${workspaceLabels[ws]||ws} Favorites`);
+  }catch(err){
+    console.error('Failed to save favorite',err);
+    toast('Could not save favorite: '+String(err.message||err));
+  }
+}
+function favoritesPanel(){
+  const ws=state.workspace;
+  const favIds=favoritesForWorkspace(ws);
+  const allowed=currentWorkspacePageIds();
+  const validFavs=favIds.filter(id=>allowed.has(id)&&id!==workspaceHomes[ws]&&id!=='profile'&&id!=='settings');
+  const favCount=validFavs.length;
+  const pageMap=new Map();
+  navGroupsFor(ws).forEach(g=>{
+    g[1].forEach(([id,label])=>{
+      pageMap.set(id,{label,group:g[0]});
+    });
+  });
+  let cardsHtml='';
+  if(!favCount){
+    cardsHtml=`<div class="favoritesEmptyHint"><span>⭐ <b>No favorites saved yet.</b> Hover over any tab card below and click the <b>☆</b> star to pin your favorites for the <b>${esc(workspaceLabels[ws]||ws)}</b> workspace.</span></div>`;
+  }else{
+    cardsHtml=`<div class="favoritesGrid">${validFavs.map(id=>{
+      const pInfo=pageMap.get(id)||{label:id,group:''};
+      return `<div class="launchCard isFavorited" onclick="showPage('${id}')" role="button" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showPage('${id}');}">
+        <span class="launchIcon">${pageIcons[id]||'◆'}</span>
+        <span class="launchText"><b>${esc(pInfo.label)}</b><small>${esc(pageBlurbs[id]||pInfo.group||'')}</small></span>
+        <button type="button" class="launchFavBtn isFav" onclick="toggleFavorite('${ws}','${id}',event)" title="Remove from favorites" aria-label="Remove from favorites">★</button>
+        <span class="launchArrow">→</span>
+      </div>`;
+    }).join('')}</div>`;
+  }
+  return `<section class="favoritesPanel" id="favoritesSection">
+    <div class="favoritesHead">
+      <div>
+        <span class="welcomeEyebrow">Quick Access</span>
+        <h2><span class="favStarBadge">★</span> Favorites</h2>
+        <p class="muted">Your pinned tabs for fast access in the ${esc(workspaceLabels[ws]||ws)} workspace.</p>
+      </div>
+      ${favCount?`<span class="pill Stable" style="font-size:.76rem;padding:3px 10px">★ ${favCount} Pinned</span>`:''}
+    </div>
+    ${cardsHtml}
+  </section>`;
+}
 function workspaceLaunchpad(title,sub){
   const ws=state.workspace,sug=new Set(suggestedPages().map(r=>r.id));
   const groups=navGroupsFor(ws).map(g=>[g[0],g[1].filter(([id])=>id!==workspaceHomes[ws]&&id!=='profile'&&id!=='settings')]).filter(g=>g[1].length);
   if(!groups.length)return '';
-  return `${standingQuestionCard()}${suggestedPanel()}<section class="launchpad"><div class="welcomeHeading"><div><span class="welcomeEyebrow">Jump to</span><h2>${esc(title)}</h2></div><p>${esc(sub)}</p></div>${groups.map(g=>`<div class="launchGroup"><div class="launchGroupTitle">${esc(g[0])}</div><div class="launchGrid">${g[1].map(([id,label])=>`<button type="button" class="launchCard ${sug.has(id)?'isSuggested':''}" onclick="showPage('${id}')"><span class="launchIcon">${pageIcons[id]||'◆'}</span><span class="launchText"><b>${esc(label)}</b><small>${esc(pageBlurbs[id]||'')}</small></span>${sug.has(id)?'<span class="suggestedStar" title="Suggested for your persona">★</span>':''}<span class="launchArrow">→</span></button>`).join('')}</div></div>`).join('')}</section>`;
+  return `${standingQuestionCard()}${suggestedPanel()}${favoritesPanel()}<section class="launchpad"><div class="welcomeHeading"><div><span class="welcomeEyebrow">Jump to</span><h2>${esc(title)}</h2></div><p>${esc(sub)}</p></div>${groups.map(g=>`<div class="launchGroup"><div class="launchGroupTitle">${esc(g[0])}</div><div class="launchGrid">${g[1].map(([id,label])=>{
+    const isFav=isTabFavorited(ws,id);
+    return `<div class="launchCard ${sug.has(id)?'isSuggested':''} ${isFav?'isFavorited':''}" onclick="showPage('${id}')" role="button" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showPage('${id}');}">
+      <span class="launchIcon">${pageIcons[id]||'◆'}</span>
+      <span class="launchText"><b>${esc(label)}</b><small>${esc(pageBlurbs[id]||'')}</small></span>
+      ${sug.has(id)?'<span class="suggestedStar" title="Suggested for your persona">★</span>':''}
+      <button type="button" class="launchFavBtn ${isFav?'isFav':''}" onclick="toggleFavorite('${ws}','${id}',event)" title="${isFav?'Remove from Favorites':'Add to Favorites'}" aria-label="${isFav?'Remove from Favorites':'Add to Favorites'}">${isFav?'★':'☆'}</button>
+      <span class="launchArrow">→</span>
+    </div>`;
+  }).join('')}</div></div>`).join('')}</section>`;
 }
 const personaLandingLabels={welcome:'Explore workspaces',auto:'Recommended for my role',home:'Command Center',riskcenter:'Risk Center',actioncenter:'Remediation Center',catalog:'Mapping Catalog',insights:'AI Insights','medicaid-home':'Medicaid Home','byo-home':'DIY Home','byo-reconcile':'Reconciliation Studio','byo-compare':'Compare Lab','byo-quality':'Schema & Quality','byo-raw':'Raw Data Editor','byo-email':'Email Alerts','byo-ai':'AI Analyst'};
 const personaFocusOptions=['Data quality','Claims','Reporting impact','Remediation','AI insights','Automation'];
@@ -7308,7 +7431,7 @@ const learnContent={
     tabs:[
       {id:'byo-home',group:'Workspace',name:"DIY Home",problem:"A flexible workspace can be confusing. New users need to know where to start and what is possible.",how:["Summarizes your saved datasets and workspace status.","Shows the typical flow from upload to compare to export.","A Jump to launchpad opens every tool."],extra:"It adapts to what you have saved, so it makes sense from your first upload onwards."},
       {id:'byo-library',group:'Workspace',name:"Dataset Library",problem:"Files scattered across email and drives are hard to find and impossible to govern.",how:["Lists every saved dataset in one persistent library.","Choose which datasets feed the analysis tools.","Download, export or delete files."],extra:"Every ready file is also available to the Raw Data Editor and Email Alerts."},
-      {id:'byo-lab',group:'Workspace',name:"Upload Data",problem:"Getting data into an analysis tool is often the slowest step.",how:["Upload several CSV or XLSX files at once.","Import from a web link or an Amazon S3 bucket.","Duplicate filenames are saved safely with a numeric suffix.","Files are stored in the Data/DIY folder."],extra:"S3 imports stay linked to the source, which enables live monitoring in Email Alerts."},
+      {id:'byo-lab',group:'Workspace',name:"Upload Data",problem:"Getting data into an analysis tool is often the slowest step.",how:["Upload several CSV or XLSX files at once.","Connect an Amazon S3 bucket or import from a web link.","Duplicate filenames are saved safely with a numeric suffix.","Files are stored in the Data/DIY folder."],extra:"S3 connections stay linked to the source, which enables live monitoring in Email Alerts."},
       {id:'byo-raw',group:'Data Tools',name:"Raw Data Editor",problem:"Fixing a value in a saved file normally means reopening it elsewhere, and risking an overwrite.",how:["Pick a saved file and edit cells directly, with search, column filters and paging.","A timestamped backup is created before each save.","Revert pending edits or restore the latest backup.","Optionally check Email Alerts for the same file straight after saving."],extra:"The editor tracks pending changes and highlights modified cells, so you always know what you are about to save."},
       {id:'byo-email',group:'Data Tools',name:"Email Alerts",problem:"Files change, and nobody notices until a report is wrong.",how:["Monitor any saved dataset for new or changed rows.","Choose identity columns, trigger mode and recipients, with rule presets.","For S3-linked datasets, DART polls the bucket and alerts when the remote file changes.","Includes baselines, SMTP testing and a history of every run."],extra:"Each alert remembers the exact file it watches, so alerts never cross over between datasets."},
       {id:'byo-history',group:'Data Tools',name:"Dataset History",problem:"Most tools show only the latest snapshot of a dataset, so trends and quiet changes go unseen. Reviewing history by hand means lining up old files and diffing them yourself.",how:["Follows a dataset across every saved version and lets you switch between Weekly, Monthly, Yearly and Every update views.","Weekly, monthly and yearly views list every period, using the latest version captured in it. A period with no new upload reads No change.","Summary tiles, trend sparklines and anomaly flags show how the data moved and where it moved unusually.","Open any period to see the exact rows and values that were added, removed or changed."],extra:"Use Weekly for routine monitoring, Monthly or Yearly for reporting, and Every update to see each individual refresh. Changes between periods are net changes, so a row added and removed within one period does not appear."},
@@ -8773,8 +8896,8 @@ function byoImportPanel(info){
           )
         }
       </div>
-      <h3>Import from an S3 bucket</h3>
-      <p class="muted">${isUserAws ? 'Your AWS IAM credentials from your user account database are automatically connected. Enter your bucket name or path to list and import files.' : (hasEnvAws ? 'Your AWS IAM credentials from Render environment variables are automatically connected. Enter your bucket name or path to list and import files.' : 'List and select Excel (.xlsx) or CSV files stored in an Amazon S3 bucket. You can enter an S3 bucket name (or full <code>s3://bucket/folder/</code> path), optional prefix, AWS credentials, and region.')}</p>
+      <h3>Connect an S3 bucket</h3>
+      <p class="muted">${isUserAws ? 'Your AWS IAM credentials from your user account database are automatically connected. Enter your bucket name or path to list and connect files.' : (hasEnvAws ? 'Your AWS IAM credentials from Render environment variables are automatically connected. Enter your bucket name or path to list and connect files.' : 'List and select Excel (.xlsx) or CSV files stored in an Amazon S3 bucket. You can enter an S3 bucket name (or full <code>s3://bucket/folder/</code> path), optional prefix, AWS credentials, and region.')}</p>
       <div class="byoS3Fields">
         <input id="byoS3Bucket" type="text" placeholder="Bucket name or s3://bucket/path" value="${esc(defaultBucket)}">
         <input id="byoS3Prefix" type="text" placeholder="Prefix / folder (optional)" value="${esc(s3Ctx.prefix||'')}">
@@ -8813,7 +8936,7 @@ function byoImportPanel(info){
           <ul style="margin:4px 0 6px 18px;padding:0">
             <li><b>User Database Credentials (Recommended):</b> Save your AWS IAM credentials once in <b>Settings</b> &rarr; <b>AWS Account & S3 Buckets</b> so they persist in the SQLite database and auto-connect on every session.</li>
             <li><b>Render Environment Variables:</b> <code>AWS_ACCESS_KEY_ID</code>, <code>AWS_SECRET_ACCESS_KEY</code>, and <code>AWS_DEFAULT_REGION</code> configured in the Render dashboard serve as automatic server fallbacks.</li>
-            <li><b>Direct Form:</b> Enter credentials directly in the boxes above to override saved or environment credentials for a single import.</li>
+            <li><b>Direct Form:</b> Enter credentials directly in the boxes above to override saved or environment credentials for a single connection.</li>
             <li><b>Temporary / SSO Credentials:</b> If using AWS SSO or AssumeRole, paste the temporary Session Token into the Session Token field.</li>
           </ul>
         </div>
@@ -8856,7 +8979,7 @@ function byoS3ResultsHtml(items){
         <input type="text" placeholder="Filter files..." oninput="filterByoS3Rows(this.value)" style="padding:4px 8px;font-size:.76rem;border-radius:6px;width:130px;border:1px solid #d9dfe8;background:#fff;color:#0f172a">
         <button class="btn ghost small" type="button" onclick="byoToggleAllS3(true)" style="padding:4px 8px;font-size:.74rem">Select all</button>
         <button class="btn ghost small" type="button" onclick="byoToggleAllS3(false)" style="padding:4px 8px;font-size:.74rem">Clear</button>
-        <button class="btn small" type="button" onclick="importByoFromS3()" style="padding:5px 12px;font-size:.78rem">Import selected</button>
+        <button class="btn small" type="button" onclick="importByoFromS3()" style="padding:5px 12px;font-size:.78rem">Connect selected</button>
       </div>
     </div>
     <div id="byoS3RowsContainer" style="display:flex;flex-direction:column;gap:6px">
@@ -8989,14 +9112,14 @@ async function importByoFromS3(){
   const ctx=state.byoS3Context||byoS3Context();
   try{
     const r=await fetch('/api/byo/import/s3',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...ctx,keys:checked})});
-    const payload=await r.json().catch(()=>({error:'S3 import failed'}));
-    if(!r.ok)throw new Error(payload.error||'S3 import failed');
+    const payload=await r.json().catch(()=>({error:'S3 connection failed'}));
+    if(!r.ok)throw new Error(payload.error||'S3 connection failed');
     const names=(payload.saved||[]).map(x=>x.name);
     if(names.length){state.byoLeft=state.byoLeft||names[0];if(!state.byoRight&&names.length>1)state.byoRight=names[1];saveByoSelection();}
-    toast(`${names.length} dataset${names.length===1?'':'s'} imported from S3${payload.errors?.length?`, ${payload.errors.length} failed`:''}`);
+    toast(`${names.length} dataset${names.length===1?'':'s'} connected from S3${payload.errors?.length?`, ${payload.errors.length} failed`:''}`);
     state.byoS3Items=null;
     await render();
-  }catch(err){toast('S3 import failed: '+String(err.message||err).slice(0,200));}
+  }catch(err){toast('S3 connection failed: '+String(err.message||err).slice(0,200));}
 }
 function byoSharePointResultsHtml(items){
   if(!items.length)return '<div class="empty" style="margin-top:12px">No matching .csv/.xlsx files found at that link.</div>';
@@ -9945,7 +10068,7 @@ function settingsPage(meta){
         <div class="hero" style="margin-bottom:14px">
           <span class="workspaceBadge">Database storage</span>
           <h1>AWS Account & S3 Buckets</h1>
-          <p>Connect your personal AWS IAM account so you can pull data from your S3 buckets. Your credentials and discovered buckets are saved per-user in your DART SQLite database and automatically connected whenever you import datasets.</p>
+          <p>Connect your personal AWS IAM account so you can pull data from your S3 buckets. Your credentials and discovered buckets are saved per-user in your DART SQLite database and automatically connected whenever you connect datasets.</p>
         </div>
         <div class="grid grid2">
           <div class="panel">
@@ -10666,10 +10789,15 @@ def meta(request: Request) -> Dict[str, Any]:
         "Unique": [int(df[c].nunique(dropna=True)) for c in df.columns],
     }).to_dict("records")
     persisted_persona = current_persona(username) if username else None
+    user_favs = {}
+    if username:
+        user_row = load_users().get("users", {}).get(username, {})
+        user_favs = user_row.get("favorites", {}) if isinstance(user_row.get("favorites"), dict) else {}
     return {
         "auth_user": public_user(username) if username else None,
         "persona": persisted_persona,
         "persona_effects": persona_effects(persisted_persona),
+        "favorites": user_favs,
         "source": STATE["source"],
         "version": APP_VERSION,
         "build_fingerprint": BUILD_FINGERPRINT,
@@ -10708,6 +10836,50 @@ async def persona(request: Request) -> Any:
         "preferred_workspace": normalized["preferred_workspace"],
         "landing_page": normalized["landing_page"],
     }
+
+
+@app.get("/api/user/favorites")
+def get_user_favorites_endpoint(request: Request) -> Any:
+    username = get_session_user(request)
+    if not username:
+        return JSONResponse({"error": "Not logged in."}, status_code=401)
+    user_row = load_users().get("users", {}).get(username, {})
+    user_favs = user_row.get("favorites", {}) if isinstance(user_row.get("favorites"), dict) else {}
+    return {"status": "ok", "favorites": user_favs}
+
+
+@app.post("/api/user/favorites")
+async def save_user_favorites_endpoint(request: Request) -> Any:
+    username = get_session_user(request)
+    if not username:
+        return JSONResponse({"error": "Not logged in."}, status_code=401)
+    body = await request.json()
+    data = load_users()
+    user = data.setdefault("users", {}).setdefault(username, {"password": "", "profile": {}})
+    favs = user.get("favorites")
+    if not isinstance(favs, dict):
+        favs = {}
+    else:
+        favs = dict(favs)
+
+    if "favorites" in body and isinstance(body["favorites"], dict):
+        favs = body["favorites"]
+    elif "workspace" in body and "page_id" in body:
+        ws = str(body["workspace"])
+        pid = str(body["page_id"])
+        is_fav = body.get("is_favorite")
+        ws_favs = list(favs.get(ws, []))
+        if is_fav is True or (is_fav is None and pid not in ws_favs):
+            if pid not in ws_favs:
+                ws_favs.append(pid)
+        else:
+            if pid in ws_favs:
+                ws_favs.remove(pid)
+        favs[ws] = ws_favs
+
+    user["favorites"] = favs
+    save_users(data)
+    return {"status": "ok", "favorites": favs}
 
 
 @app.post("/api/view")
