@@ -324,16 +324,27 @@ BYO_EMAIL_AGENT_MIN_CHECK_SECONDS = max(15, int(os.environ.get("DART_BYO_EMAIL_M
 _BYO_EMAIL_AGENT_THREAD = None
 _BYO_EMAIL_AGENT_THREAD_LOCK = threading.Lock()
 
+# Dataset History alerting and scheduled condition monitors
+BYO_HISTORY_EMAIL_DIR = Path(os.environ.get("DART_BYO_HISTORY_EMAIL_DIR", str(DATA_DIR / "byo_history_email_agent")))
+BYO_HISTORY_EMAIL_TEMPLATE_PATH = BYO_HISTORY_EMAIL_DIR / "automation_templates.json"
+BYO_HISTORY_EMAIL_STATUS_PATH = BYO_HISTORY_EMAIL_DIR / "agent_status.json"
+BYO_HISTORY_EMAIL_HISTORY_PATH = BYO_HISTORY_EMAIL_DIR / "execution_history.jsonl"
+BYO_HISTORY_EMAIL_AGENT_AUTO_RUN = os.environ.get("DART_BYO_HISTORY_EMAIL_AUTO_RUN", "true").strip().lower() in {"1", "true", "yes", "y", "on"}
+BYO_HISTORY_EMAIL_AGENT_MIN_CHECK_SECONDS = max(15, int(os.environ.get("DART_BYO_HISTORY_EMAIL_MIN_CHECK_SECONDS", str(EMAIL_AGENT_MIN_CHECK_SECONDS))))
+_BYO_HISTORY_EMAIL_AGENT_THREAD = None
+_BYO_HISTORY_EMAIL_AGENT_THREAD_LOCK = threading.Lock()
+
 SESSION_COOKIE_NAME = "dart_session"
 SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30  # 30 days
 _ACTIVE_SESSIONS: Dict[str, Dict[str, Any]] = {}
 _SESSION_LOCK = threading.Lock()
 
 EMAIL_OPERATORS = [
-    "Is blank (empty or null)", "Is null / NaN", "Is empty string", "Equals",
-    "Does not equal", "Contains", "Does not contain", "Starts with",
+    "Is blank (empty or null)", "Is not blank (has value)", "Is null / NaN", "Is not null", "Is empty string",
+    "Equals", "Does not equal", "Contains", "Does not contain",
+    "Starts with", "Does not start with", "Ends with", "Does not end with",
     "Greater than", "Greater than or equal to", "Less than", "Less than or equal to",
-    "Before date", "After date",
+    "Before date", "After date", "Matches regex",
 ]
 
 STATE: Dict[str, Any] = {
@@ -430,6 +441,17 @@ def _init_users_db() -> None:
             """)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS byo_email_automations (
+                    id TEXT PRIMARY KEY,
+                    name TEXT,
+                    dataset_name TEXT,
+                    owner TEXT DEFAULT '',
+                    config_json TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS byo_history_email_automations (
                     id TEXT PRIMARY KEY,
                     name TEXT,
                     dataset_name TEXT,
@@ -799,6 +821,56 @@ def sync_email_automations_db_and_disk() -> None:
             all_byo = list(db_byo_map.values())
             if all_byo:
                 _atomic_write_text(BYO_EMAIL_TEMPLATE_PATH, json.dumps(all_byo, indent=2, ensure_ascii=False, default=str))
+
+            # Sync History email automations
+            db_hist_rows = conn.execute("SELECT * FROM byo_history_email_automations").fetchall()
+            db_hist_map: Dict[str, Any] = {}
+            for r in db_hist_rows:
+                try:
+                    cfg = json.loads(r["config_json"])
+                    if r["owner"] and not cfg.get("owner"):
+                        cfg["owner"] = r["owner"]
+                    db_hist_map[r["id"]] = cfg
+                except Exception:
+                    pass
+
+            file_hist: List[Dict[str, Any]] = []
+            if BYO_HISTORY_EMAIL_TEMPLATE_PATH.exists():
+                try:
+                    raw = json.loads(BYO_HISTORY_EMAIL_TEMPLATE_PATH.read_text(encoding="utf-8"))
+                    if isinstance(raw, list):
+                        file_hist = raw
+                except Exception:
+                    pass
+
+            for item in file_hist:
+                item_id = str(item.get("id") or "")
+                if item_id:
+                    db_hist_map[item_id] = item
+                    conn.execute("""
+                        INSERT INTO byo_history_email_automations (id, name, dataset_name, owner, config_json, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(id) DO UPDATE SET
+                            name = excluded.name,
+                            dataset_name = excluded.dataset_name,
+                            owner = CASE WHEN excluded.owner != '' THEN excluded.owner ELSE byo_history_email_automations.owner END,
+                            config_json = excluded.config_json,
+                            updated_at = excluded.updated_at
+                    """, (
+                        item_id,
+                        item.get("name", "History Alert"),
+                        item.get("dataset_name", ""),
+                        item.get("owner", ""),
+                        json.dumps(item, ensure_ascii=False, default=str),
+                        item.get("created_at", now_iso),
+                        item.get("updated_at", now_iso),
+                    ))
+            conn.commit()
+
+            all_hist = list(db_hist_map.values())
+            if all_hist:
+                BYO_HISTORY_EMAIL_DIR.mkdir(parents=True, exist_ok=True)
+                _atomic_write_text(BYO_HISTORY_EMAIL_TEMPLATE_PATH, json.dumps(all_hist, indent=2, ensure_ascii=False, default=str))
 
     except Exception:
         pass
@@ -3351,8 +3423,12 @@ def condition_mask(series: pd.Series, operator: str, target: Any = "") -> pd.Ser
     target_lower = target_text.lower()
     if operator == "Is blank (empty or null)":
         return _blank_mask(series)
+    if operator == "Is not blank (has value)":
+        return ~_blank_mask(series)
     if operator == "Is null / NaN":
         return series.isna()
+    if operator == "Is not null":
+        return series.notna()
     if operator == "Is empty string":
         return series.notna() & text.eq("")
     if operator == "Equals":
@@ -3370,6 +3446,12 @@ def condition_mask(series: pd.Series, operator: str, target: Any = "") -> pd.Ser
         return ~text_lower.str.contains(re.escape(target_lower), na=False)
     if operator == "Starts with":
         return text_lower.str.startswith(target_lower, na=False)
+    if operator == "Does not start with":
+        return ~text_lower.str.startswith(target_lower, na=False)
+    if operator == "Ends with":
+        return text_lower.str.endswith(target_lower, na=False)
+    if operator == "Does not end with":
+        return ~text_lower.str.endswith(target_lower, na=False)
     if operator in ("Greater than", "Greater than or equal to", "Less than", "Less than or equal to"):
         numeric = pd.to_numeric(series, errors="coerce")
         try:
@@ -3389,7 +3471,84 @@ def condition_mask(series: pd.Series, operator: str, target: Any = "") -> pd.Ser
         if pd.isna(target_date):
             return pd.Series(False, index=series.index)
         return dates < target_date if operator == "Before date" else dates > target_date
+    if operator == "Matches regex":
+        try:
+            return text.str.contains(target_text, regex=True, na=False)
+        except Exception:
+            return pd.Series(False, index=series.index)
     return pd.Series(False, index=series.index)
+
+
+def row_matches_history_condition(row_dict: Dict[str, Any], rule: Dict[str, Any]) -> bool:
+    col = str(rule.get("column", "")).strip()
+    if not col:
+        return True
+    op = str(rule.get("operator", "Equals"))
+    val = str(rule.get("value", "")).strip()
+    val_lower = val.lower()
+    raw = row_dict.get(col)
+    text = "" if raw is None or (isinstance(raw, float) and pd.isna(raw)) else str(raw).strip()
+    text_lower = text.lower()
+
+    if op == "Is blank (empty or null)":
+        return raw is None or (isinstance(raw, float) and pd.isna(raw)) or text_lower in ("", "nan", "none", "null", "<na>")
+    if op == "Is not blank (has value)":
+        return not (raw is None or (isinstance(raw, float) and pd.isna(raw)) or text_lower in ("", "nan", "none", "null", "<na>"))
+    if op == "Is null / NaN":
+        return raw is None or (isinstance(raw, float) and pd.isna(raw))
+    if op == "Is not null":
+        return not (raw is None or (isinstance(raw, float) and pd.isna(raw)))
+    if op == "Is empty string":
+        return raw is not None and not (isinstance(raw, float) and pd.isna(raw)) and text == ""
+    if op == "Equals":
+        try:
+            if isinstance(raw, (int, float)) or (isinstance(raw, str) and raw.replace(".", "", 1).replace("-", "", 1).isdigit()):
+                return float(raw) == float(val)
+        except (ValueError, TypeError):
+            pass
+        return text_lower == val_lower
+    if op == "Does not equal":
+        return not row_matches_history_condition(row_dict, {**rule, "operator": "Equals"})
+    if op == "Contains":
+        return val_lower in text_lower
+    if op == "Does not contain":
+        return val_lower not in text_lower
+    if op == "Starts with":
+        return text_lower.startswith(val_lower)
+    if op == "Does not start with":
+        return not text_lower.startswith(val_lower)
+    if op == "Ends with":
+        return text_lower.endswith(val_lower)
+    if op == "Does not end with":
+        return not text_lower.endswith(val_lower)
+    if op in ("Greater than", "Greater than or equal to", "Less than", "Less than or equal to"):
+        try:
+            num = float(raw)
+            thresh = float(val)
+            if op == "Greater than":
+                return num > thresh
+            if op == "Greater than or equal to":
+                return num >= thresh
+            if op == "Less than":
+                return num < thresh
+            return num <= thresh
+        except (ValueError, TypeError):
+            return False
+    if op in ("Before date", "After date"):
+        try:
+            d_raw = pd.to_datetime(raw, errors="coerce")
+            d_target = pd.to_datetime(val, errors="coerce")
+            if pd.isna(d_raw) or pd.isna(d_target):
+                return False
+            return d_raw < d_target if op == "Before date" else d_raw > d_target
+        except Exception:
+            return False
+    if op == "Matches regex":
+        try:
+            return bool(re.search(val, text, re.IGNORECASE))
+        except Exception:
+            return False
+    return False
 
 
 def _email_condition_mode(template: Dict[str, Any]) -> str:
@@ -4585,6 +4744,643 @@ def start_byo_email_agent_scheduler() -> bool:
         _BYO_EMAIL_AGENT_THREAD = threading.Thread(target=_byo_email_scheduler_loop, name="dart-byo-email-agent", daemon=True)
         _BYO_EMAIL_AGENT_THREAD.start()
         return True
+
+
+# -----------------------------------------------------------------------------
+# Dataset History Email Agent Helpers & Evaluation Engine
+# -----------------------------------------------------------------------------
+
+def _ensure_history_email_dirs() -> None:
+    BYO_HISTORY_EMAIL_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def load_history_email_automations() -> List[Dict[str, Any]]:
+    _ensure_history_email_dirs()
+    sync_email_automations_db_and_disk()
+    if not BYO_HISTORY_EMAIL_TEMPLATE_PATH.exists():
+        return []
+    try:
+        raw = json.loads(BYO_HISTORY_EMAIL_TEMPLATE_PATH.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, list) else []
+    except Exception:
+        return []
+
+
+def save_history_email_automations(templates: List[Dict[str, Any]]) -> None:
+    _ensure_history_email_dirs()
+    _atomic_write_text(BYO_HISTORY_EMAIL_TEMPLATE_PATH, json.dumps(templates, indent=2, ensure_ascii=False, default=str))
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        with _get_users_db() as conn:
+            existing_ids = [str(t.get("id")) for t in templates if t.get("id")]
+            if existing_ids:
+                placeholders = ",".join("?" for _ in existing_ids)
+                conn.execute(f"DELETE FROM byo_history_email_automations WHERE id NOT IN ({placeholders})", existing_ids)
+            else:
+                conn.execute("DELETE FROM byo_history_email_automations")
+            for t in templates:
+                item_id = str(t.get("id") or "")
+                if item_id:
+                    owner = t.get("owner") or STATE.get("current_user") or ""
+                    t["owner"] = owner
+                    conn.execute("""
+                        INSERT INTO byo_history_email_automations (id, name, dataset_name, owner, config_json, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(id) DO UPDATE SET
+                            name = excluded.name,
+                            dataset_name = excluded.dataset_name,
+                            owner = CASE WHEN excluded.owner != '' THEN excluded.owner ELSE byo_history_email_automations.owner END,
+                            config_json = excluded.config_json,
+                            updated_at = excluded.updated_at
+                    """, (
+                        item_id,
+                        t.get("name", "History Alert"),
+                        t.get("dataset_name", ""),
+                        owner,
+                        json.dumps(t, ensure_ascii=False, default=str),
+                        t.get("created_at", now_iso),
+                        t.get("updated_at", now_iso),
+                    ))
+            conn.commit()
+    except Exception:
+        pass
+
+
+def _history_email_history_event(event: Dict[str, Any]) -> None:
+    try:
+        _ensure_history_email_dirs()
+        with BYO_HISTORY_EMAIL_HISTORY_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"timestamp": _utc_now_iso(), **event}, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        pass
+
+
+def _history_email_history(limit: int = 30) -> List[Dict[str, Any]]:
+    if not BYO_HISTORY_EMAIL_HISTORY_PATH.exists():
+        return []
+    try:
+        lines = BYO_HISTORY_EMAIL_HISTORY_PATH.read_text(encoding="utf-8").splitlines()[-limit:]
+        return [json.loads(line) for line in reversed(lines) if line.strip()]
+    except Exception:
+        return []
+
+
+def _write_history_email_status(status: str, **extra: Any) -> None:
+    try:
+        _ensure_history_email_dirs()
+        _atomic_write_text(BYO_HISTORY_EMAIL_STATUS_PATH, json.dumps({"status": status, "updated_at": _utc_now_iso(), **extra}, indent=2, ensure_ascii=False, default=str))
+    except Exception:
+        pass
+
+
+def _history_email_status_payload() -> Dict[str, Any]:
+    if BYO_HISTORY_EMAIL_STATUS_PATH.exists():
+        try:
+            return json.loads(BYO_HISTORY_EMAIL_STATUS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"status": "Not started", "updated_at": None}
+
+
+def upsert_history_email_automation(template: Dict[str, Any]) -> Dict[str, Any]:
+    templates = load_history_email_automations()
+    item = dict(template)
+    raw_id = str(item.get("id") or "")
+    item["id"] = _safe_template_id(raw_id if raw_id.startswith("hist_") else (raw_id or f"hist_{uuid.uuid4().hex[:12]}"))
+    if not item["id"].startswith("hist_"):
+        item["id"] = "hist_" + item["id"]
+    item["workspace"] = "byo_history"
+    item["owner"] = item.get("owner") or STATE.get("current_user") or ""
+    item["updated_at"] = _utc_now_iso()
+    if not item.get("created_at"):
+        item["created_at"] = item["updated_at"]
+    for i, existing in enumerate(templates):
+        if existing.get("id") == item["id"]:
+            templates[i] = item
+            break
+    else:
+        templates.append(item)
+    save_history_email_automations(templates)
+    return item
+
+
+def delete_history_email_automation(template_id: str) -> None:
+    save_history_email_automations([t for t in load_history_email_automations() if str(t.get("id")) != str(template_id)])
+    try:
+        with _get_users_db() as conn:
+            conn.execute("DELETE FROM byo_history_email_automations WHERE id = ?", (template_id,))
+            conn.commit()
+    except Exception:
+        pass
+
+
+def _find_history_email_template(template_id: str) -> Optional[Dict[str, Any]]:
+    return next((t for t in load_history_email_automations() if str(t.get("id")) == str(template_id)), None)
+
+
+def _default_history_email_template(columns: List[str], dataset_name: str = "") -> Dict[str, Any]:
+    first_col = columns[0] if columns else "Claim ID"
+    return {
+        "id": "",
+        "workspace": "byo_history",
+        "dataset_name": dataset_name,
+        "name": f"Weekly {dataset_name or 'Dataset'} History Monitor",
+        "recipient_email": "",
+        "enabled": True,
+        "frequency": "Weekly",
+        "schedule_day": "Friday",
+        "schedule_month_day": "1st of month",
+        "schedule_time": "08:00 UTC",
+        "trigger_mode": "All changes (new, changed, or deleted rows)",
+        "identity_column": first_col,
+        "monitor_columns": columns[:8] if len(columns) > 8 else columns,
+        "condition_mode": "Only when conditions are met",
+        "condition_logic": "ALL conditions",
+        "conditions": [{"column": first_col, "operator": "Starts with", "value": "1"}] if columns else [],
+        "display_columns": columns[:8] if len(columns) > 8 else columns,
+        "subject_prefix": "[DART History Alert]",
+        "greeting": "Hello,",
+        "email_intro": f"DART detected dataset history updates for {dataset_name or 'your dataset'} matching your saved schedule and criteria.",
+        "include_csv": True,
+        "last_status": "Not run yet",
+    }
+
+
+def _normalize_history_email_template(payload: Dict[str, Any], columns: List[str]) -> Dict[str, Any]:
+    first_col = columns[0] if columns else "Claim ID"
+    raw_id = str(payload.get("id") or "").strip()
+    item_id = _safe_template_id(raw_id if raw_id.startswith("hist_") else (raw_id or f"hist_{uuid.uuid4().hex[:12]}"))
+    if not item_id.startswith("hist_"):
+        item_id = "hist_" + item_id
+
+    conditions: List[Dict[str, Any]] = []
+    for cond in payload.get("conditions", []):
+        col = str(cond.get("column", "")).strip()
+        op = str(cond.get("operator", "Equals")).strip()
+        val = str(cond.get("value", "")).strip()
+        if col:
+            conditions.append({"column": col, "operator": op, "value": val})
+
+    mon_cols = [str(c).strip() for c in payload.get("monitor_columns", []) if str(c).strip()]
+    disp_cols = [str(c).strip() for c in payload.get("display_columns", []) if str(c).strip()]
+
+    return {
+        "id": item_id,
+        "workspace": "byo_history",
+        "dataset_name": str(payload.get("dataset_name", "")).strip(),
+        "name": str(payload.get("name", "Dataset History Monitor")).strip() or "Dataset History Monitor",
+        "recipient_email": str(payload.get("recipient_email", "")).strip(),
+        "enabled": bool(payload.get("enabled", True)),
+        "frequency": str(payload.get("frequency", "Weekly")).strip(),
+        "schedule_day": str(payload.get("schedule_day", "Friday")).strip(),
+        "schedule_month_day": str(payload.get("schedule_month_day", "1st of month")).strip(),
+        "schedule_time": str(payload.get("schedule_time", "08:00 UTC")).strip(),
+        "trigger_mode": str(payload.get("trigger_mode", "All changes (new, changed, or deleted rows)")).strip(),
+        "identity_column": str(payload.get("identity_column", first_col)).strip() or first_col,
+        "monitor_columns": mon_cols or (columns[:8] if len(columns) > 8 else columns),
+        "condition_mode": str(payload.get("condition_mode", "Only when conditions are met")).strip(),
+        "condition_logic": str(payload.get("condition_logic", "ALL conditions")).strip(),
+        "conditions": conditions,
+        "display_columns": disp_cols or (columns[:8] if len(columns) > 8 else columns),
+        "subject_prefix": str(payload.get("subject_prefix", "[DART History Alert]")).strip(),
+        "greeting": str(payload.get("greeting", "Hello,")).strip(),
+        "email_intro": str(payload.get("email_intro", "")).strip(),
+        "include_csv": bool(payload.get("include_csv", True)),
+        "owner": str(payload.get("owner", "")).strip(),
+        "created_at": payload.get("created_at") or _utc_now_iso(),
+        "updated_at": _utc_now_iso(),
+        "last_status": payload.get("last_status", "Scheduled"),
+        "last_run_at": payload.get("last_run_at"),
+        "last_match_count": payload.get("last_match_count", 0),
+    }
+
+
+def _evaluate_history_email_matches(template: Dict[str, Any], username: str = "", dataset_name: str = "") -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    target_ds = dataset_name or template.get("dataset_name") or ""
+    weekly_history.initialize(BYO_HISTORY_DB)
+    owner = weekly_history.DEMO if target_ds in weekly_history.DEMO_DATASETS else (username or STATE.get("current_user") or "")
+
+    snaps = []
+    with weekly_history.connect(BYO_HISTORY_DB) as conn:
+        rows = conn.execute(
+            "SELECT id, captured_at, key_column, data FROM snapshots WHERE (owner=? OR owner=?) AND dataset=? ORDER BY captured_at DESC, id DESC LIMIT 2",
+            (owner, weekly_history.DEMO, target_ds)
+        ).fetchall()
+        for r in rows:
+            try:
+                snaps.append({
+                    "id": r["id"],
+                    "captured_at": r["captured_at"],
+                    "key": r["key_column"],
+                    "data": json.loads(r["data"])
+                })
+            except Exception:
+                pass
+
+    meta = {
+        "dataset": target_ds,
+        "snapshots_found": len(snaps),
+        "total_changes": 0,
+        "added": 0,
+        "removed": 0,
+        "changed": 0,
+    }
+
+    trigger_mode = template.get("trigger_mode") or "All changes (new, changed, or deleted rows)"
+    cond_mode = template.get("condition_mode") or "Only when conditions are met"
+    cond_logic = template.get("condition_logic") or "ALL conditions"
+    conditions = template.get("conditions") or []
+
+    matched_records: List[Dict[str, Any]] = []
+
+    if len(snaps) >= 2:
+        after_snap = snaps[0]
+        before_snap = snaps[1]
+        key = after_snap["key"] or template.get("identity_column") or (after_snap["data"]["columns"][0] if after_snap["data"]["columns"] else "")
+        comp = weekly_history.compare(before_snap["data"], after_snap["data"], key)
+        details = comp.get("details", [])
+        meta["total_changes"] = comp.get("added", 0) + comp.get("removed", 0) + comp.get("changed_rows", 0)
+        meta["added"] = comp.get("added", 0)
+        meta["removed"] = comp.get("removed", 0)
+        meta["changed"] = comp.get("changed_rows", 0)
+
+        for item in details:
+            status = item.get("status")
+            if status == "Unchanged" and trigger_mode != "Current snapshot rows meeting criteria":
+                continue
+            if trigger_mode == "Rows deleted / removed only" and status != "Removed":
+                continue
+            if trigger_mode == "New rows only" and status != "Added":
+                continue
+            if trigger_mode == "Changed rows only" and status != "Changed":
+                continue
+            if trigger_mode == "New or changed rows" and status not in ("Added", "Changed"):
+                continue
+            if trigger_mode == "All changes (new, changed, or deleted rows)" and status not in ("Added", "Changed", "Removed"):
+                continue
+
+            row_dict = item.get("after") if item.get("after") is not None else item.get("before") or {}
+
+            matches_cond = True
+            if cond_mode == "Only when conditions are met" and conditions:
+                rule_matches = [row_matches_history_condition(row_dict, r) for r in conditions]
+                if cond_logic == "ANY condition":
+                    matches_cond = any(rule_matches)
+                else:
+                    matches_cond = all(rule_matches)
+
+            if matches_cond:
+                rec = dict(row_dict)
+                rec["_Identity"] = item.get("id")
+                rec["_Change Type"] = status
+                rec["_Changed Fields"] = ", ".join(item.get("fields", [])) if item.get("fields") else ("Row deleted" if status == "Removed" else "New identity" if status == "Added" else "—")
+                prev_str = "—"
+                if status == "Changed" and item.get("fields") and item.get("before") and item.get("after"):
+                    prev_parts = [f"{f}: {item['before'].get(f)} → {item['after'].get(f)}" for f in item["fields"][:4]]
+                    prev_str = "; ".join(prev_parts)
+                elif status == "Removed":
+                    prev_str = "Deleted from snapshot"
+                rec["_Previous Values"] = prev_str
+                rec["_Snapshot Date"] = after_snap["captured_at"][:10]
+                matched_records.append(rec)
+    elif len(snaps) == 1 or (target_ds and target_ds not in weekly_history.DEMO_DATASETS):
+        if snaps:
+            columns = snaps[0]["data"].get("columns", [])
+            rows_list = snaps[0]["data"].get("rows", [])
+            df = pd.DataFrame(rows_list)
+            snap_date = snaps[0]["captured_at"][:10]
+        else:
+            try:
+                df = _read_byo_dataset(_byo_path(target_ds))
+                columns = [str(c) for c in df.columns]
+                snap_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            except Exception:
+                df = pd.DataFrame()
+                columns = []
+                snap_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        meta["total_changes"] = len(df)
+        for _, row in df.iterrows():
+            row_dict = row.to_dict()
+            matches_cond = True
+            if cond_mode == "Only when conditions are met" and conditions:
+                rule_matches = [row_matches_history_condition(row_dict, r) for r in conditions]
+                if cond_logic == "ANY condition":
+                    matches_cond = any(rule_matches)
+                else:
+                    matches_cond = all(rule_matches)
+            if matches_cond:
+                rec = dict(row_dict)
+                key_col = template.get("identity_column") or (columns[0] if columns else "")
+                rec["_Identity"] = str(row_dict.get(key_col, "—"))
+                rec["_Change Type"] = "Snapshot row"
+                rec["_Changed Fields"] = "Meets configured criteria"
+                rec["_Previous Values"] = "—"
+                rec["_Snapshot Date"] = snap_date
+                matched_records.append(rec)
+
+    result_df = pd.DataFrame(matched_records)
+    return result_df, meta
+
+
+def build_history_structured_email(template: Dict[str, Any], matches: pd.DataFrame, is_test: bool = False) -> Tuple[str, str, str, List[str]]:
+    name = template.get("name", "Dataset History Alert")
+    subject_prefix = template.get("subject_prefix", "[DART History Alert]")
+    dataset_name = template.get("dataset_name", "")
+    freq = template.get("frequency", "Weekly")
+    sched_day = template.get("schedule_day", "Friday")
+    sched_str = f"{freq} on {sched_day}s" if freq == "Weekly" else f"{freq}"
+
+    subject = f"{subject_prefix} {'TEST — ' if is_test else ''}{name}: {len(matches):,} matching record(s) [{dataset_name}]"
+    greeting = template.get("greeting", "Hello,")
+    intro = template.get("email_intro", f"DART detected dataset history updates for {dataset_name} matching your saved schedule and criteria.")
+
+    meta_cols = [c for c in ["_Identity", "_Change Type", "_Changed Fields", "_Previous Values", "_Snapshot Date"] if c in matches.columns]
+    disp_cols = [c for c in template.get("display_columns", []) if c in matches.columns and c not in meta_cols]
+    if not disp_cols:
+        disp_cols = [c for c in matches.columns if not c.startswith("_")][:8]
+    columns_in_view = meta_cols + disp_cols
+
+    cond_mode = template.get("condition_mode", "Only when conditions are met")
+    conditions = template.get("conditions", [])
+    cond_desc = "Any detected change will qualify" if cond_mode == "Any change" else (
+        f"{template.get('condition_logic', 'ALL conditions')}: " + "; ".join(_condition_sentence(c) for c in conditions) if conditions else "All records qualify"
+    )
+
+    # HTML table building
+    table_rows_html = []
+    for _, row in matches.head(EMAIL_PREVIEW_ROW_LIMIT).iterrows():
+        cells = []
+        for col in columns_in_view:
+            val = row.get(col, "")
+            val_str = html.escape(str(val) if val is not None else "")
+            if col == "_Change Type":
+                cls = "status-added" if val == "Added" else "status-removed" if val == "Removed" else "status-changed" if val == "Changed" else "status-plain"
+                cells.append(f'<td class="{cls}"><b>{val_str}</b></td>')
+            elif col == "_Identity":
+                cells.append(f'<td><b style="color:#0f1f3d;">{val_str}</b></td>')
+            else:
+                cells.append(f'<td>{val_str}</td>')
+        table_rows_html.append(f"<tr>{''.join(cells)}</tr>")
+
+    headers_html = "".join(f"<th>{html.escape(c.replace('_', ''))}</th>" for c in columns_in_view)
+    body_table = f"""
+    <table class="report-table" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
+      <thead>
+        <tr style="background:#0f1f3d;color:#f4d58d;text-align:left;">
+          {headers_html}
+        </tr>
+      </thead>
+      <tbody>
+        {''.join(table_rows_html) if table_rows_html else '<tr><td colspan="100%" style="text-align:center;padding:24px;color:#666;">No qualifying records found.</td></tr>'}
+      </tbody>
+    </table>
+    """
+
+    html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:#f4f6f8;color:#222;margin:0;padding:20px;line-height:1.5;}}
+.email-container{{max-width:880px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 18px rgba(0,0,0,0.08);border:1px solid #e1e4e8;}}
+.email-header{{background:linear-gradient(135deg,#0f1f3d 0%,#1c3768 100%);color:#ffffff;padding:28px 32px;border-bottom:3px solid #d4af37;}}
+.email-header h1{{margin:0 0 6px 0;font-size:22px;letter-spacing:-0.02em;color:#ffffff;}}
+.email-header p{{margin:0;color:#f4d58d;font-size:14px;font-weight:600;}}
+.email-content{{padding:28px 32px;}}
+.stat-banner{{display:flex;gap:16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:16px 20px;margin:18px 0;}}
+.stat-box{{flex:1;}}
+.stat-box small{{display:block;font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;}}
+.stat-box strong{{display:block;font-size:20px;color:#0f1f3d;margin-top:2px;}}
+.report-table th{{padding:10px 12px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;}}
+.report-table td{{padding:10px 12px;border-bottom:1px solid #e5e7eb;vertical-align:top;}}
+.status-added{{background:rgba(46,133,64,0.12);color:#1e6b30;}}
+.status-removed{{background:rgba(214,69,69,0.12);color:#b02a2a;}}
+.status-changed{{background:rgba(212,175,55,0.18);color:#8b6a00;}}
+.status-plain{{color:#4b5563;}}
+.footer{{padding:20px 32px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280;text-align:center;}}
+.pill-sched{{display:inline-block;padding:3px 10px;border-radius:999px;background:rgba(212,175,55,0.22);color:#0f1f3d;font-weight:700;font-size:12px;}}
+</style>
+</head>
+<body>
+<div class="email-container">
+  <div class="email-header">
+    <div style="font-size:11px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;color:#d4af37;margin-bottom:6px;">DART Automated Quality Alert</div>
+    <h1>{html.escape(name)}</h1>
+    <p>Dataset: <b>{html.escape(dataset_name)}</b> · <span class="pill-sched">{html.escape(sched_str)}</span></p>
+  </div>
+  <div class="email-content">
+    <p style="font-size:15px;margin-top:0;"><b>{html.escape(greeting)}</b></p>
+    <p>{html.escape(intro)}</p>
+    
+    <div class="stat-banner">
+      <div class="stat-box">
+        <small>Total Matches</small>
+        <strong>{len(matches):,}</strong>
+      </div>
+      <div class="stat-box">
+        <small>Trigger Scope</small>
+        <strong style="font-size:14px;line-height:1.4;">{html.escape(template.get('trigger_mode', 'All changes'))}</strong>
+      </div>
+      <div class="stat-box">
+        <small>Criteria Logic</small>
+        <strong style="font-size:14px;line-height:1.4;">{html.escape(cond_desc)}</strong>
+      </div>
+    </div>
+
+    <h3 style="margin:24px 0 8px 0;color:#0f1f3d;font-size:15px;">Matching Records Summary ({len(matches):,} rows)</h3>
+    {body_table}
+    {f'<p style="font-size:12px;color:#6b7280;margin-top:6px;"><i>Showing first {EMAIL_PREVIEW_ROW_LIMIT} rows in preview. Full dataset attached as CSV.</i></p>' if len(matches) > EMAIL_PREVIEW_ROW_LIMIT and template.get('include_csv') else ''}
+  </div>
+  <div class="footer">
+    Generated automatically by <b>DART Dataset History Email Agent</b> · DART Data Quality Platform
+  </div>
+</div>
+</body>
+</html>"""
+
+    plain = f"""{name}
+Dataset: {dataset_name} ({sched_str})
+Trigger: {template.get('trigger_mode')}
+Criteria: {cond_desc}
+
+{greeting}
+{intro}
+
+Matching Records: {len(matches):,}
+"""
+    return subject, html_content, plain, columns_in_view
+
+
+def send_history_structured_email(template: Dict[str, Any], matches: pd.DataFrame, is_test: bool = False) -> Dict[str, Any]:
+    recipient = str(template.get("recipient_email", "")).strip()
+    if not recipient:
+        raise ValueError("Recipient email is required.")
+
+    subject, html, plain, cols = build_history_structured_email(template, matches, is_test=is_test)
+
+    # Prepare CSV attachment if requested
+    attachments = []
+    if template.get("include_csv", True) and not matches.empty:
+        csv_bytes = matches.to_csv(index=False).encode("utf-8")
+        clean_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', template.get("name", "history_alert"))
+        attachments.append((f"{clean_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", csv_bytes, "text/csv"))
+
+    # Attempt SMTP dispatch if configured
+    smtp_cfg = smtp_settings()
+    sent_live = False
+    if smtp_cfg.get("host") and smtp_cfg.get("user") and smtp_cfg.get("password"):
+        try:
+            import smtplib
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.text import MIMEText
+            from email.mime.application import MIMEApplication
+
+            msg = MIMEMultipart("mixed")
+            msg["Subject"] = subject
+            msg["From"] = smtp_cfg.get("from_email") or smtp_cfg["user"]
+            msg["To"] = recipient
+
+            alt = MIMEMultipart("alternative")
+            alt.attach(MIMEText(plain, "plain", "utf-8"))
+            alt.attach(MIMEText(html, "html", "utf-8"))
+            msg.attach(alt)
+
+            for filename, data, ctype in attachments:
+                part = MIMEApplication(data, Name=filename)
+                part["Content-Disposition"] = f'attachment; filename="{filename}"'
+                msg.attach(part)
+
+            port = int(smtp_cfg.get("port") or 587)
+            server = smtplib.SMTP(smtp_cfg["host"], port, timeout=15)
+            if smtp_cfg.get("use_tls", True):
+                server.starttls()
+            server.login(smtp_cfg["user"], smtp_cfg["password"])
+            server.sendmail(msg["From"], [r.strip() for r in recipient.split(",") if r.strip()], msg.as_string())
+            server.quit()
+            sent_live = True
+        except Exception as exc:
+            pass
+
+    status_str = f"Delivered live via SMTP to {recipient}" if sent_live else f"Validated & recorded for {recipient} ({len(matches):,} matches)"
+    return {
+        "status": status_str,
+        "recipient": recipient,
+        "subject": subject,
+        "matches": len(matches),
+        "sent_live": sent_live,
+        "timestamp": _utc_now_iso(),
+    }
+
+
+def _run_one_history_email_template(template: Dict[str, Any], username: str = "", send_email: bool = True) -> Dict[str, Any]:
+    dataset_name = str(template.get("dataset_name", "")).strip()
+    matches_df, meta = _evaluate_history_email_matches(template, username=username, dataset_name=dataset_name)
+
+    send_res = {}
+    if send_email and (len(matches_df) > 0 or template.get("trigger_mode") == "Current snapshot rows meeting criteria"):
+        try:
+            send_res = send_history_structured_email(template, matches_df, is_test=False)
+        except Exception as exc:
+            send_res = {"status": f"Delivery error: {exc}", "error": str(exc)}
+
+    result = {
+        "id": template.get("id"),
+        "name": template.get("name"),
+        "dataset_name": dataset_name,
+        "matches": len(matches_df),
+        "total_changes": meta.get("total_changes", 0),
+        "checked_at": _utc_now_iso(),
+        "status": send_res.get("status") if send_res else f"Found {len(matches_df):,} matching record(s)",
+    }
+    return result
+
+
+def run_enabled_history_email_automations(dataset_name: Optional[str] = None, username: str = "") -> List[Dict[str, Any]]:
+    templates = load_history_email_automations()
+    enabled = [t for t in templates if t.get("enabled") and (not dataset_name or str(t.get("dataset_name")) == str(dataset_name))]
+    results: List[Dict[str, Any]] = []
+    changed = False
+    for template in enabled:
+        try:
+            result = _run_one_history_email_template(template, username=username, send_email=True)
+        except Exception as exc:
+            result = {"id": template.get("id"), "name": template.get("name"), "dataset_name": template.get("dataset_name"), "status": f"Runner error: {exc}", "matches": 0, "total_changes": 0, "checked_at": _utc_now_iso(), "error": str(exc)}
+        template["last_run_at"] = result.get("checked_at")
+        template["last_status"] = result.get("status")
+        template["last_match_count"] = result.get("matches", 0)
+        results.append(result)
+        changed = True
+        _history_email_history_event({"automation_id": template.get("id"), "automation": template.get("name"), "dataset": template.get("dataset_name"), "status": result.get("status"), "matching_records": result.get("matches", 0)})
+    if changed:
+        save_history_email_automations(templates)
+    _write_history_email_status("Checked", enabled_automations=len(enabled), dataset=dataset_name or "all enabled datasets", results=[{"automation": r.get("name"), "dataset": r.get("dataset_name"), "status": r.get("status"), "matching_records": r.get("matches", 0)} for r in results])
+    return results
+
+
+def _history_email_scheduler_loop() -> None:
+    _write_history_email_status("Running", interval_seconds=BYO_HISTORY_EMAIL_AGENT_MIN_CHECK_SECONDS)
+    while True:
+        try:
+            enabled = [t for t in load_history_email_automations() if t.get("enabled")]
+            if enabled:
+                run_enabled_history_email_automations()
+        except Exception as exc:
+            _write_history_email_status("Scheduler error", error=str(exc))
+        time.sleep(BYO_HISTORY_EMAIL_AGENT_MIN_CHECK_SECONDS)
+
+
+def start_history_email_agent_scheduler() -> bool:
+    global _BYO_HISTORY_EMAIL_AGENT_THREAD
+    if not BYO_HISTORY_EMAIL_AGENT_AUTO_RUN:
+        return False
+    with _BYO_HISTORY_EMAIL_AGENT_THREAD_LOCK:
+        if _BYO_HISTORY_EMAIL_AGENT_THREAD is not None and _BYO_HISTORY_EMAIL_AGENT_THREAD.is_alive():
+            return True
+        _BYO_HISTORY_EMAIL_AGENT_THREAD = threading.Thread(target=_history_email_scheduler_loop, name="dart-history-email-agent", daemon=True)
+        _BYO_HISTORY_EMAIL_AGENT_THREAD.start()
+        return True
+
+
+def _byo_history_email_meta_for_dataset(username: str, dataset_name: str) -> Dict[str, Any]:
+    templates = load_history_email_automations()
+    filtered = [t for t in templates if not dataset_name or str(t.get("dataset_name", "")) == str(dataset_name) or str(t.get("dataset_name", "")) == ""]
+
+    # Retrieve dataset columns
+    cols: List[str] = []
+    if dataset_name in weekly_history.DEMO_DATASETS:
+        with weekly_history.connect(BYO_HISTORY_DB) as conn:
+            row = conn.execute("SELECT data FROM snapshots WHERE dataset=? ORDER BY id DESC LIMIT 1", (dataset_name,)).fetchone()
+            if row:
+                try:
+                    cols = json.loads(row["data"]).get("columns", [])
+                except Exception:
+                    cols = []
+    else:
+        try:
+            df = _read_byo_dataset(_byo_path(dataset_name))
+            cols = [str(c) for c in df.columns]
+        except Exception:
+            cols = []
+
+    if not cols:
+        cols = ["Claim ID", "Bene ID", "Claim Pmt Amt", "Diagnosis Code", "State", "Procedure Code"]
+
+    def_tpl = _default_history_email_template(cols, dataset_name)
+    user_info = load_users().get("users", {}).get(username) or {}
+    prof = user_info.get("profile", {})
+    if prof.get("email"):
+        def_tpl["recipient_email"] = prof["email"]
+
+    return {
+        "templates": filtered,
+        "default_template": def_tpl,
+        "columns": cols,
+        "operators": EMAIL_OPERATORS,
+        "status": _history_email_status_payload(),
+        "history": _history_email_history(20),
+        "selected_dataset": dataset_name,
+    }
 
 
 def _byo_common_pairs(left: pd.DataFrame, right: pd.DataFrame) -> List[Tuple[str, str]]:
@@ -6171,7 +6967,8 @@ HTML = r'''
     .conditionsWrapper.conditionsGrayed input,
     .conditionsWrapper.conditionsGrayed button{cursor:not-allowed!important;opacity:.65}
     .conditionsWrapper.conditionsGrayed #byoAddConditionBtn,
-    .conditionsWrapper.conditionsGrayed #emailAddConditionBtn{cursor:not-allowed!important;opacity:.55;pointer-events:none}
+    .conditionsWrapper.conditionsGrayed #emailAddConditionBtn,
+    .conditionsWrapper.conditionsGrayed #historyAddConditionBtn{cursor:not-allowed!important;opacity:.55;pointer-events:none}
     .conditionAnyChangeNotice{display:none;margin:8px 0 12px;padding:10px 14px;border-radius:12px;border:1px dashed #d6c080;background:linear-gradient(135deg,#fffdf7,#fff8e6);color:#725500;font-size:.83rem;line-height:1.45}
     .savedAutomation{border:1px solid #e8e1cf;border-left:5px solid #c99a12;border-radius:16px;padding:14px 16px;margin:10px 0;background:#fff}.automationActions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.statusGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.statusCard{border:1px solid #e8e1cf;border-radius:16px;padding:14px;background:#fff}.statusCard .big{font-size:1.35rem;font-weight:850;color:#172033}.emailPreview{border:1px solid #ead9a4;border-radius:16px;background:#fff;overflow:hidden}.emailPreview iframe{width:100%;height:620px;border:0;background:#fff}
     @media(max-width:760px){.smartMultiToolbar{grid-template-columns:1fr 1fr}.smartMultiToolbar .smartMultiSearch{grid-column:1/-1}.conditionRow{grid-template-columns:1fr}.smartMultiPanel{position:fixed;left:14px;right:14px;top:110px;max-height:70vh}}
@@ -9816,15 +10613,424 @@ async function removeHistoryRecipient(button){
   try{await postJson('/api/byo/history/recipient',{dataset:state.historyDataset,email:button.dataset.email,action:'remove'});toast('Recipient removed');await render();}
   catch(err){toast('Could not remove recipient: '+String(err.message||err));}
 }
+function applyHistoryEmailPreset(key){
+  if(!key)return;
+  const cols=state.historyEmailAgent?.columns||(state.byoInfo?.dataset_columns)||['Claim ID','Bene ID','Claim Pmt Amt','Diagnosis Code'];
+  const firstCol=cols[0]||'Claim ID';
+  const nameInput=document.getElementById('historyEmailName');
+  const triggerSelect=document.getElementById('historyEmailTrigger');
+  const condList=document.getElementById('historyConditionList');
+  const modeSelect=document.getElementById('historyEmailConditionMode');
+  const freqSelect=document.getElementById('historyEmailFreq');
+  const daySelect=document.getElementById('historyEmailDay');
+
+  if(key==='starts_with_1'){
+    if(nameInput)nameInput.value='Alert on Key Starting with 1';
+    if(triggerSelect)triggerSelect.value='All changes (new, changed, or deleted rows)';
+    if(modeSelect)modeSelect.value='Only when conditions are met';
+    if(condList)condList.innerHTML=emailConditionRow({column:firstCol,operator:'Starts with',value:'1'},cols,false);
+    syncEmailConditionMode('history');
+    toast('Loaded preset: Alert on Column Starting with "1"');
+  }else if(key==='null_check'){
+    if(nameInput)nameInput.value='Alert on Null / Missing Values';
+    if(triggerSelect)triggerSelect.value='All changes (new, changed, or deleted rows)';
+    if(modeSelect)modeSelect.value='Only when conditions are met';
+    const nullCol=cols.find(c=>c.toLowerCase().includes('diag')||c.toLowerCase().includes('code')||c.toLowerCase().includes('id')||c.toLowerCase().includes('amt'))||firstCol;
+    if(condList)condList.innerHTML=emailConditionRow({column:nullCol,operator:'Is blank (empty or null)',value:''},cols,false);
+    syncEmailConditionMode('history');
+    toast('Loaded preset: Alert on Null / Missing Values');
+  }else if(key==='deleted_rows'){
+    if(nameInput)nameInput.value='Alert on Deleted / Removed Rows';
+    if(triggerSelect)triggerSelect.value='Rows deleted / removed only';
+    if(modeSelect)modeSelect.value='Any change';
+    if(condList)condList.innerHTML='';
+    syncEmailConditionMode('history');
+    toast('Loaded preset: Alert on Deleted / Removed Rows');
+  }else if(key==='ends_with'){
+    if(nameInput)nameInput.value='Alert on Suffix / Ending Pattern';
+    if(triggerSelect)triggerSelect.value='All changes (new, changed, or deleted rows)';
+    if(modeSelect)modeSelect.value='Only when conditions are met';
+    if(condList)condList.innerHTML=emailConditionRow({column:firstCol,operator:'Ends with',value:'.9'},cols,false);
+    syncEmailConditionMode('history');
+    toast('Loaded preset: Alert on Ends With Pattern');
+  }else if(key==='high_value'){
+    if(nameInput)nameInput.value='Alert on High Value Threshold';
+    if(triggerSelect)triggerSelect.value='All changes (new, changed, or deleted rows)';
+    if(modeSelect)modeSelect.value='Only when conditions are met';
+    const numCol=cols.find(c=>c.toLowerCase().includes('pmt')||c.toLowerCase().includes('amt')||c.toLowerCase().includes('claim')||c.toLowerCase().includes('total'))||firstCol;
+    if(condList)condList.innerHTML=emailConditionRow({column:numCol,operator:'Greater than',value:'10000'},cols,false);
+    syncEmailConditionMode('history');
+    toast('Loaded preset: Alert on High Value Threshold (> 10,000)');
+  }else if(key==='negative_value'){
+    if(nameInput)nameInput.value='Alert on Negative Outlier Values';
+    if(triggerSelect)triggerSelect.value='All changes (new, changed, or deleted rows)';
+    if(modeSelect)modeSelect.value='Only when conditions are met';
+    const numCol=cols.find(c=>c.toLowerCase().includes('pmt')||c.toLowerCase().includes('amt')||c.toLowerCase().includes('claim')||c.toLowerCase().includes('bene'))||firstCol;
+    if(condList)condList.innerHTML=emailConditionRow({column:numCol,operator:'Less than',value:'0'},cols,false);
+    syncEmailConditionMode('history');
+    toast('Loaded preset: Alert on Negative Outliers (< 0)');
+  }
+}
+
+function addHistoryEmailCondition(){
+  const mode=document.getElementById('historyEmailConditionMode')?.value;
+  if(mode==='Any change'){
+    toast('Change Requirement mode to "Only when conditions are met" to add conditions');
+    return;
+  }
+  const cols=state.historyEmailAgent?.columns||(state.byoInfo?.dataset_columns)||['Claim ID','Bene ID','Claim Pmt Amt','Diagnosis Code'];
+  document.getElementById('historyConditionList')?.insertAdjacentHTML('beforeend',emailConditionRow({},cols,false));
+}
+
+function collectHistoryEmailTemplate(){
+  const conditions=[...document.querySelectorAll('#historyConditionList .conditionRow')].map(row=>({
+    column:row.querySelector('.condColumn')?.value||'',
+    operator:row.querySelector('.condOperator')?.value||'Equals',
+    value:row.querySelector('.condValue')?.value||''
+  }));
+  return {
+    id:state.historyEmailEditingId||'',
+    dataset_name:state.historyDataset||'',
+    name:document.getElementById('historyEmailName')?.value||'Dataset History Alert',
+    recipient_email:document.getElementById('historyEmailRecipient')?.value||'',
+    enabled:document.getElementById('historyEmailEnabled')?.value==='true',
+    frequency:document.getElementById('historyEmailFreq')?.value||'Weekly',
+    schedule_day:document.getElementById('historyEmailDay')?.value||'Friday',
+    schedule_month_day:document.getElementById('historyEmailMonthDay')?.value||'1st of month',
+    schedule_time:document.getElementById('historyEmailTime')?.value||'08:00 UTC',
+    trigger_mode:document.getElementById('historyEmailTrigger')?.value||'All changes (new, changed, or deleted rows)',
+    identity_column:document.getElementById('historyEmailIdentity')?.value||'',
+    monitor_columns:selectedValues('historyEmailMonitor'),
+    condition_mode:document.getElementById('historyEmailConditionMode')?.value||'Only when conditions are met',
+    condition_logic:document.getElementById('historyEmailLogic')?.value||'ALL conditions',
+    conditions,
+    display_columns:selectedValues('historyEmailDisplay'),
+    subject_prefix:document.getElementById('historyEmailSubject')?.value||'[DART History Alert]',
+    greeting:document.getElementById('historyEmailGreeting')?.value||'Hello,',
+    email_intro:document.getElementById('historyEmailIntro')?.value||'',
+    include_csv:document.getElementById('historyEmailCsv')?.value!=='false'
+  };
+}
+
+async function saveHistoryEmailTemplate(){
+  try{
+    const tpl=collectHistoryEmailTemplate();
+    const r=await postJson('/api/byo/history/email-agent/template',tpl);
+    state.historyEmailEditingId=r.template?.id;
+    toast('History Email Agent saved successfully');
+    await render();
+  }catch(err){
+    toast('Could not save History Agent: '+String(err.message||err).slice(0,160));
+  }
+}
+
+async function previewHistoryEmailTemplate(){
+  try{
+    const tpl=collectHistoryEmailTemplate();
+    const r=await postJson('/api/byo/history/email-agent/preview',tpl);
+    const holder=document.getElementById('historyEmailPreviewHolder');
+    if(holder){
+      holder.innerHTML=`<div class="panel" style="margin-top:14px;border:1px solid #dfcf9c">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <h3 style="margin:0">Live Preview · ${intFmt(r.matches)} matching record(s)</h3>
+          <span class="pill ${r.matches?'Critical':'Stable'}">${r.matches} alert match(es)</span>
+        </div>
+        <p class="muted" style="margin:0 0 10px">Subject: <b>${esc(r.subject)}</b></p>
+        <div class="emailPreview"><iframe id="historyEmailPreviewFrame" style="width:100%;height:520px;border:0;border-radius:12px;background:#fff"></iframe></div>
+      </div>`;
+      const frame=document.getElementById('historyEmailPreviewFrame');
+      if(frame)frame.srcdoc=r.html||'<p>No preview generated.</p>';
+      holder.scrollIntoView({behavior:'smooth',block:'start'});
+    }
+  }catch(err){
+    toast('Preview failed: '+String(err.message||err).slice(0,160));
+  }
+}
+
+async function testHistoryEmailTemplate(id){
+  const tplId = id || state.historyEmailEditingId;
+  try{
+    if(tplId){
+      const r=await postJson('/api/byo/history/email-agent/test/'+encodeURIComponent(tplId),{});
+      toast(r.status||'Test email sent');
+    }else{
+      const tpl=collectHistoryEmailTemplate();
+      const r=await postJson('/api/byo/history/email-agent/preview',tpl);
+      toast(`Tested criteria: ${r.matches} matching record(s) found in dataset history`);
+      await previewHistoryEmailTemplate();
+    }
+  }catch(err){
+    toast('Test failed: '+String(err.message||err).slice(0,160));
+  }
+}
+
+async function runHistoryEmailTemplate(id, send){
+  try{
+    const r=await postJson('/api/byo/history/email-agent/run/'+encodeURIComponent(id),{send_email:send});
+    toast(r.status||'Check complete');
+    await render();
+  }catch(err){
+    toast('Run failed: '+String(err.message||err).slice(0,160));
+  }
+}
+
+async function editHistoryEmailById(id, dataset){
+  state.historyEmailEditingId=id;
+  if(dataset&&dataset!==state.historyDataset){
+    state.historyDataset=dataset;
+    sessionStorage.setItem('dart_history_dataset',dataset);
+  }
+  await render();
+  document.getElementById('historyEmailBuilderPanel')?.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+async function newHistoryEmailTemplate(){
+  state.historyEmailEditingId=null;
+  await render();
+  document.getElementById('historyEmailBuilderPanel')?.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+async function deleteHistoryEmailTemplate(id){
+  if(!confirm('Delete this History Email Agent automation?'))return;
+  try{
+    await del('/api/byo/history/email-agent/template/'+encodeURIComponent(id));
+    state.historyEmailEditingId=null;
+    toast('History Email Agent deleted');
+    await render();
+  }catch(err){
+    toast('Could not delete: '+String(err.message||err).slice(0,160));
+  }
+}
+
 function historyEmailPanel(data){
-  const email=data.email||{}, list=email.addresses||[], issues=data.smtp_issues||[];
-  return `<div class="panel"><div class="medSectionHead"><div><h3>Weekly email reports</h3><p class="muted">Each recipient receives a separate email after every successful scheduled refresh, including a CSV of all added, removed and changed rows.</p></div></div>
-  ${data.demo?'<div class="historyNotice">Sample history is not scheduled, so no automatic emails are sent for this demo.</div>':''}
-  ${issues.length?`<div class="historyNotice"><b>DART email is not ready:</b> ${esc(issues.join(' '))} Reports will remain queued and retry.</div>`:''}
-  ${email.failure?`<div class="historyNotice"><b>Delivery failed for ${esc(email.failure.email)}:</b> ${esc(email.failure.last_error)}. DART will retry.</div>`:''}
-  <form onsubmit="saveHistoryRecipient(event)"><div class="field"><label for="historyRecipient">Add an email recipient for this dataset</label><input id="historyRecipient" type="email" placeholder="name@organization.com" required></div><br><button class="btn secondary" type="submit">Save email</button></form>
-  <div class="historyEmailList">${list.map(address=>`<span class="historyEmailChip">${esc(address)}<button type="button" data-email="${esc(address)}" onclick="removeHistoryRecipient(this)" aria-label="Remove ${esc(address)}">×</button></span>`).join('')||'<span class="muted">No recipients saved yet.</span>'}</div>
-  <p class="muted">${email.pending?`${intFmt(email.pending)} report(s) queued. `:''}${email.latest?.sent_at?`Last delivery: ${esc(historyDate(email.latest.sent_at))} UTC to ${esc(email.latest.email)}. `:''}Emails contain dataset values. Only add authorized recipients. Removing an address cancels its pending reports; a delivery already in progress may still complete.</p></div>`;
+  const emailAgent = data.email_agent || {};
+  state.historyEmailAgent = emailAgent;
+  const templates = emailAgent.templates || [];
+  const tpl = (state.historyEmailEditingId ? templates.find(t=>t.id===state.historyEmailEditingId) : null) || emailAgent.default_template || {};
+  const cols = data.dataset_columns || data.columns || emailAgent.columns || [];
+  const history = emailAgent.history || [];
+  const dataset = state.historyDataset || '';
+  const isAnyChange = Boolean((tpl.condition_mode || 'Only when conditions are met') === 'Any change');
+
+  const savedCards = templates.map(t=>{
+    const schedText = t.frequency === 'Weekly' ? `Weekly · ${t.schedule_day || 'Friday'}s at ${t.schedule_time || '08:00 UTC'}` :
+                      t.frequency === 'Monthly' ? `Monthly · ${t.schedule_month_day || '1st'} at ${t.schedule_time || '08:00 UTC'}` :
+                      t.frequency === 'Bi-weekly' ? `Bi-weekly · ${t.schedule_day || 'Friday'}s` : 'Every snapshot update';
+    return `<div class="savedAutomation" style="border-left-color:#c99a2e;background:var(--panel)">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+        <div>
+          <b style="font-size:1.05rem">${esc(t.name)}</b>
+          <div class="muted" style="margin-top:3px">${esc(t.dataset_name||dataset)} · Recipient: <b>${esc(t.recipient_email||'Unassigned')}</b> · <span class="pill" style="font-size:.7rem;padding:2px 8px">${esc(schedText)}</span> · ${esc(t.last_status||'Ready / Scheduled')}</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span class="pill ${t.enabled?'Stable':'Watch'}">${t.enabled?'Active':'Paused'}</span>
+        </div>
+      </div>
+      <div class="automationActions" style="margin-top:12px">
+        <button class="btn secondary small" type="button" onclick="editHistoryEmailById('${esc(t.id)}','${safeArg(t.dataset_name||dataset)}')">Edit</button>
+        <button class="btn secondary small" type="button" onclick="runHistoryEmailTemplate('${esc(t.id)}',false)">Check matches</button>
+        <button class="btn small" type="button" onclick="runHistoryEmailTemplate('${esc(t.id)}',true)">Run + send</button>
+        <button class="btn ghost small" type="button" onclick="testHistoryEmailTemplate('${esc(t.id)}')">Send test</button>
+        <button class="btn ghost small dangerBtn" type="button" onclick="deleteHistoryEmailTemplate('${esc(t.id)}')">Delete</button>
+      </div>
+    </div>`;
+  }).join('') || '<div class="empty">No Dataset History email agents configured for this dataset yet. Build one below!</div>';
+
+  const historyLog = history.length ? simpleTable(history) : '<div class="empty">No alert execution history yet.</div>';
+  const condRows = (tpl.conditions||[]).map(r=>emailConditionRow(r,cols,isAnyChange)).join('') || emailConditionRow({},cols,isAnyChange);
+
+  return `<div class="panel" id="historyEmailBuilderPanel" style="border-left:4px solid #c99a2e">
+    <div class="medSectionHead">
+      <div>
+        <div style="display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:4px 10px;background:rgba(201,154,46,.15);color:#8b6a00;font-size:.75rem;font-weight:900;margin-bottom:6px">🤖 SCHEDULED EMAIL AGENT</div>
+        <h3 style="margin:0 0 4px">Dataset History Email Agent</h3>
+        <p class="muted">Automate recurring email alerts (weekly, monthly, or on refresh). Define custom column criteria to monitor key prefixes (starts with 1), suffixes, nulls/missing values, deleted rows, and outlier thresholds.</p>
+      </div>
+      <button class="btn secondary small" type="button" onclick="newHistoryEmailTemplate()">+ New Agent</button>
+    </div>
+
+    <div style="margin:14px 0 16px">
+      <div style="font-size:.78rem;font-weight:850;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:8px">⚡ Quick Starters &amp; Presets</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn ghost small" type="button" onclick="applyHistoryEmailPreset('starts_with_1')">📌 Starts with '1'</button>
+        <button class="btn ghost small" type="button" onclick="applyHistoryEmailPreset('null_check')">⚠️ Null / Missing Values</button>
+        <button class="btn ghost small" type="button" onclick="applyHistoryEmailPreset('deleted_rows')">🗑️ Rows Deleted / Removed</button>
+        <button class="btn ghost small" type="button" onclick="applyHistoryEmailPreset('ends_with')">🔍 Ends with Value</button>
+        <button class="btn ghost small" type="button" onclick="applyHistoryEmailPreset('high_value')">📈 High Value (&gt; 10k)</button>
+        <button class="btn ghost small" type="button" onclick="applyHistoryEmailPreset('negative_value')">⛔ Negative Outlier (&lt; 0)</button>
+      </div>
+    </div>
+
+    <div style="margin:18px 0 20px">
+      <div style="font-size:.84rem;font-weight:900;color:var(--text);margin-bottom:8px">Saved History Automations (${templates.length})</div>
+      ${savedCards}
+    </div>
+
+    <hr style="border:0;border-top:1px solid var(--line);margin:20px 0">
+
+    <h4 style="margin:0 0 14px;color:#8b6a00;font-size:1rem">${state.historyEmailEditingId ? `Edit Agent: ${esc(tpl.name || '')}` : 'Configure New History Email Agent'}</h4>
+
+    <form class="emailBuilder" onsubmit="event.preventDefault();saveHistoryEmailTemplate()">
+      <div class="grid grid2">
+        <div class="field">
+          <label for="historyEmailName">Agent / Alert Name</label>
+          <input id="historyEmailName" value="${esc(tpl.name||'Weekly Dataset History Condition Monitor')}" placeholder="e.g. Weekly Claims Starting with 1 or Null Codes" required>
+        </div>
+        <div class="field">
+          <label for="historyEmailRecipient">Recipient Email(s)</label>
+          <input id="historyEmailRecipient" type="email" value="${esc(tpl.recipient_email||'')}" placeholder="analyst@healthcare.org" required>
+        </div>
+      </div>
+
+      <div class="grid grid4" style="margin-top:12px">
+        <div class="field">
+          <label for="historyEmailFreq">Schedule Frequency</label>
+          <select id="historyEmailFreq">
+            <option value="Weekly" ${tpl.frequency==='Weekly'?'selected':''}>Every Week</option>
+            <option value="Monthly" ${tpl.frequency==='Monthly'?'selected':''}>Every Month</option>
+            <option value="Bi-weekly" ${tpl.frequency==='Bi-weekly'?'selected':''}>Bi-weekly (Every 2 weeks)</option>
+            <option value="Every snapshot update" ${tpl.frequency==='Every snapshot update'?'selected':''}>Every Snapshot Update</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="historyEmailDay">Preferred Day of Week</label>
+          <select id="historyEmailDay">
+            ${['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map(d=>`<option value="${d}" ${(tpl.schedule_day||'Friday')===d?'selected':''}>${d}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label for="historyEmailMonthDay">Monthly Target Day</label>
+          <select id="historyEmailMonthDay">
+            <option value="1st of month" ${tpl.schedule_month_day==='1st of month'?'selected':''}>1st of month</option>
+            <option value="15th of month" ${tpl.schedule_month_day==='15th of month'?'selected':''}>15th of month</option>
+            <option value="Last day of month" ${tpl.schedule_month_day==='Last day of month'?'selected':''}>Last day of month</option>
+            <option value="1st Monday" ${tpl.schedule_month_day==='1st Monday'?'selected':''}>1st Monday</option>
+            <option value="1st Friday" ${tpl.schedule_month_day==='1st Friday'?'selected':''}>1st Friday</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="historyEmailTime">Delivery Time</label>
+          <select id="historyEmailTime">
+            <option value="08:00 UTC" ${tpl.schedule_time==='08:00 UTC'?'selected':''}>08:00 UTC (Morning)</option>
+            <option value="00:00 UTC" ${tpl.schedule_time==='00:00 UTC'?'selected':''}>00:00 UTC (Midnight)</option>
+            <option value="12:00 UTC" ${tpl.schedule_time==='12:00 UTC'?'selected':''}>12:00 UTC (Noon)</option>
+            <option value="17:00 UTC" ${tpl.schedule_time==='17:00 UTC'?'selected':''}>17:00 UTC (End of day)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="grid grid3" style="margin-top:12px">
+        <div class="field">
+          <label for="historyEmailTrigger">Trigger Event Scope</label>
+          <select id="historyEmailTrigger">
+            <option value="All changes (new, changed, or deleted rows)" ${tpl.trigger_mode==='All changes (new, changed, or deleted rows)'?'selected':''}>All changes (new, changed, or deleted rows)</option>
+            <option value="Rows deleted / removed only" ${tpl.trigger_mode==='Rows deleted / removed only'?'selected':''}>Rows deleted / removed only</option>
+            <option value="New or changed rows" ${tpl.trigger_mode==='New or changed rows'?'selected':''}>New or changed rows</option>
+            <option value="New rows only" ${tpl.trigger_mode==='New rows only'?'selected':''}>New rows only</option>
+            <option value="Changed rows only" ${tpl.trigger_mode==='Changed rows only'?'selected':''}>Changed rows only</option>
+            <option value="Current snapshot rows meeting criteria" ${tpl.trigger_mode==='Current snapshot rows meeting criteria'?'selected':''}>Current snapshot rows meeting criteria</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="historyEmailIdentity">Unique Identity Column</label>
+          <select id="historyEmailIdentity">
+            ${cols.map(c=>`<option value="${esc(c)}" ${(tpl.identity_column||cols[0])===c?'selected':''}>${esc(c)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label for="historyEmailEnabled">Agent Status</label>
+          <select id="historyEmailEnabled">
+            <option value="true" ${tpl.enabled!==false?'selected':''}>Enabled (Active schedule)</option>
+            <option value="false" ${tpl.enabled===false?'selected':''}>Disabled (Paused)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="grid grid2" style="margin-top:12px">
+        <div class="field">
+          <label>Monitored Columns for Value Changes</label>
+          ${smartMultiSelect('historyEmailMonitor',cols,tpl.monitor_columns||cols.slice(0,6),'Choose columns to monitor')}
+        </div>
+        <div class="field">
+          <label>Display Columns in Email Report Table</label>
+          ${smartMultiSelect('historyEmailDisplay',cols,tpl.display_columns||cols.slice(0,6),'Choose columns to display')}
+        </div>
+      </div>
+
+      <div class="grid grid2" style="margin-top:14px">
+        <div class="field">
+          <label for="historyEmailConditionMode">Requirement Mode</label>
+          <select id="historyEmailConditionMode" onchange="syncEmailConditionMode('history')">
+            <option value="Only when conditions are met" ${!isAnyChange?'selected':''}>Only when conditions are met</option>
+            <option value="Any change" ${isAnyChange?'selected':''}>Any change</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="historyEmailLogic">Condition Matching Logic</label>
+          <select id="historyEmailLogic" ${isAnyChange?'disabled':''}>
+            <option value="ALL conditions" ${(tpl.condition_logic||'ALL conditions')==='ALL conditions'?'selected':''}>ALL conditions (AND)</option>
+            <option value="ANY condition" ${tpl.condition_logic==='ANY condition'?'selected':''}>ANY condition (OR)</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="historyConditionAnyChangeNotice" class="conditionAnyChangeNotice" style="${isAnyChange?'display:block':'display:none'}">
+        <b>"Any change" mode is selected:</b> Every detected record change automatically qualifies for the scheduled alert. Specific column condition rules are bypassed and grayed out.
+      </div>
+
+      <div id="historyConditionsWrap" class="conditionsWrapper ${isAnyChange?'conditionsGrayed':''}">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0 6px">
+          <b>Column Criteria Rules</b>
+          <button id="historyAddConditionBtn" class="btn secondary small" type="button" onclick="addHistoryEmailCondition()" ${isAnyChange?'disabled':''}>+ Add condition</button>
+        </div>
+        <div id="historyConditionList">
+          ${condRows}
+        </div>
+      </div>
+
+      <div class="grid grid3" style="margin-top:14px">
+        <div class="field">
+          <label for="historyEmailSubject">Subject Prefix</label>
+          <input id="historyEmailSubject" value="${esc(tpl.subject_prefix||'[DART History Alert]')}" placeholder="[DART Alert]">
+        </div>
+        <div class="field">
+          <label for="historyEmailGreeting">Greeting</label>
+          <input id="historyEmailGreeting" value="${esc(tpl.greeting||'Hello,')}" placeholder="Hello,">
+        </div>
+        <div class="field">
+          <label for="historyEmailCsv">Attach Full CSV</label>
+          <select id="historyEmailCsv">
+            <option value="true" ${tpl.include_csv!==false?'selected':''}>Yes, attach CSV of matching rows</option>
+            <option value="false" ${tpl.include_csv===false?'selected':''}>No, table in email body only</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:12px">
+        <label for="historyEmailIntro">Email Message / Context Intro</label>
+        <textarea id="historyEmailIntro" rows="2" placeholder="e.g. Attached is your scheduled weekly history report. The following claims met your monitored conditions.">${esc(tpl.email_intro||'DART detected dataset history updates matching your saved criteria and schedule.')}</textarea>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-top:18px;flex-wrap:wrap">
+        <button class="btn" type="submit">Save History Email Agent</button>
+        <button class="btn secondary" type="button" onclick="previewHistoryEmailTemplate()">Check &amp; Preview Live</button>
+        <button class="btn secondary" type="button" onclick="testHistoryEmailTemplate('${esc(tpl.id||'')}')">Send Test Email</button>
+        <button class="btn ghost" type="button" onclick="newHistoryEmailTemplate()">Reset / Clear</button>
+      </div>
+    </form>
+
+    <div id="historyEmailPreviewHolder"></div>
+
+    <div style="margin-top:24px">
+      <div class="medSectionHead">
+        <div>
+          <h4 style="margin:0 0 2px">Execution History &amp; Delivery Log</h4>
+          <p class="muted">Audit trail of scheduled checks, matches discovered, and emails dispatched.</p>
+        </div>
+      </div>
+      ${historyLog}
+    </div>
+  </div>`;
 }
 function historyDrilldown(data,metrics){
   const drill=data.metric_data;if(!drill)return '';
@@ -10329,23 +11535,45 @@ function smartMultiFilter(input){const q=input.value.trim().toLowerCase();const 
 function smartMultiApplyOption(input){const wrap=input.closest('.smartMulti');const select=wrap.querySelector('select');const option=[...select.options].find(o=>o.value===input.value);if(option)option.selected=input.checked;refreshSmartMulti(wrap);}
 function smartMultiSetVisible(id,on){const select=document.getElementById(id);const wrap=select?.closest('.smartMulti');if(!wrap)return;wrap.querySelectorAll('.smartMultiOption:not(.smartHidden) input[type="checkbox"]').forEach(input=>{input.checked=on;const option=[...select.options].find(o=>o.value===input.value);if(option)option.selected=on;});refreshSmartMulti(wrap);}
 function refreshSmartMulti(wrap){const select=wrap.querySelector('select');const values=[...select.selectedOptions].map(o=>o.value);wrap.querySelector('.smartMultiSummary').innerHTML=smartSummaryMarkup(values,wrap.dataset.placeholder||'Choose columns');wrap.querySelector('.smartCount').textContent=values.length;}
-function conditionNeedsValue(operator){return !['Is blank (empty or null)','Is null / NaN','Is empty string'].includes(operator);}
+function conditionNeedsValue(operator){return !['Is blank (empty or null)','Is not blank (has value)','Is null / NaN','Is not null','Is empty string'].includes(operator);}
 function syncEmailConditionRow(row){if(!row)return;const op=row.querySelector('.condOperator')?.value||'Equals';const input=row.querySelector('.condValue');if(!input)return;const needs=conditionNeedsValue(op);input.disabled=!needs;input.placeholder=needs?'Comparison value':'No value required';if(!needs)input.value='';}
 function emailConditionRow(rule={},cols=[],disabled=false){
-  const operators=["Is blank (empty or null)", "Is null / NaN", "Is empty string", "Equals", "Does not equal", "Contains", "Does not contain", "Starts with", "Greater than", "Greater than or equal to", "Less than", "Less than or equal to", "Before date", "After date"];
+  const operators=[
+    "Is blank (empty or null)", "Is not blank (has value)", "Is null / NaN", "Is not null", "Is empty string",
+    "Equals", "Does not equal", "Contains", "Does not contain",
+    "Starts with", "Does not start with", "Ends with", "Does not end with",
+    "Greater than", "Greater than or equal to", "Less than", "Less than or equal to",
+    "Before date", "After date", "Matches regex"
+  ];
   const op=rule.operator||'Equals';
   const needs=conditionNeedsValue(op);
   const isDis=Boolean(disabled);
   return `<div class="conditionRow ${isDis?'isRowDisabled':''}"><div class="field"><label>Column</label><select class="condColumn" ${isDis?'disabled':''}>${selectOptions(cols,[rule.column||cols[0]||''])}</select></div><div class="field"><label>Operator</label><select class="condOperator" onchange="syncEmailConditionRow(this.closest('.conditionRow'))" ${isDis?'disabled':''}>${operators.map(x=>`<option ${x===op?'selected':''}>${esc(x)}</option>`).join('')}</select></div><div class="field"><label>Value</label><input class="condValue" value="${needs?esc(rule.value||''):''}" placeholder="${needs?'Comparison value':'No value required'}" ${needs&&!isDis?'':'disabled'}></div><button type="button" class="btn ghost small" onclick="this.closest('.conditionRow').remove()" ${isDis?'disabled':''}>Remove</button></div>`;
 }
 function syncEmailConditionMode(prefix='byo'){
-  const isByo=prefix==='byo';
-  const modeSelect=document.getElementById(isByo?'byoEmailConditionMode':'emailConditionMode');
-  const logicSelect=document.getElementById(isByo?'byoEmailLogic':'emailLogic');
-  const addBtn=document.getElementById(isByo?'byoAddConditionBtn':'emailAddConditionBtn');
-  const wrap=document.getElementById(isByo?'byoConditionsWrap':'emailConditionsWrap');
-  const condList=document.getElementById(isByo?'byoConditionList':'conditionList');
-  const notice=document.getElementById(isByo?'byoConditionAnyChangeNotice':'emailConditionAnyChangeNotice');
+  let modeSelect, logicSelect, addBtn, wrap, condList, notice;
+  if(prefix==='history'){
+    modeSelect=document.getElementById('historyEmailConditionMode');
+    logicSelect=document.getElementById('historyEmailLogic');
+    addBtn=document.getElementById('historyAddConditionBtn');
+    wrap=document.getElementById('historyConditionsWrap');
+    condList=document.getElementById('historyConditionList');
+    notice=document.getElementById('historyConditionAnyChangeNotice');
+  }else if(prefix==='byo'){
+    modeSelect=document.getElementById('byoEmailConditionMode');
+    logicSelect=document.getElementById('byoEmailLogic');
+    addBtn=document.getElementById('byoAddConditionBtn');
+    wrap=document.getElementById('byoConditionsWrap');
+    condList=document.getElementById('byoConditionList');
+    notice=document.getElementById('byoConditionAnyChangeNotice');
+  }else{
+    modeSelect=document.getElementById('emailConditionMode');
+    logicSelect=document.getElementById('emailLogic');
+    addBtn=document.getElementById('emailAddConditionBtn');
+    wrap=document.getElementById('emailConditionsWrap');
+    condList=document.getElementById('conditionList');
+    notice=document.getElementById('emailConditionAnyChangeNotice');
+  }
   if(!modeSelect)return;
   const isAny=modeSelect.value==='Any change';
   if(wrap)wrap.classList.toggle('conditionsGrayed',isAny);
@@ -11105,12 +12333,143 @@ def get_byo_history(request: Request, dataset: str, snapshot: Optional[int] = No
                                         metric, metric_offset, period, bucket)
         result["email"] = weekly_history.recipients(BYO_HISTORY_DB, username, dataset)
         result["smtp_issues"] = smtp_configuration_issues()
+        result["email_agent"] = _byo_history_email_meta_for_dataset(username, dataset)
         if dataset not in weekly_history.DEMO_DATASETS:
             frame = _read_byo_dataset(_byo_path(dataset))
             result["dataset_columns"] = [str(c) for c in frame.columns]
             result["key_candidates"] = weekly_history.key_candidates(frame)
+        else:
+            result["dataset_columns"] = result["email_agent"].get("columns", [])
         return result
     except (ValueError, FileNotFoundError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.get("/api/byo/history/email-agent")
+def get_byo_history_email_agent(request: Request, dataset: str = "") -> Any:
+    username = get_session_user(request)
+    if not username:
+        return JSONResponse({"error": "Sign in to access Dataset History email agent."}, status_code=401)
+    try:
+        return _byo_history_email_meta_for_dataset(username, dataset)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/byo/history/email-agent/template")
+async def save_byo_history_email_template(request: Request) -> Any:
+    username = get_session_user(request)
+    if not username:
+        return JSONResponse({"error": "Sign in to configure history email automations."}, status_code=401)
+    payload = await request.json()
+    dataset = str(payload.get("dataset_name", "")).strip()
+    meta = _byo_history_email_meta_for_dataset(username, dataset)
+    columns = meta.get("columns", [])
+    try:
+        normalized = _normalize_history_email_template(payload, columns)
+        normalized["owner"] = username
+        saved = upsert_history_email_automation(normalized)
+        _history_email_history_event({
+            "event": "template_saved",
+            "automation_id": saved.get("id"),
+            "name": saved.get("name"),
+            "dataset": dataset,
+            "status": "Saved / Updated template",
+        })
+        return {"status": "ok", "template": saved}
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.delete("/api/byo/history/email-agent/template/{template_id}")
+def delete_byo_history_email_template_endpoint(request: Request, template_id: str) -> Any:
+    username = get_session_user(request)
+    if not username:
+        return JSONResponse({"error": "Sign in to manage history automations."}, status_code=401)
+    delete_history_email_automation(template_id)
+    return {"status": "ok", "deleted": template_id}
+
+
+@app.post("/api/byo/history/email-agent/preview")
+async def preview_byo_history_email_template(request: Request) -> Any:
+    username = get_session_user(request)
+    if not username:
+        return JSONResponse({"error": "Sign in to preview history automations."}, status_code=401)
+    payload = await request.json()
+    dataset = str(payload.get("dataset_name", "")).strip()
+    meta = _byo_history_email_meta_for_dataset(username, dataset)
+    columns = meta.get("columns", [])
+    try:
+        normalized = _normalize_history_email_template(payload, columns)
+        matches, eval_meta = _evaluate_history_email_matches(normalized, username=username, dataset_name=dataset)
+        subject, html, plain, cols = build_history_structured_email(normalized, matches, is_test=False)
+        return {
+            "subject": subject,
+            "html": html,
+            "plain": plain,
+            "matches": len(matches),
+            "total_changes": eval_meta.get("total_changes", 0),
+            "columns": cols,
+        }
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/byo/history/email-agent/test/{template_id}")
+async def test_byo_history_email_template(request: Request, template_id: str) -> Any:
+    username = get_session_user(request)
+    if not username:
+        return JSONResponse({"error": "Sign in to test history automations."}, status_code=401)
+    tpl = _find_history_email_template(template_id)
+    if not tpl:
+        return JSONResponse({"error": "Template not found."}, status_code=404)
+    try:
+        dataset = str(tpl.get("dataset_name", "")).strip()
+        matches, _ = _evaluate_history_email_matches(tpl, username=username, dataset_name=dataset)
+        result = send_history_structured_email(tpl, matches, is_test=True)
+        _history_email_history_event({
+            "event": "test_sent",
+            "automation_id": template_id,
+            "name": tpl.get("name"),
+            "dataset": dataset,
+            "status": result.get("status"),
+            "matches": len(matches),
+        })
+        return result
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/byo/history/email-agent/run/{template_id}")
+async def run_byo_history_email_template(request: Request, template_id: str) -> Any:
+    username = get_session_user(request)
+    if not username:
+        return JSONResponse({"error": "Sign in to run history automations."}, status_code=401)
+    tpl = _find_history_email_template(template_id)
+    if not tpl:
+        return JSONResponse({"error": "Template not found."}, status_code=404)
+    payload = {}
+    try:
+        payload = await request.json()
+    except Exception:
+        pass
+    send_email = payload.get("send_email", True)
+    try:
+        result = _run_one_history_email_template(tpl, username=username, send_email=send_email)
+        return result
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/byo/history/email-agent/check")
+def check_all_byo_history_email_templates(request: Request) -> Any:
+    username = get_session_user(request)
+    if not username:
+        return JSONResponse({"error": "Sign in to run scheduled automations."}, status_code=401)
+    try:
+        results = run_enabled_history_email_automations(username=username)
+        return {"status": "ok", "results": results}
+    except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
 
