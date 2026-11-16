@@ -6973,6 +6973,11 @@ HTML = r'''
     .savedAutomation{border:1px solid #e8e1cf;border-left:5px solid #c99a12;border-radius:16px;padding:14px 16px;margin:10px 0;background:#fff}.automationActions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.statusGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.statusCard{border:1px solid #e8e1cf;border-radius:16px;padding:14px;background:#fff}.statusCard .big{font-size:1.35rem;font-weight:850;color:#172033}.emailPreview{border:1px solid #ead9a4;border-radius:16px;background:#fff;overflow:hidden}.emailPreview iframe{width:100%;height:620px;border:0;background:#fff}
     @media(max-width:760px){.smartMultiToolbar{grid-template-columns:1fr 1fr}.smartMultiToolbar .smartMultiSearch{grid-column:1/-1}.conditionRow{grid-template-columns:1fr}.smartMultiPanel{position:fixed;left:14px;right:14px;top:110px;max-height:70vh}}
 
+    .historyAgentPanel{border-left:5px solid #c99a12}.historyAgentHead{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap}.historyAgentEyebrow{display:inline-flex;align-items:center;gap:6px;color:#80621c;font-size:.7rem;font-weight:900;letter-spacing:.1em;text-transform:uppercase}.historyAgentHead h2{margin:4px 0;font-size:1.2rem}.historyAgentHead p{margin:0;max-width:760px}.historyAgentList{display:grid;gap:8px;max-height:260px;overflow:auto;margin-top:14px}.historyAgentItem{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:11px 13px;border:1px solid #e8e1cf;border-radius:13px;background:#fff}.historyAgentItemInfo{min-width:220px;flex:1}.historyAgentItemInfo b{display:block;color:#172033}.historyAgentItemInfo small{display:block;color:#667085;margin-top:3px;line-height:1.4}.historyAgentItemActions{display:flex;gap:6px;flex-wrap:wrap}.historyAgentEmpty{padding:14px;border:1px dashed #d9c77b;border-radius:13px;background:#fffdf7;color:#667085}.historyAgentExplain{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:12px;padding:10px 12px;border:1px solid #ead9a4;border-radius:12px;background:#fffaf0;color:#596579;font-size:.82rem;line-height:1.5}.historyEmailDialog{width:min(1120px,96vw);max-width:1120px;max-height:92vh;padding:0;border:1px solid #dfcf9c;border-radius:20px;background:#fff;color:#172033;box-shadow:0 30px 90px rgba(15,23,42,.3);overflow:hidden}.historyEmailDialog::backdrop{background:rgba(15,23,42,.5);backdrop-filter:blur(3px)}.historyEmailDialogShell{display:flex;flex-direction:column;max-height:92vh}.historyEmailDialogHeader{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:17px 20px;border-bottom:1px solid #eadfbf;background:linear-gradient(135deg,#fffdf7,#fff8e4);flex:none}.historyEmailDialogHeader h2{margin:4px 0;font-size:1.2rem;color:#172033}.historyEmailDialogHeader p{margin:0;color:#667085;font-size:.84rem}.historyEmailDialogClose{flex:none;width:36px;height:36px;border:1px solid #d8bd69;border-radius:50%;background:#fff;color:#725500;font-size:1.4rem;line-height:1;cursor:pointer}.historyEmailDialogBody{overflow:auto;padding:16px 20px 20px;overscroll-behavior:contain}.historyEmailDialogBody>.panel{box-shadow:none!important;margin:0;padding:0;border:0;background:transparent!important}.historyEmailDialogBody #historyEmailPreviewHolder{scroll-margin:12px}.historyEmailDialogBody .emailPreview iframe{height:min(520px,58vh)}
+    .historyAgentPanel>summary{list-style:none;cursor:pointer}.historyAgentPanel>summary::-webkit-details-marker{display:none}.historyAgentSummary{display:flex;align-items:center;justify-content:space-between;gap:12px}.historyAgentSummaryTitle{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}.historyAgentSummaryTitle strong{font-size:1rem;color:var(--text)}.historyAgentSummaryToggle{display:flex;align-items:center;gap:8px;flex:none;color:#80621c;font-size:.82rem;font-weight:800}.historyAgentSummaryToggle span{display:grid;place-items:center;width:25px;height:25px;border:1px solid #ead9a4;border-radius:50%;transition:transform .16s ease}.historyAgentPanel[open] .historyAgentSummaryToggle span{transform:rotate(180deg)}.historyAgentContent{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+    :root[data-theme="dark"] .historyAgentItem{background:#1d2630;border-color:#4a4222}:root[data-theme="dark"] .historyAgentItemInfo b{color:#edf0f3}:root[data-theme="dark"] .historyAgentItemInfo small{color:#a9b3bf}:root[data-theme="dark"] .historyAgentEmpty,:root[data-theme="dark"] .historyAgentExplain{background:#1b1a14;border-color:#5a4a1a;color:#c3ccd5}:root[data-theme="dark"] .historyEmailDialog{background:#1b1408;color:#fff7d1;border-color:#6f5420}:root[data-theme="dark"] .historyEmailDialogHeader{background:linear-gradient(135deg,#211707,#171006);border-color:#6f5420}:root[data-theme="dark"] .historyEmailDialogHeader h2{color:#fff7d1}:root[data-theme="dark"] .historyEmailDialogHeader p{color:#d8c891}:root[data-theme="dark"] .historyEmailDialogClose{background:#261b0a;color:#fff7d1;border-color:#8a6a1f}
+    @media(max-width:700px){.historyAgentItem{align-items:flex-start}.historyAgentItemActions{width:100%}.historyAgentItemActions .btn{flex:1}.historyEmailDialog{width:100vw;max-width:100vw;max-height:96vh;border-radius:16px 16px 0 0;margin:auto 0 0}.historyEmailDialogShell{max-height:96vh}.historyEmailDialogHeader,.historyEmailDialogBody{padding-left:14px;padding-right:14px}}
+
     /* Medicaid State Intelligence workspace */
     .medHero{background:linear-gradient(135deg,rgba(63,45,11,.98),rgba(32,23,8,.98));border-color:rgba(249,217,118,.24)}
     .grid5{grid-template-columns:repeat(5,minmax(0,1fr))}.medKpis .panel{min-height:126px}.medKpi .label{text-transform:uppercase;letter-spacing:.08em;color:#cdbc84;font-size:.72rem;font-weight:900}.medKpi .value{font-size:2rem;font-weight:950;margin:8px 0 3px;overflow-wrap:anywhere}.medKpi.warn{box-shadow:inset 0 0 0 1px rgba(249,217,118,.16)}
@@ -10597,7 +10602,7 @@ function historyTable(rows,columns,side){
     return `<tr class="${cls}"><td>${esc(r.status)}</td>${columns.map(c=>`<td class="${r.fields.includes(c)?'historyChanged':''}">${data?esc(data[c]===null||data[c]===undefined?'—':data[c]):'—'}</td>`).join('')}</tr>`;
   }).join('')}</tbody></table></div>`;
 }
-async function selectHistoryDataset(value){state.historyDataset=value;state.historySnapshot=null;state.historyOnlyChanges=false;state.historyOffset=0;state.historyMetric='';state.historyMetricOffset=0;await render();}
+async function selectHistoryDataset(value){if(value!==state.historyDataset){state.historyEmailEditingId=null;state.historyDataset=value;}state.historySnapshot=null;state.historyOnlyChanges=false;state.historyOffset=0;state.historyMetric='';state.historyMetricOffset=0;await render();}
 function historyPeriod(){return state.historyPeriod||state.meta?.persona_effects?.history_period||'week';}
 async function selectHistoryPeriod(period){state.historyPeriod=period;state.historySnapshot=null;state.historyOffset=0;state.historyMetric='';state.historyMetricOffset=0;await render();}
 async function selectHistoryWeek(id){state.historySnapshot=historyPeriod()==='update'?Number(id):String(id);state.historyOffset=0;state.historyMetric='';state.historyMetricOffset=0;await render();}
@@ -10740,7 +10745,7 @@ async function previewHistoryEmailTemplate(){
       </div>`;
       const frame=document.getElementById('historyEmailPreviewFrame');
       if(frame)frame.srcdoc=r.html||'<p>No preview generated.</p>';
-      holder.scrollIntoView({behavior:'smooth',block:'start'});
+      holder.scrollIntoView({behavior:'smooth',block:'nearest'});
     }
   }catch(err){
     toast('Preview failed: '+String(err.message||err).slice(0,160));
@@ -10774,20 +10779,24 @@ async function runHistoryEmailTemplate(id, send){
   }
 }
 
+async function openHistoryEmailEditor(id=''){
+  state.historyEmailEditingId=id||null;
+  await render();
+  const dialog=document.getElementById('historyEmailDialog');
+  if(dialog&&!dialog.open)dialog.showModal();
+  document.getElementById('historyEmailName')?.focus({preventScroll:true});
+}
+
 async function editHistoryEmailById(id, dataset){
-  state.historyEmailEditingId=id;
   if(dataset&&dataset!==state.historyDataset){
     state.historyDataset=dataset;
     sessionStorage.setItem('dart_history_dataset',dataset);
   }
-  await render();
-  document.getElementById('historyEmailBuilderPanel')?.scrollIntoView({behavior:'smooth',block:'start'});
+  await openHistoryEmailEditor(id);
 }
 
 async function newHistoryEmailTemplate(){
-  state.historyEmailEditingId=null;
-  await render();
-  document.getElementById('historyEmailBuilderPanel')?.scrollIntoView({behavior:'smooth',block:'start'});
+  await openHistoryEmailEditor();
 }
 
 async function deleteHistoryEmailTemplate(id){
@@ -10816,39 +10825,52 @@ function historyEmailPanel(data){
     const schedText = t.frequency === 'Weekly' ? `Weekly · ${t.schedule_day || 'Friday'}s at ${t.schedule_time || '08:00 UTC'}` :
                       t.frequency === 'Monthly' ? `Monthly · ${t.schedule_month_day || '1st'} at ${t.schedule_time || '08:00 UTC'}` :
                       t.frequency === 'Bi-weekly' ? `Bi-weekly · ${t.schedule_day || 'Friday'}s` : 'Every snapshot update';
-    return `<div class="savedAutomation" style="border-left-color:#c99a2e;background:var(--panel)">
-      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
-        <div>
-          <b style="font-size:1.05rem">${esc(t.name)}</b>
-          <div class="muted" style="margin-top:3px">${esc(t.dataset_name||dataset)} · Recipient: <b>${esc(t.recipient_email||'Unassigned')}</b> · <span class="pill" style="font-size:.7rem;padding:2px 8px">${esc(schedText)}</span> · ${esc(t.last_status||'Ready / Scheduled')}</div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <span class="pill ${t.enabled?'Stable':'Watch'}">${t.enabled?'Active':'Paused'}</span>
-        </div>
-      </div>
-      <div class="automationActions" style="margin-top:12px">
+    return `<article class="historyAgentItem">
+      <div class="historyAgentItemInfo"><b>${esc(t.name||'Dataset History Agent')} <span class="pill ${t.enabled?'Stable':'Watch'}">${t.enabled?'Active':'Paused'}</span></b>
+        <small>${esc(t.recipient_email||'No recipient')} · ${esc(schedText)} · ${esc(t.last_status||'Ready')}</small></div>
+      <div class="historyAgentItemActions">
         <button class="btn secondary small" type="button" onclick="editHistoryEmailById('${esc(t.id)}','${safeArg(t.dataset_name||dataset)}')">Edit</button>
-        <button class="btn secondary small" type="button" onclick="runHistoryEmailTemplate('${esc(t.id)}',false)">Check matches</button>
+        <button class="btn ghost small" type="button" onclick="runHistoryEmailTemplate('${esc(t.id)}',false)">Check</button>
         <button class="btn small" type="button" onclick="runHistoryEmailTemplate('${esc(t.id)}',true)">Run + send</button>
-        <button class="btn ghost small" type="button" onclick="testHistoryEmailTemplate('${esc(t.id)}')">Send test</button>
+        <button class="btn ghost small" type="button" onclick="testHistoryEmailTemplate('${esc(t.id)}')">Test</button>
         <button class="btn ghost small dangerBtn" type="button" onclick="deleteHistoryEmailTemplate('${esc(t.id)}')">Delete</button>
       </div>
-    </div>`;
-  }).join('') || '<div class="empty">No Dataset History email agents configured for this dataset yet. Build one below!</div>';
+    </article>`;
+  }).join('') || '<div class="historyAgentEmpty">No history agents are set up for this dataset yet. Create one to receive scheduled snapshot-change reports.</div>';
 
   const historyLog = history.length ? simpleTable(history) : '<div class="empty">No alert execution history yet.</div>';
   const condRows = (tpl.conditions||[]).map(r=>emailConditionRow(r,cols,isAnyChange)).join('') || emailConditionRow({},cols,isAnyChange);
 
-  return `<div class="panel" id="historyEmailBuilderPanel" style="border-left:4px solid #c99a2e">
-    <div class="medSectionHead">
-      <div>
-        <div style="display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:4px 10px;background:rgba(201,154,46,.15);color:#8b6a00;font-size:.75rem;font-weight:900;margin-bottom:6px">🤖 SCHEDULED EMAIL AGENT</div>
-        <h3 style="margin:0 0 4px">Dataset History Email Agent</h3>
-        <p class="muted">Automate recurring email alerts (weekly, monthly, or on refresh). Define custom column criteria to monitor key prefixes (starts with 1), suffixes, nulls/missing values, deleted rows, and outlier thresholds.</p>
+  return `<details class="panel historyAgentPanel"${state.historyEmailPanelOpen?' open':''} ontoggle="state.historyEmailPanelOpen=this.open">
+    <summary class="historyAgentSummary">
+      <span class="historyAgentSummaryTitle"><span class="historyAgentEyebrow">✉ Scheduled snapshot alerts</span><strong>History email agents</strong><span class="pill">${templates.length} saved</span></span>
+      <span class="historyAgentSummaryToggle">Manage <span aria-hidden="true">⌄</span></span>
+    </summary>
+    <div class="historyAgentContent">
+      <div class="historyAgentHead">
+        <div>
+          <h2 id="historyAgentHeading">History email agents</h2>
+          <p class="muted">Get scheduled email reports when saved dataset snapshots change. Manage conditions, recipients, and delivery in one place.</p>
+        </div>
+        <button class="btn" type="button" onclick="newHistoryEmailTemplate()">+ Create agent</button>
       </div>
-      <button class="btn secondary small" type="button" onclick="newHistoryEmailTemplate()">+ New Agent</button>
+      <div class="historyAgentList" aria-label="Saved history email agents">${savedCards}</div>
+      <div class="historyAgentExplain"><span><b>Different jobs:</b> History agents compare captured snapshots on a schedule. The separate <b>Email Alerts</b> page reacts to changes written directly to saved files.</span><button class="btn ghost small" type="button" onclick="showPage('byo-email')">Open file Email Alerts</button></div>
     </div>
+  </details>
 
+  <dialog id="historyEmailDialog" class="historyEmailDialog" aria-labelledby="historyEmailDialogTitle" onclick="if(event.target===this)this.close()">
+    <div class="historyEmailDialogShell">
+      <header class="historyEmailDialogHeader">
+        <div><span class="historyAgentEyebrow">Dataset History · Email Agent</span>
+          <h2 id="historyEmailDialogTitle">${state.historyEmailEditingId?`Edit ${esc(tpl.name||'history agent')}`:'Create a history agent'}</h2>
+          <p>Choose when to check snapshots, what qualifies, and what to include in the email.</p>
+        </div>
+        <button class="historyEmailDialogClose" type="button" aria-label="Close history agent editor" onclick="this.closest('dialog').close()">×</button>
+      </header>
+      <div class="historyEmailDialogBody">
+        <div class="historyAgentExplain"><span><b>Snapshot-based:</b> This agent checks dataset history. File-change alerts are configured separately in Email Alerts.</span></div>
+        <div class="panel" id="historyEmailBuilderPanel">
     <div style="margin:14px 0 16px">
       <div style="font-size:.78rem;font-weight:850;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:8px">⚡ Quick Starters &amp; Presets</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -10860,13 +10882,6 @@ function historyEmailPanel(data){
         <button class="btn ghost small" type="button" onclick="applyHistoryEmailPreset('negative_value')">⛔ Negative Outlier (&lt; 0)</button>
       </div>
     </div>
-
-    <div style="margin:18px 0 20px">
-      <div style="font-size:.84rem;font-weight:900;color:var(--text);margin-bottom:8px">Saved History Automations (${templates.length})</div>
-      ${savedCards}
-    </div>
-
-    <hr style="border:0;border-top:1px solid var(--line);margin:20px 0">
 
     <h4 style="margin:0 0 14px;color:#8b6a00;font-size:1rem">${state.historyEmailEditingId ? `Edit Agent: ${esc(tpl.name || '')}` : 'Configure New History Email Agent'}</h4>
 
@@ -11030,7 +11045,10 @@ function historyEmailPanel(data){
       </div>
       ${historyLog}
     </div>
-  </div>`;
+        </div>
+      </div>
+    </div>
+  </dialog>`;
 }
 function historyDrilldown(data,metrics){
   const drill=data.metric_data;if(!drill)return '';
@@ -11121,15 +11139,16 @@ function historyPage(info,data){
       const c=data.comparison, rows=c.details;
       const metrics=[['changed_columns','Changed columns',c.changed_columns,'Fields with changed values'],['changed_values','Changed values',c.changed_values,'On matched rows'],['changed_rows','Changed rows',c.changed_rows,'Matched identities'],['added','New rows / claims',c.added,'New unique identities'],['removed','Removed rows',c.removed,'No longer present'],['new_nulls','New nulls',c.new_nulls,'Including new rows'],['resolved_nulls','Resolved nulls',c.resolved_nulls,'On matched rows'],['new_invalid','New invalid',c.new_invalid,'Claims checks only'],['schema_changes','Schema changes',c.schema_changes,'Added or removed fields']];
       detail=`<div class="panel"><div class="medSectionHead"><div><h3>${data.unit==='update'?'Update':'Period'} summary</h3><p class="muted">${esc(historyDate(data.before_date))} → ${esc(historyDate(data.after_date))} · ${intFmt(c.row_count)} current rows. Select a metric to inspect its data.</p></div></div><div class="historyMetrics">${metrics.map(m=>`<button type="button" class="historyMetric ${state.historyMetric===m[0]?'active':''}" aria-pressed="${state.historyMetric===m[0]}" onclick="selectHistoryMetric('${m[0]}')"><small>${esc(m[1])}</small><strong>${intFmt(m[2])}</strong><small>${esc(m[3])}</small><span class="historyMetricHint">View details →</span></button>`).join('')}</div>
-      <p class="muted">Schema: ${c.added_columns.length?'Added '+esc(c.added_columns.join(', ')):'No added columns'}; ${c.removed_columns.length?'removed '+esc(c.removed_columns.join(', ')):'no removed columns'}. Invalid checks flag negative/non-numeric claim payments, malformed claim dates, and reversed service dates; they are not a complete claims validation.</p></div><br>${historyDrilldown(data,metrics)}${historyEmailPanel(data)}<br>
+      <p class="muted">Schema: ${c.added_columns.length?'Added '+esc(c.added_columns.join(', ')):'No added columns'}; ${c.removed_columns.length?'removed '+esc(c.removed_columns.join(', ')):'no removed columns'}. Invalid checks flag negative/non-numeric claim payments, malformed claim dates, and reversed service dates; they are not a complete claims validation.</p></div><br>${historyDrilldown(data,metrics)}<br>
       <div class="panel"><div class="medSectionHead"><div><h3>Raw data · before & after</h3><p class="muted">Rows align by identity. Highlighted cells changed; green and red rows were added or removed.</p></div><label><input type="checkbox" ${state.historyOnlyChanges?'checked':''} onchange="state.historyOnlyChanges=this.checked;state.historyOffset=0;render()"> Changes only</label></div>
       <div class="historyLegend"><span>🟨 Changed value</span><span>🟩 New row</span><span>🟥 Removed row</span><span>— Null or not present</span></div>
       <div class="historyLegend"><button class="btn ghost small" ${c.offset===0?'disabled':''} onclick="historyPageOffset(${Math.max(0,c.offset-50)})">Previous</button><span>Showing ${c.details_total?c.offset+1:0}–${Math.min(c.offset+50,c.details_total)} of ${intFmt(c.details_total)} identities</span><button class="btn ghost small" ${c.offset+50>=c.details_total?'disabled':''} onclick="historyPageOffset(${c.offset+50})">Next</button></div>
       <div class="historyRaw"><div><h4>Before · ${esc(historyDate(data.before_date))}</h4>${historyTable(rows,data.columns,'before')}</div><div><h4>After · ${esc(historyDate(data.after_date))}</h4>${historyTable(rows,data.columns,'after')}</div></div></div>`;
     }
-    content=`<br>${schedulePanel}<br>${historyInsights(data)}${periodTabs}<div class="historyLayout"><div class="panel"><h3>Snapshot timeline</h3><p class="muted">Select a ${(data.unit||'week')==='update'?'update':data.unit} to explore its changes.</p><div class="historyTimeline">${timeline||'<div class="empty">No snapshots yet.</div>'}</div></div><div>${detail}${data.comparison?'':`<br>${historyEmailPanel(data)}`}</div></div>`;
+    content=`<br>${schedulePanel}<br>${historyInsights(data)}${periodTabs}<div class="historyLayout"><div class="panel"><h3>Snapshot timeline</h3><p class="muted">Select a ${(data.unit||'week')==='update'?'update':data.unit} to explore its changes.</p><div class="historyTimeline">${timeline||'<div class="empty">No snapshots yet.</div>'}</div></div><div>${detail}</div></div>`;
   }
-  return `<div class="hero"><span class="workspaceBadge">Build Your Own · Data Tools</span><h1>Dataset History</h1><p>Follow your data over time by week, month or year, or see every individual update. Explore new claims, quality changes, and the exact values behind each change.</p></div>${picker}${content}`;
+  const agentPanel=dataset&&data?historyEmailPanel(data):'';
+  return `<div class="hero"><span class="workspaceBadge">Build Your Own · Data Tools</span><h1>Dataset History</h1><p>Follow your data over time by week, month or year, or see every individual update. Explore new claims, quality changes, and the exact values behind each change.</p></div>${picker}${agentPanel}${content}`;
 }
 
 async function renderByo(meta,info){
